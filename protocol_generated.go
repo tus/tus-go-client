@@ -5,6 +5,6 @@
 package tusgo
 
 const (
-	// DefaultProtocolVersion is the Tus-Resumable value used by default.
+	// DefaultProtocolVersion is the wire protocol version used by default.
 	DefaultProtocolVersion = "1.0.0"
 )

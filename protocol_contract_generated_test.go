@@ -144,6 +144,49 @@ var generatedTusProtocolOperations = []generatedTusProtocolOperation{
 						},
 					},
 				},
+				{
+					Fields: []generatedTusHeaderField{
+						{
+							DisplayName: "Tus-Resumable",
+							Name:        "tus-resumable",
+							Required:    true,
+						},
+						{
+							DisplayName: "Upload-Concat",
+							Name:        "upload-concat",
+							Required:    true,
+						},
+						{
+							DisplayName: "Upload-Length",
+							Name:        "upload-length",
+							Required:    true,
+						},
+						{
+							DisplayName: "Upload-Metadata",
+							Name:        "upload-metadata",
+							Required:    false,
+						},
+					},
+				},
+				{
+					Fields: []generatedTusHeaderField{
+						{
+							DisplayName: "Tus-Resumable",
+							Name:        "tus-resumable",
+							Required:    true,
+						},
+						{
+							DisplayName: "Upload-Concat",
+							Name:        "upload-concat",
+							Required:    true,
+						},
+						{
+							DisplayName: "Upload-Metadata",
+							Name:        "upload-metadata",
+							Required:    false,
+						},
+					},
+				},
 			},
 		},
 		Responses: []generatedTusResponseContract{
@@ -354,8 +397,38 @@ var generatedTusClientFeatures = []generatedTusClientFeature{
 		Primitives:   []string{"open-input-source", "fingerprint-input", "store-resume-url", "retry-with-backoff", "emit-progress", "abort-current-request"},
 	},
 	{
+		FeatureID:    "resumeUpload",
+		OperationIDs: []string{"getTusUploadOffset", "patchTusUpload"},
+		Primitives:   []string{"fingerprint-input", "resume-from-previous-upload", "store-resume-url"},
+	},
+	{
+		FeatureID:    "deferredLengthUpload",
+		OperationIDs: []string{"createTusUpload", "patchTusUpload"},
+		Primitives:   []string{"defer-upload-length", "emit-progress"},
+	},
+	{
+		FeatureID:    "creationWithUpload",
+		OperationIDs: []string{"createTusUpload"},
+		Primitives:   []string{"upload-during-creation", "emit-progress"},
+	},
+	{
+		FeatureID:    "overridePatchMethod",
+		OperationIDs: []string{"getTusUploadOffset", "patchTusUpload"},
+		Primitives:   []string{"override-patch-method"},
+	},
+	{
+		FeatureID:    "parallelUploadConcat",
+		OperationIDs: []string{"createTusUpload", "patchTusUpload"},
+		Primitives:   []string{"concatenate-partial-uploads", "emit-progress"},
+	},
+	{
+		FeatureID:    "retryOffsetRecovery",
+		OperationIDs: []string{"createTusUpload", "getTusUploadOffset", "patchTusUpload"},
+		Primitives:   []string{"retry-with-backoff", "recover-offset-after-error"},
+	},
+	{
 		FeatureID:    "terminateUpload",
 		OperationIDs: []string{"terminateTusUpload"},
-		Primitives:   []string{"retry-with-backoff"},
+		Primitives:   []string{"terminate-upload", "retry-with-backoff"},
 	},
 }
