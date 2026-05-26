@@ -17,7 +17,7 @@ import (
 // headed to
 func NewClient(client *http.Client, baseURL *url.URL) *Client {
 	c := &Client{
-		ProtocolVersion: "1.0.0",
+		ProtocolVersion: DefaultProtocolVersion,
 		GetRequest:      newRequest,
 		client:          client,
 		BaseURL:         baseURL,
