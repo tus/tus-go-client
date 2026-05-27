@@ -534,6 +534,32 @@ var generatedTusClientFeatures = []generatedTusClientFeature{
 	},
 	{
 		Conformance: generatedTusClientFeatureConformance{
+			ScenarioIDs: []string{"uploadBodyHeaders"},
+			Status:      "covered-by-generated-scenario",
+		},
+		Description:  "Send protocol-specific upload body headers whenever the client transmits file bytes.",
+		FeatureID:    "uploadBodyHeaders",
+		Flow:         []generatedTusClientFeatureFlowStep{
+			{
+				Kind:        "primitive",
+				OperationID: "",
+				Primitive:   "send-upload-body-headers",
+				Condition:   "",
+				Summary:     "Attach the protocol-specific upload body content type when a request has bytes.",
+			},
+			{
+				Kind:        "operation",
+				OperationID: "patchTusUpload",
+				Primitive:   "",
+				Condition:   "",
+				Summary:     "Upload bytes with the protocol-specific body headers.",
+			},
+		},
+		OperationIDs: []string{"createTusUpload", "patchTusUpload"},
+		Primitives:   []string{"send-upload-body-headers"},
+	},
+	{
+		Conformance: generatedTusClientFeatureConformance{
 			ScenarioIDs: []string{"overridePatchMethod"},
 			Status:      "covered-by-generated-scenario",
 		},
