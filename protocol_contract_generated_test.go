@@ -704,8 +704,8 @@ var generatedTusClientFeatures = []generatedTusClientFeature{
 	},
 	{
 		Conformance: generatedTusClientFeatureConformance{
-			ScenarioIDs: nil,
-			Status:      "needs-generated-scenario",
+			ScenarioIDs: []string{"singleUploadLifecycle", "creationWithUpload", "resumeFromPreviousUpload"},
+			Status:      "covered-by-generated-scenario",
 		},
 		Description:  "Expose progress and accepted-chunk callbacks from runtime upload activity.",
 		FeatureID:    "uploadCallbacks",
