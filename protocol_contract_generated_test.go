@@ -737,8 +737,8 @@ var generatedTusClientFeatures = []generatedTusClientFeature{
 	},
 	{
 		Conformance: generatedTusClientFeatureConformance{
-			ScenarioIDs: nil,
-			Status:      "needs-generated-scenario",
+			ScenarioIDs: []string{"requestLifecycleHooks", "retryPatchAfterOffsetRecovery"},
+			Status:      "covered-by-generated-scenario",
 		},
 		Description:  "Run before-request, after-response, and custom retry hooks around transport.",
 		FeatureID:    "requestLifecycleHooks",
