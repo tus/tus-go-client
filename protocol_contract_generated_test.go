@@ -862,8 +862,8 @@ var generatedTusClientFeatures = []generatedTusClientFeature{
 	},
 	{
 		Conformance: generatedTusClientFeatureConformance{
-			ScenarioIDs: nil,
-			Status:      "needs-generated-scenario",
+			ScenarioIDs: []string{"webStorageUrlStorageBackend", "fileUrlStorageBackend"},
+			Status:      "covered-by-generated-scenario",
 		},
 		Description:  "Support browser and file-backed URL storage implementations.",
 		FeatureID:    "urlStorageBackends",
