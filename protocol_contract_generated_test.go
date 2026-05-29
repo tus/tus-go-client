@@ -926,8 +926,8 @@ var generatedTusClientFeatures = []generatedTusClientFeature{
 	},
 	{
 		Conformance: generatedTusClientFeatureConformance{
-			ScenarioIDs: nil,
-			Status:      "needs-generated-scenario",
+			ScenarioIDs: []string{"startValidationMissingInput", "startValidationMissingEndpointOrUploadUrl", "startValidationUnsupportedProtocol", "startValidationRetryDelaysNotArray", "startValidationParallelUploadsWithUploadUrl", "startValidationParallelUploadsWithUploadSize", "startValidationParallelUploadsWithDeferredLength", "startValidationParallelBoundariesWithoutParallelUploads", "startValidationParallelBoundariesLengthMismatch"},
+			Status:      "covered-by-generated-scenario",
 		},
 		Description:  "Validate option combinations before starting runtime work.",
 		FeatureID:    "startOptionValidation",
