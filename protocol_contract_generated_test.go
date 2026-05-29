@@ -881,8 +881,8 @@ var generatedTusClientFeatures = []generatedTusClientFeature{
 	},
 	{
 		Conformance: generatedTusClientFeatureConformance{
-			ScenarioIDs: nil,
-			Status:      "needs-generated-scenario",
+			ScenarioIDs: []string{"relativeLocationResolution"},
+			Status:      "covered-by-generated-scenario",
 		},
 		Description:  "Normalize relative Location headers against the request endpoint.",
 		FeatureID:    "relativeLocationResolution",
