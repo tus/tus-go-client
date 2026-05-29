@@ -763,8 +763,8 @@ var generatedTusClientFeatures = []generatedTusClientFeature{
 	},
 	{
 		Conformance: generatedTusClientFeatureConformance{
-			ScenarioIDs: nil,
-			Status:      "needs-generated-scenario",
+			ScenarioIDs: []string{"singleUploadLifecycle", "resumeFromPreviousUpload"},
+			Status:      "covered-by-generated-scenario",
 		},
 		Description:  "Persist, find, resume, and optionally remove upload URLs by fingerprint.",
 		FeatureID:    "resumeUrlStorage",
