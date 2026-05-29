@@ -796,8 +796,8 @@ var generatedTusClientFeatures = []generatedTusClientFeature{
 	},
 	{
 		Conformance: generatedTusClientFeatureConformance{
-			ScenarioIDs: nil,
-			Status:      "needs-generated-scenario",
+			ScenarioIDs: []string{"arrayBufferInput", "arrayBufferViewInput", "webReadableStreamInput", "nodeReadableStreamInput", "nodePathInput"},
+			Status:      "covered-by-generated-scenario",
 		},
 		Description:  "Support the reference client input/source families across runtimes.",
 		FeatureID:    "inputSources",
