@@ -685,8 +685,8 @@ var generatedTusClientFeatures = []generatedTusClientFeature{
 	},
 	{
 		Conformance: generatedTusClientFeatureConformance{
-			ScenarioIDs: nil,
-			Status:      "needs-generated-scenario",
+			ScenarioIDs: []string{"abortUpload"},
+			Status:      "covered-by-generated-scenario",
 		},
 		Description:  "Abort the active request, pending retry timer, and any partial uploads.",
 		FeatureID:    "abortUpload",
