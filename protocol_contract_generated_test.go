@@ -888,8 +888,8 @@ var generatedTusClientFeatures = []generatedTusClientFeature{
 	},
 	{
 		Conformance: generatedTusClientFeatureConformance{
-			ScenarioIDs: nil,
-			Status:      "needs-generated-scenario",
+			ScenarioIDs: []string{"ietfDraft05CreationWithUpload", "ietfDraft03ResumeWithoutKnownLength"},
+			Status:      "covered-by-generated-scenario",
 		},
 		Description:  "Select between tus v1 and supported IETF draft client protocol modes.",
 		FeatureID:    "protocolVersionSelection",
