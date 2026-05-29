@@ -945,8 +945,8 @@ var generatedTusClientFeatures = []generatedTusClientFeature{
 	},
 	{
 		Conformance: generatedTusClientFeatureConformance{
-			ScenarioIDs: nil,
-			Status:      "needs-generated-scenario",
+			ScenarioIDs: []string{"detailedCreateResponseError", "detailedCreateRequestError"},
+			Status:      "covered-by-generated-scenario",
 		},
 		Description:  "Attach request, response, status, body, and request ID context to errors.",
 		FeatureID:    "detailedErrors",
