@@ -659,6 +659,32 @@ var generatedTusClientFeatures = []generatedTusClientFeature{
 	},
 	{
 		Conformance: generatedTusClientFeatureConformance{
+			ScenarioIDs: []string{"retryPatchAfterOffsetRecovery"},
+			Status:      "covered-by-generated-scenario",
+		},
+		Description:  "Schedule retry timers and reset retry attempts after accepted progress.",
+		FeatureID:    "retryStateTransitions",
+		Flow:         []generatedTusClientFeatureFlowStep{
+			{
+				Kind:        "primitive",
+				OperationID: "",
+				Primitive:   "schedule-retry-timer",
+				Condition:   "",
+				Summary:     "Consume the current retry delay and restart the upload after that timer fires.",
+			},
+			{
+				Kind:        "primitive",
+				OperationID: "",
+				Primitive:   "reset-retry-attempt-after-progress",
+				Condition:   "",
+				Summary:     "Reset retry attempts once a later retry observes server-side offset progress.",
+			},
+		},
+		OperationIDs: []string{"getTusUploadOffset", "patchTusUpload"},
+		Primitives:   []string{"retry-with-backoff", "schedule-retry-timer", "reset-retry-attempt-after-progress"},
+	},
+	{
+		Conformance: generatedTusClientFeatureConformance{
 			ScenarioIDs: []string{"terminateWithRetry"},
 			Status:      "covered-by-generated-scenario",
 		},
