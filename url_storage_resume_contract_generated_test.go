@@ -5,6 +5,7 @@
 package tusgo
 
 import (
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -101,6 +102,7 @@ func TestGeneratedURLStorageResumeFlow(t *testing.T) {
 	)
 	srvMock.AddMocks(patchRequest.Reply(patchReply))
 
+	successCalled := false
 	upload, err := client.UploadWithURLStorage(URLStorageUploadOptions{
 		Storage:                    storage,
 		Source:                     strings.NewReader(generatedTusResumeFlowContent),
@@ -108,9 +110,28 @@ func TestGeneratedURLStorageResumeFlow(t *testing.T) {
 		Size:                       11,
 		Metadata:                   generatedTusResumeFlowMetadata,
 		RemoveFingerprintOnSuccess: true,
+		EventHooks: UploadEventHooks{
+			OnSuccess: func(UploadSuccessPayload) error {
+				remainingUploads, err := storage.FindUploadsByFingerprint(generatedTusResumeFlowFingerprint)
+				if err != nil {
+					return err
+				}
+				if len(remainingUploads) != 0 {
+					return fmt.Errorf(
+						"expected success hook to run after storage removal, got %#v",
+						remainingUploads,
+					)
+				}
+				successCalled = true
+				return nil
+			},
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !successCalled {
+		t.Fatal("expected success hook to be called")
 	}
 	if upload.Location != storedUploadURL {
 		t.Fatalf("expected resumed upload URL %s, got %s", storedUploadURL, upload.Location)

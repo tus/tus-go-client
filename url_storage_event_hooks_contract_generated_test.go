@@ -27,7 +27,7 @@ const (
 	generatedTusEventHooksUploadLength        = "11"
 )
 
-var generatedTusEventHooksExpectedEvents = []string{"upload-url-available", "progress:0:11", "progress:11:11", "chunk-complete:11:11:11"}
+var generatedTusEventHooksExpectedEvents = []string{"upload-url-available", "progress:0:11", "progress:11:11", "chunk-complete:11:11:11", "success", "source-close"}
 var generatedTusEventHooksMetadata = map[string]string{"filename": "hello.txt"}
 
 func TestGeneratedURLStorageEventHooks(t *testing.T) {
@@ -103,9 +103,13 @@ func TestGeneratedURLStorageEventHooks(t *testing.T) {
 	srvMock.AddMocks(patchRequest.Reply(patchReply))
 
 	events := []string{}
+	source := &generatedTusEventHooksSource{
+		Reader: strings.NewReader(generatedTusEventHooksContent),
+		events: &events,
+	}
 	upload, err := client.UploadWithURLStorage(URLStorageUploadOptions{
 		Storage:     storage,
-		Source:      strings.NewReader(generatedTusEventHooksContent),
+		Source:      source,
 		Fingerprint: generatedTusEventHooksFingerprint,
 		Size:        11,
 		Metadata:    generatedTusEventHooksMetadata,
@@ -133,6 +137,20 @@ func TestGeneratedURLStorageEventHooks(t *testing.T) {
 				)
 				return nil
 			},
+			OnSuccess: func(payload UploadSuccessPayload) error {
+				if payload.Upload == nil || payload.Upload.Location != createdUploadURL {
+					return fmt.Errorf("expected success upload URL %s, got %#v", createdUploadURL, payload.Upload)
+				}
+				if payload.LastResponse == nil || payload.LastResponse.StatusCode != patchResponse.StatusCode {
+					return fmt.Errorf(
+						"expected success response status %d, got %#v",
+						patchResponse.StatusCode,
+						payload.LastResponse,
+					)
+				}
+				events = append(events, "success")
+				return nil
+			},
 		},
 	})
 	if err != nil {
@@ -155,6 +173,16 @@ func generatedTusEventHooksTotal(bytesTotal *int64) string {
 	}
 
 	return fmt.Sprintf("%d", *bytesTotal)
+}
+
+type generatedTusEventHooksSource struct {
+	*strings.Reader
+	events *[]string
+}
+
+func (source *generatedTusEventHooksSource) Close() error {
+	*source.events = append(*source.events, "source-close")
+	return nil
 }
 
 func generatedURLStorageEventHooksRequestHeaders(

@@ -12,6 +12,7 @@ import (
 	"io"
 	"math"
 	"math/rand"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -33,6 +34,9 @@ const (
 	generatedTusProgressParallelPart            = "aggregated-part-progress"
 	generatedTusRetryClientErrorStatus          = 400
 	generatedTusRetryStatusCategoryDivisor      = 100
+	generatedTusSuccessCloseSource              = "after-hook-when-source-open"
+	generatedTusSuccessEmit                     = "after-upload-complete"
+	generatedTusSuccessRemoveStoredURL          = "before-hook-when-option-enabled"
 	generatedTusUploadURLAvailableCreate        = "after-url-known-before-storage"
 	generatedTusUploadURLAvailableParallel      = "not-emitted"
 	generatedTusUploadURLAvailableResume        = "after-url-known-before-storage"
@@ -56,9 +60,15 @@ type FileFingerprintInput struct {
 
 type URLStorageUpload map[string]any
 
+type UploadSuccessPayload struct {
+	Upload       *Upload
+	LastResponse *http.Response
+}
+
 type UploadEventHooks struct {
 	OnProgress           func(bytesSent int64, bytesTotal *int64) error
 	OnChunkComplete      func(chunkSize int64, bytesAccepted int64, bytesTotal *int64) error
+	OnSuccess            func(UploadSuccessPayload) error
 	OnUploadURLAvailable func() error
 }
 
@@ -102,6 +112,16 @@ type FileBackedURLStorageUploadOptions struct {
 	RetryDelays                []time.Duration
 	OnShouldRetry              func(error, int) bool
 	EventHooks                 UploadEventHooks
+}
+
+type generatedTusSuccessInput struct {
+	EventHooks                 UploadEventHooks
+	LastResponse               *http.Response
+	RemoveFingerprintOnSuccess bool
+	Source                     io.ReadSeeker
+	Storage                    URLStorage
+	StorageKey                 string
+	Upload                     *Upload
 }
 
 type MemoryURLStorage struct {
@@ -351,10 +371,16 @@ func (c *Client) UploadWithURLStorage(options URLStorageUploadOptions) (*Upload,
 	if err := c.uploadURLStorageSource(options, stream); err != nil {
 		return upload, err
 	}
-	if options.RemoveFingerprintOnSuccess && storageKey != "" {
-		if err := options.Storage.RemoveUpload(storageKey); err != nil {
-			return upload, err
-		}
+	if err := generatedTusEmitSuccess(generatedTusSuccessInput{
+		EventHooks:                 options.EventHooks,
+		LastResponse:               stream.LastResponse,
+		RemoveFingerprintOnSuccess: options.RemoveFingerprintOnSuccess,
+		Source:                     options.Source,
+		Storage:                    options.Storage,
+		StorageKey:                 storageKey,
+		Upload:                     upload,
+	}); err != nil {
+		return upload, err
 	}
 
 	return upload, nil
@@ -604,6 +630,32 @@ func generatedTusEmitChunkCompleteAfterChunkAccepted(
 	)
 }
 
+func generatedTusEmitSuccess(input generatedTusSuccessInput) error {
+	if err := generatedTusAssertEventHookPolicySupported(); err != nil {
+		return err
+	}
+	if input.RemoveFingerprintOnSuccess && input.StorageKey != "" {
+		if err := input.Storage.RemoveUpload(input.StorageKey); err != nil {
+			return err
+		}
+	}
+	if input.EventHooks.OnSuccess != nil {
+		if err := input.EventHooks.OnSuccess(UploadSuccessPayload{
+			Upload:       input.Upload,
+			LastResponse: input.LastResponse,
+		}); err != nil {
+			return err
+		}
+	}
+
+	closer, ok := input.Source.(io.Closer)
+	if ok {
+		return closer.Close()
+	}
+
+	return nil
+}
+
 func generatedTusInt64Pointer(value int64) *int64 {
 	return &value
 }
@@ -669,6 +721,24 @@ func generatedTusAssertEventHookPolicySupported() error {
 		return fmt.Errorf(
 			"tus: unsupported chunk-complete hook policy %s",
 			generatedTusChunkCompleteAfterChunkAccepted,
+		)
+	}
+	if generatedTusSuccessCloseSource != "after-hook-when-source-open" {
+		return fmt.Errorf(
+			"tus: unsupported success source-close policy %s",
+			generatedTusSuccessCloseSource,
+		)
+	}
+	if generatedTusSuccessEmit != "after-upload-complete" {
+		return fmt.Errorf(
+			"tus: unsupported success hook policy %s",
+			generatedTusSuccessEmit,
+		)
+	}
+	if generatedTusSuccessRemoveStoredURL != "before-hook-when-option-enabled" {
+		return fmt.Errorf(
+			"tus: unsupported success storage cleanup policy %s",
+			generatedTusSuccessRemoveStoredURL,
 		)
 	}
 
