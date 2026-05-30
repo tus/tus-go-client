@@ -344,7 +344,7 @@ func (c *Client) uploadURLStorageSource(
 	options URLStorageUploadOptions,
 	stream *UploadStream,
 ) error {
-	retryDelays := urlStorageRetryDelays(options)
+	retryDelays := generatedTusRetryDelays(options.RetryDelays)
 	retryAttempt := 0
 	offsetBeforeRetry := stream.Upload.RemoteOffset
 
@@ -353,12 +353,18 @@ func (c *Client) uploadURLStorageSource(
 			return err
 		}
 		if _, err := stream.ReadFrom(options.Source); err != nil {
-			effectiveRetryAttempt := urlStorageRetryAttempt(
+			effectiveRetryAttempt := generatedTusRetryAttempt(
 				stream.Upload.RemoteOffset,
 				offsetBeforeRetry,
 				retryAttempt,
 			)
-			if !urlStorageShouldScheduleRetry(options, err, stream.lastResponseStatus(), effectiveRetryAttempt, retryDelays) {
+			if !generatedTusShouldScheduleRetry(
+				options.OnShouldRetry,
+				err,
+				stream.lastResponseStatus(),
+				effectiveRetryAttempt,
+				retryDelays,
+			) {
 				return err
 			}
 			delay := retryDelays[effectiveRetryAttempt]
@@ -386,15 +392,15 @@ func (us *UploadStream) lastResponseStatus() int {
 	return us.LastResponse.StatusCode
 }
 
-func urlStorageRetryDelays(options URLStorageUploadOptions) []time.Duration {
-	if options.RetryDelays == nil {
+func generatedTusRetryDelays(retryDelays []time.Duration) []time.Duration {
+	if retryDelays == nil {
 		return append([]time.Duration(nil), generatedTusDefaultRetryDelays...)
 	}
 
-	return options.RetryDelays
+	return retryDelays
 }
 
-func urlStorageRetryAttempt(offset int64, offsetBeforeRetry int64, retryAttempt int) int {
+func generatedTusRetryAttempt(offset int64, offsetBeforeRetry int64, retryAttempt int) int {
 	if offset > offsetBeforeRetry {
 		return 0
 	}
@@ -402,24 +408,24 @@ func urlStorageRetryAttempt(offset int64, offsetBeforeRetry int64, retryAttempt 
 	return retryAttempt
 }
 
-func urlStorageShouldScheduleRetry(
-	options URLStorageUploadOptions,
+func generatedTusShouldScheduleRetry(
+	onShouldRetry func(error, int) bool,
 	err error,
 	statusCode int,
 	retryAttempt int,
 	retryDelays []time.Duration,
 ) bool {
-	if retryAttempt >= len(retryDelays) || !urlStorageShouldRetryStatus(statusCode) {
+	if retryAttempt >= len(retryDelays) || !generatedTusShouldRetryStatus(statusCode) {
 		return false
 	}
-	if options.OnShouldRetry != nil {
-		return options.OnShouldRetry(err, retryAttempt)
+	if onShouldRetry != nil {
+		return onShouldRetry(err, retryAttempt)
 	}
 
 	return true
 }
 
-func urlStorageShouldRetryStatus(statusCode int) bool {
+func generatedTusShouldRetryStatus(statusCode int) bool {
 	if statusCode == 0 {
 		return false
 	}
