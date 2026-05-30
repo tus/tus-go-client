@@ -62,6 +62,38 @@ type generatedTusClientFeatureFlowStep struct {
 	Summary     string
 }
 
+type generatedTusClientFlowContract struct {
+	UrlStorage generatedTusClientUrlStoragePolicy
+}
+
+type generatedTusClientUrlStoragePolicy struct {
+	ID        generatedTusClientUrlStorageIDPolicy
+	Namespace string
+	Separator string
+}
+
+type generatedTusClientUrlStorageIDPolicy struct {
+	Multiplier float64
+	Strategy   string
+}
+
+type generatedTusClientUrlStorageConformanceScenario struct {
+	Actions    []generatedTusClientUrlStorageConformanceAction
+	Backend    string
+	FeatureID  string
+	Runtimes   []string
+	ScenarioID string
+}
+
+type generatedTusClientUrlStorageConformanceAction struct {
+	ExpectedKeyPrefix string
+	ExpectedKeyRefs   []string
+	Fingerprint       string
+	KeyRef            string
+	Kind              string
+	Upload            map[string]any
+}
+
 var generatedTusWireVersions = []generatedTusWireVersion{
 	{
 		Default: true,
@@ -961,5 +993,253 @@ var generatedTusClientFeatures = []generatedTusClientFeature{
 		},
 		OperationIDs: nil,
 		Primitives:   []string{"report-detailed-errors"},
+	},
+}
+
+var generatedTusClientFlow = generatedTusClientFlowContract{
+	UrlStorage: generatedTusClientUrlStoragePolicy{
+		ID: generatedTusClientUrlStorageIDPolicy{
+			Multiplier: 1000000000000,
+			Strategy:   "rounded-random-number",
+		},
+		Namespace: "tus",
+		Separator: "::",
+	},
+}
+
+var generatedTusClientUrlStorageConformanceScenarios = []generatedTusClientUrlStorageConformanceScenario{
+	{
+		Actions: []generatedTusClientUrlStorageConformanceAction{
+			{
+				ExpectedKeyPrefix: "",
+				ExpectedKeyRefs:   nil,
+				Fingerprint:       "",
+				KeyRef:            "",
+				Kind:              "assert-empty",
+				Upload:            nil,
+			},
+			{
+				ExpectedKeyPrefix: "tus::contract-storage-a::",
+				ExpectedKeyRefs:   nil,
+				Fingerprint:       "contract-storage-a",
+				KeyRef:            "a1",
+				Kind:              "add-upload",
+				Upload:            map[string]any{
+					"id": 1.0,
+					"metadata": map[string]any{
+						"filename": "a1.txt",
+					},
+					"size": 11.0,
+					"uploadUrl": "https://tus.io/uploads/storage-a1",
+				},
+			},
+			{
+				ExpectedKeyPrefix: "tus::contract-storage-a::",
+				ExpectedKeyRefs:   nil,
+				Fingerprint:       "contract-storage-a",
+				KeyRef:            "a2",
+				Kind:              "add-upload",
+				Upload:            map[string]any{
+					"id": 2.0,
+					"metadata": map[string]any{
+						"filename": "a2.txt",
+					},
+					"size": 12.0,
+					"uploadUrl": "https://tus.io/uploads/storage-a2",
+				},
+			},
+			{
+				ExpectedKeyPrefix: "tus::contract-storage-b::",
+				ExpectedKeyRefs:   nil,
+				Fingerprint:       "contract-storage-b",
+				KeyRef:            "b1",
+				Kind:              "add-upload",
+				Upload:            map[string]any{
+					"id": 3.0,
+					"metadata": map[string]any{
+						"filename": "b1.txt",
+					},
+					"size": 13.0,
+					"uploadUrl": "https://tus.io/uploads/storage-b1",
+				},
+			},
+			{
+				ExpectedKeyPrefix: "",
+				ExpectedKeyRefs:   []string{"a1", "a2"},
+				Fingerprint:       "contract-storage-a",
+				KeyRef:            "",
+				Kind:              "find-by-fingerprint",
+				Upload:            nil,
+			},
+			{
+				ExpectedKeyPrefix: "",
+				ExpectedKeyRefs:   []string{"b1"},
+				Fingerprint:       "contract-storage-b",
+				KeyRef:            "",
+				Kind:              "find-by-fingerprint",
+				Upload:            nil,
+			},
+			{
+				ExpectedKeyPrefix: "",
+				ExpectedKeyRefs:   []string{"a1", "a2", "b1"},
+				Fingerprint:       "",
+				KeyRef:            "",
+				Kind:              "find-all",
+				Upload:            nil,
+			},
+			{
+				ExpectedKeyPrefix: "",
+				ExpectedKeyRefs:   nil,
+				Fingerprint:       "",
+				KeyRef:            "a2",
+				Kind:              "remove-upload",
+				Upload:            nil,
+			},
+			{
+				ExpectedKeyPrefix: "",
+				ExpectedKeyRefs:   nil,
+				Fingerprint:       "",
+				KeyRef:            "b1",
+				Kind:              "remove-upload",
+				Upload:            nil,
+			},
+			{
+				ExpectedKeyPrefix: "",
+				ExpectedKeyRefs:   []string{"a1"},
+				Fingerprint:       "contract-storage-a",
+				KeyRef:            "",
+				Kind:              "find-by-fingerprint",
+				Upload:            nil,
+			},
+			{
+				ExpectedKeyPrefix: "",
+				ExpectedKeyRefs:   nil,
+				Fingerprint:       "contract-storage-b",
+				KeyRef:            "",
+				Kind:              "find-by-fingerprint",
+				Upload:            nil,
+			},
+		},
+		Backend:    "web-storage",
+		FeatureID:  "urlStorageBackends",
+		Runtimes:   []string{"browser"},
+		ScenarioID: "webStorageUrlStorageBackend",
+	},
+	{
+		Actions: []generatedTusClientUrlStorageConformanceAction{
+			{
+				ExpectedKeyPrefix: "",
+				ExpectedKeyRefs:   nil,
+				Fingerprint:       "",
+				KeyRef:            "",
+				Kind:              "assert-empty",
+				Upload:            nil,
+			},
+			{
+				ExpectedKeyPrefix: "tus::contract-storage-a::",
+				ExpectedKeyRefs:   nil,
+				Fingerprint:       "contract-storage-a",
+				KeyRef:            "a1",
+				Kind:              "add-upload",
+				Upload:            map[string]any{
+					"id": 1.0,
+					"metadata": map[string]any{
+						"filename": "a1.txt",
+					},
+					"size": 11.0,
+					"uploadUrl": "https://tus.io/uploads/storage-a1",
+				},
+			},
+			{
+				ExpectedKeyPrefix: "tus::contract-storage-a::",
+				ExpectedKeyRefs:   nil,
+				Fingerprint:       "contract-storage-a",
+				KeyRef:            "a2",
+				Kind:              "add-upload",
+				Upload:            map[string]any{
+					"id": 2.0,
+					"metadata": map[string]any{
+						"filename": "a2.txt",
+					},
+					"size": 12.0,
+					"uploadUrl": "https://tus.io/uploads/storage-a2",
+				},
+			},
+			{
+				ExpectedKeyPrefix: "tus::contract-storage-b::",
+				ExpectedKeyRefs:   nil,
+				Fingerprint:       "contract-storage-b",
+				KeyRef:            "b1",
+				Kind:              "add-upload",
+				Upload:            map[string]any{
+					"id": 3.0,
+					"metadata": map[string]any{
+						"filename": "b1.txt",
+					},
+					"size": 13.0,
+					"uploadUrl": "https://tus.io/uploads/storage-b1",
+				},
+			},
+			{
+				ExpectedKeyPrefix: "",
+				ExpectedKeyRefs:   []string{"a1", "a2"},
+				Fingerprint:       "contract-storage-a",
+				KeyRef:            "",
+				Kind:              "find-by-fingerprint",
+				Upload:            nil,
+			},
+			{
+				ExpectedKeyPrefix: "",
+				ExpectedKeyRefs:   []string{"b1"},
+				Fingerprint:       "contract-storage-b",
+				KeyRef:            "",
+				Kind:              "find-by-fingerprint",
+				Upload:            nil,
+			},
+			{
+				ExpectedKeyPrefix: "",
+				ExpectedKeyRefs:   []string{"a1", "a2", "b1"},
+				Fingerprint:       "",
+				KeyRef:            "",
+				Kind:              "find-all",
+				Upload:            nil,
+			},
+			{
+				ExpectedKeyPrefix: "",
+				ExpectedKeyRefs:   nil,
+				Fingerprint:       "",
+				KeyRef:            "a2",
+				Kind:              "remove-upload",
+				Upload:            nil,
+			},
+			{
+				ExpectedKeyPrefix: "",
+				ExpectedKeyRefs:   nil,
+				Fingerprint:       "",
+				KeyRef:            "b1",
+				Kind:              "remove-upload",
+				Upload:            nil,
+			},
+			{
+				ExpectedKeyPrefix: "",
+				ExpectedKeyRefs:   []string{"a1"},
+				Fingerprint:       "contract-storage-a",
+				KeyRef:            "",
+				Kind:              "find-by-fingerprint",
+				Upload:            nil,
+			},
+			{
+				ExpectedKeyPrefix: "",
+				ExpectedKeyRefs:   nil,
+				Fingerprint:       "contract-storage-b",
+				KeyRef:            "",
+				Kind:              "find-by-fingerprint",
+				Upload:            nil,
+			},
+		},
+		Backend:    "file-storage",
+		FeatureID:  "urlStorageBackends",
+		Runtimes:   []string{"deno", "node"},
+		ScenarioID: "fileUrlStorageBackend",
 	},
 }
