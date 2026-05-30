@@ -41,8 +41,8 @@ type generatedTusProtocolOperation struct {
 }
 
 type generatedTusClientFeature struct {
-	Conformance generatedTusClientFeatureConformance
-	Description string
+	Conformance  generatedTusClientFeatureConformance
+	Description  string
 	FeatureID    string
 	Flow         []generatedTusClientFeatureFlowStep
 	OperationIDs []string
@@ -444,9 +444,9 @@ var generatedTusClientFeatures = []generatedTusClientFeature{
 			ScenarioIDs: []string{"singleUploadLifecycle"},
 			Status:      "covered-by-generated-scenario",
 		},
-		Description:  "Create an upload, store its URL, upload bytes, and finish successfully.",
-		FeatureID:    "singleUploadLifecycle",
-		Flow:         []generatedTusClientFeatureFlowStep{
+		Description: "Create an upload, store its URL, upload bytes, and finish successfully.",
+		FeatureID:   "singleUploadLifecycle",
+		Flow: []generatedTusClientFeatureFlowStep{
 			{
 				Kind:        "primitive",
 				OperationID: "",
@@ -477,9 +477,9 @@ var generatedTusClientFeatures = []generatedTusClientFeature{
 			ScenarioIDs: []string{"resumeFromPreviousUpload"},
 			Status:      "covered-by-generated-scenario",
 		},
-		Description:  "Resume a stored upload URL by discovering the remote offset before patching.",
-		FeatureID:    "resumeUpload",
-		Flow:         []generatedTusClientFeatureFlowStep{
+		Description: "Resume a stored upload URL by discovering the remote offset before patching.",
+		FeatureID:   "resumeUpload",
+		Flow: []generatedTusClientFeatureFlowStep{
 			{
 				Kind:        "primitive",
 				OperationID: "",
@@ -510,9 +510,9 @@ var generatedTusClientFeatures = []generatedTusClientFeature{
 			ScenarioIDs: []string{"deferredLengthUpload"},
 			Status:      "covered-by-generated-scenario",
 		},
-		Description:  "Create an upload without a known length and declare the length on final PATCH.",
-		FeatureID:    "deferredLengthUpload",
-		Flow:         []generatedTusClientFeatureFlowStep{
+		Description: "Create an upload without a known length and declare the length on final PATCH.",
+		FeatureID:   "deferredLengthUpload",
+		Flow: []generatedTusClientFeatureFlowStep{
 			{
 				Kind:        "operation",
 				OperationID: "createTusUpload",
@@ -543,9 +543,9 @@ var generatedTusClientFeatures = []generatedTusClientFeature{
 			ScenarioIDs: []string{"creationWithUpload"},
 			Status:      "covered-by-generated-scenario",
 		},
-		Description:  "Send the first bytes on the creation request when the server/client support it.",
-		FeatureID:    "creationWithUpload",
-		Flow:         []generatedTusClientFeatureFlowStep{
+		Description: "Send the first bytes on the creation request when the server/client support it.",
+		FeatureID:   "creationWithUpload",
+		Flow: []generatedTusClientFeatureFlowStep{
 			{
 				Kind:        "operation",
 				OperationID: "createTusUpload",
@@ -569,9 +569,9 @@ var generatedTusClientFeatures = []generatedTusClientFeature{
 			ScenarioIDs: []string{"uploadBodyHeaders"},
 			Status:      "covered-by-generated-scenario",
 		},
-		Description:  "Send protocol-specific upload body headers whenever the client transmits file bytes.",
-		FeatureID:    "uploadBodyHeaders",
-		Flow:         []generatedTusClientFeatureFlowStep{
+		Description: "Send protocol-specific upload body headers whenever the client transmits file bytes.",
+		FeatureID:   "uploadBodyHeaders",
+		Flow: []generatedTusClientFeatureFlowStep{
 			{
 				Kind:        "primitive",
 				OperationID: "",
@@ -595,9 +595,9 @@ var generatedTusClientFeatures = []generatedTusClientFeature{
 			ScenarioIDs: []string{"overridePatchMethod"},
 			Status:      "covered-by-generated-scenario",
 		},
-		Description:  "Tunnel PATCH through POST with the method-override header.",
-		FeatureID:    "overridePatchMethod",
-		Flow:         []generatedTusClientFeatureFlowStep{
+		Description: "Tunnel PATCH through POST with the method-override header.",
+		FeatureID:   "overridePatchMethod",
+		Flow: []generatedTusClientFeatureFlowStep{
 			{
 				Kind:        "operation",
 				OperationID: "getTusUploadOffset",
@@ -628,9 +628,9 @@ var generatedTusClientFeatures = []generatedTusClientFeature{
 			ScenarioIDs: []string{"parallelUploadConcat"},
 			Status:      "covered-by-generated-scenario",
 		},
-		Description:  "Split one input into partial uploads and concatenate their upload URLs.",
-		FeatureID:    "parallelUploadConcat",
-		Flow:         []generatedTusClientFeatureFlowStep{
+		Description: "Split one input into partial uploads and concatenate their upload URLs.",
+		FeatureID:   "parallelUploadConcat",
+		Flow: []generatedTusClientFeatureFlowStep{
 			{
 				Kind:        "primitive",
 				OperationID: "",
@@ -661,9 +661,9 @@ var generatedTusClientFeatures = []generatedTusClientFeature{
 			ScenarioIDs: []string{"retryPatchAfterOffsetRecovery"},
 			Status:      "covered-by-generated-scenario",
 		},
-		Description:  "Recover from a failed chunk by reading the server offset before retrying.",
-		FeatureID:    "retryOffsetRecovery",
-		Flow:         []generatedTusClientFeatureFlowStep{
+		Description: "Recover from a failed chunk by reading the server offset before retrying.",
+		FeatureID:   "retryOffsetRecovery",
+		Flow: []generatedTusClientFeatureFlowStep{
 			{
 				Kind:        "operation",
 				OperationID: "patchTusUpload",
@@ -694,9 +694,9 @@ var generatedTusClientFeatures = []generatedTusClientFeature{
 			ScenarioIDs: []string{"retryPatchAfterOffsetRecovery"},
 			Status:      "covered-by-generated-scenario",
 		},
-		Description:  "Schedule retry timers and reset retry attempts after accepted progress.",
-		FeatureID:    "retryStateTransitions",
-		Flow:         []generatedTusClientFeatureFlowStep{
+		Description: "Schedule retry timers and reset retry attempts after accepted progress.",
+		FeatureID:   "retryStateTransitions",
+		Flow: []generatedTusClientFeatureFlowStep{
 			{
 				Kind:        "primitive",
 				OperationID: "",
@@ -720,9 +720,9 @@ var generatedTusClientFeatures = []generatedTusClientFeature{
 			ScenarioIDs: []string{"terminateWithRetry"},
 			Status:      "covered-by-generated-scenario",
 		},
-		Description:  "Terminate an upload resource and retry retryable termination failures.",
-		FeatureID:    "terminateUpload",
-		Flow:         []generatedTusClientFeatureFlowStep{
+		Description: "Terminate an upload resource and retry retryable termination failures.",
+		FeatureID:   "terminateUpload",
+		Flow: []generatedTusClientFeatureFlowStep{
 			{
 				Kind:        "primitive",
 				OperationID: "",
@@ -746,9 +746,9 @@ var generatedTusClientFeatures = []generatedTusClientFeature{
 			ScenarioIDs: []string{"abortUpload"},
 			Status:      "covered-by-generated-scenario",
 		},
-		Description:  "Abort the active request, pending retry timer, and any partial uploads.",
-		FeatureID:    "abortUpload",
-		Flow:         []generatedTusClientFeatureFlowStep{
+		Description: "Abort the active request, pending retry timer, and any partial uploads.",
+		FeatureID:   "abortUpload",
+		Flow: []generatedTusClientFeatureFlowStep{
 			{
 				Kind:        "primitive",
 				OperationID: "",
@@ -765,9 +765,9 @@ var generatedTusClientFeatures = []generatedTusClientFeature{
 			ScenarioIDs: []string{"singleUploadLifecycle", "creationWithUpload", "resumeFromPreviousUpload"},
 			Status:      "covered-by-generated-scenario",
 		},
-		Description:  "Expose progress and accepted-chunk callbacks from runtime upload activity.",
-		FeatureID:    "uploadCallbacks",
-		Flow:         []generatedTusClientFeatureFlowStep{
+		Description: "Expose progress and accepted-chunk callbacks from runtime upload activity.",
+		FeatureID:   "uploadCallbacks",
+		Flow: []generatedTusClientFeatureFlowStep{
 			{
 				Kind:        "primitive",
 				OperationID: "",
@@ -798,9 +798,9 @@ var generatedTusClientFeatures = []generatedTusClientFeature{
 			ScenarioIDs: []string{"requestLifecycleHooks", "retryPatchAfterOffsetRecovery"},
 			Status:      "covered-by-generated-scenario",
 		},
-		Description:  "Run before-request, after-response, and custom retry hooks around transport.",
-		FeatureID:    "requestLifecycleHooks",
-		Flow:         []generatedTusClientFeatureFlowStep{
+		Description: "Run before-request, after-response, and custom retry hooks around transport.",
+		FeatureID:   "requestLifecycleHooks",
+		Flow: []generatedTusClientFeatureFlowStep{
 			{
 				Kind:        "primitive",
 				OperationID: "",
@@ -824,9 +824,9 @@ var generatedTusClientFeatures = []generatedTusClientFeature{
 			ScenarioIDs: []string{"singleUploadLifecycle", "resumeFromPreviousUpload"},
 			Status:      "covered-by-generated-scenario",
 		},
-		Description:  "Persist, find, resume, and optionally remove upload URLs by fingerprint.",
-		FeatureID:    "resumeUrlStorage",
-		Flow:         []generatedTusClientFeatureFlowStep{
+		Description: "Persist, find, resume, and optionally remove upload URLs by fingerprint.",
+		FeatureID:   "resumeUrlStorage",
+		Flow: []generatedTusClientFeatureFlowStep{
 			{
 				Kind:        "primitive",
 				OperationID: "",
@@ -857,9 +857,9 @@ var generatedTusClientFeatures = []generatedTusClientFeature{
 			ScenarioIDs: []string{"arrayBufferInput", "arrayBufferViewInput", "webReadableStreamInput", "nodeReadableStreamInput", "nodePathInput"},
 			Status:      "covered-by-generated-scenario",
 		},
-		Description:  "Support the reference client input/source families across runtimes.",
-		FeatureID:    "inputSources",
-		Flow:         []generatedTusClientFeatureFlowStep{
+		Description: "Support the reference client input/source families across runtimes.",
+		FeatureID:   "inputSources",
+		Flow: []generatedTusClientFeatureFlowStep{
 			{
 				Kind:        "primitive",
 				OperationID: "",
@@ -897,9 +897,9 @@ var generatedTusClientFeatures = []generatedTusClientFeature{
 			ScenarioIDs: []string{"webStorageUrlStorageBackend", "fileUrlStorageBackend"},
 			Status:      "covered-by-generated-scenario",
 		},
-		Description:  "Support browser and file-backed URL storage implementations.",
-		FeatureID:    "urlStorageBackends",
-		Flow:         []generatedTusClientFeatureFlowStep{
+		Description: "Support browser and file-backed URL storage implementations.",
+		FeatureID:   "urlStorageBackends",
+		Flow: []generatedTusClientFeatureFlowStep{
 			{
 				Kind:        "primitive",
 				OperationID: "",
@@ -923,9 +923,9 @@ var generatedTusClientFeatures = []generatedTusClientFeature{
 			ScenarioIDs: []string{"ietfDraft05CreationWithUpload", "ietfDraft03ResumeWithoutKnownLength"},
 			Status:      "covered-by-generated-scenario",
 		},
-		Description:  "Select between tus v1 and supported IETF draft client protocol modes.",
-		FeatureID:    "protocolVersionSelection",
-		Flow:         []generatedTusClientFeatureFlowStep{
+		Description: "Select between tus v1 and supported IETF draft client protocol modes.",
+		FeatureID:   "protocolVersionSelection",
+		Flow: []generatedTusClientFeatureFlowStep{
 			{
 				Kind:        "primitive",
 				OperationID: "",
@@ -942,9 +942,9 @@ var generatedTusClientFeatures = []generatedTusClientFeature{
 			ScenarioIDs: []string{"relativeLocationResolution"},
 			Status:      "covered-by-generated-scenario",
 		},
-		Description:  "Normalize relative Location headers against the request endpoint.",
-		FeatureID:    "relativeLocationResolution",
-		Flow:         []generatedTusClientFeatureFlowStep{
+		Description: "Normalize relative Location headers against the request endpoint.",
+		FeatureID:   "relativeLocationResolution",
+		Flow: []generatedTusClientFeatureFlowStep{
 			{
 				Kind:        "primitive",
 				OperationID: "",
@@ -961,9 +961,9 @@ var generatedTusClientFeatures = []generatedTusClientFeature{
 			ScenarioIDs: []string{"startValidationMissingInput", "startValidationMissingEndpointOrUploadUrl", "startValidationUnsupportedProtocol", "startValidationRetryDelaysNotArray", "startValidationParallelUploadsWithUploadUrl", "startValidationParallelUploadsWithUploadSize", "startValidationParallelUploadsWithDeferredLength", "startValidationParallelBoundariesWithoutParallelUploads", "startValidationParallelBoundariesLengthMismatch"},
 			Status:      "covered-by-generated-scenario",
 		},
-		Description:  "Validate option combinations before starting runtime work.",
-		FeatureID:    "startOptionValidation",
-		Flow:         []generatedTusClientFeatureFlowStep{
+		Description: "Validate option combinations before starting runtime work.",
+		FeatureID:   "startOptionValidation",
+		Flow: []generatedTusClientFeatureFlowStep{
 			{
 				Kind:        "primitive",
 				OperationID: "",
@@ -980,9 +980,9 @@ var generatedTusClientFeatures = []generatedTusClientFeature{
 			ScenarioIDs: []string{"detailedCreateResponseError", "detailedCreateRequestError"},
 			Status:      "covered-by-generated-scenario",
 		},
-		Description:  "Attach request, response, status, body, and request ID context to errors.",
-		FeatureID:    "detailedErrors",
-		Flow:         []generatedTusClientFeatureFlowStep{
+		Description: "Attach request, response, status, body, and request ID context to errors.",
+		FeatureID:   "detailedErrors",
+		Flow: []generatedTusClientFeatureFlowStep{
 			{
 				Kind:        "primitive",
 				OperationID: "",
@@ -1024,12 +1024,12 @@ var generatedTusClientUrlStorageConformanceScenarios = []generatedTusClientUrlSt
 				Fingerprint:       "contract-storage-a",
 				KeyRef:            "a1",
 				Kind:              "add-upload",
-				Upload:            map[string]any{
+				Upload: map[string]any{
 					"id": 1.0,
 					"metadata": map[string]any{
 						"filename": "a1.txt",
 					},
-					"size": 11.0,
+					"size":      11.0,
 					"uploadUrl": "https://tus.io/uploads/storage-a1",
 				},
 			},
@@ -1039,12 +1039,12 @@ var generatedTusClientUrlStorageConformanceScenarios = []generatedTusClientUrlSt
 				Fingerprint:       "contract-storage-a",
 				KeyRef:            "a2",
 				Kind:              "add-upload",
-				Upload:            map[string]any{
+				Upload: map[string]any{
 					"id": 2.0,
 					"metadata": map[string]any{
 						"filename": "a2.txt",
 					},
-					"size": 12.0,
+					"size":      12.0,
 					"uploadUrl": "https://tus.io/uploads/storage-a2",
 				},
 			},
@@ -1054,12 +1054,12 @@ var generatedTusClientUrlStorageConformanceScenarios = []generatedTusClientUrlSt
 				Fingerprint:       "contract-storage-b",
 				KeyRef:            "b1",
 				Kind:              "add-upload",
-				Upload:            map[string]any{
+				Upload: map[string]any{
 					"id": 3.0,
 					"metadata": map[string]any{
 						"filename": "b1.txt",
 					},
-					"size": 13.0,
+					"size":      13.0,
 					"uploadUrl": "https://tus.io/uploads/storage-b1",
 				},
 			},
@@ -1141,12 +1141,12 @@ var generatedTusClientUrlStorageConformanceScenarios = []generatedTusClientUrlSt
 				Fingerprint:       "contract-storage-a",
 				KeyRef:            "a1",
 				Kind:              "add-upload",
-				Upload:            map[string]any{
+				Upload: map[string]any{
 					"id": 1.0,
 					"metadata": map[string]any{
 						"filename": "a1.txt",
 					},
-					"size": 11.0,
+					"size":      11.0,
 					"uploadUrl": "https://tus.io/uploads/storage-a1",
 				},
 			},
@@ -1156,12 +1156,12 @@ var generatedTusClientUrlStorageConformanceScenarios = []generatedTusClientUrlSt
 				Fingerprint:       "contract-storage-a",
 				KeyRef:            "a2",
 				Kind:              "add-upload",
-				Upload:            map[string]any{
+				Upload: map[string]any{
 					"id": 2.0,
 					"metadata": map[string]any{
 						"filename": "a2.txt",
 					},
-					"size": 12.0,
+					"size":      12.0,
 					"uploadUrl": "https://tus.io/uploads/storage-a2",
 				},
 			},
@@ -1171,12 +1171,12 @@ var generatedTusClientUrlStorageConformanceScenarios = []generatedTusClientUrlSt
 				Fingerprint:       "contract-storage-b",
 				KeyRef:            "b1",
 				Kind:              "add-upload",
-				Upload:            map[string]any{
+				Upload: map[string]any{
 					"id": 3.0,
 					"metadata": map[string]any{
 						"filename": "b1.txt",
 					},
-					"size": 13.0,
+					"size":      13.0,
 					"uploadUrl": "https://tus.io/uploads/storage-b1",
 				},
 			},

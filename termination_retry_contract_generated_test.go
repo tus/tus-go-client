@@ -49,7 +49,7 @@ func TestGeneratedTerminationRetryFlow(t *testing.T) {
 	terminateOperation := generatedProtocolOperation("terminateTusUpload")
 	client := NewClient(http.DefaultClient, baseURL)
 	client.Capabilities = &ServerCapabilities{
-		Extensions:        []string{createOperation.Role, terminateOperation.Role},
+		Extensions:       []string{createOperation.Role, terminateOperation.Role},
 		ProtocolVersions: []string{DefaultProtocolVersion},
 	}
 
@@ -74,7 +74,7 @@ func TestGeneratedTerminationRetryFlow(t *testing.T) {
 			createOperation,
 			map[string]string{
 				"Upload-Metadata": encodedMetadata,
-				"Upload-Length": generatedTusTerminateFlowUploadLength,
+				"Upload-Length":   generatedTusTerminateFlowUploadLength,
 			},
 		).Reply(createReply),
 	)

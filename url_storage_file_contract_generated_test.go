@@ -83,7 +83,7 @@ func TestGeneratedURLStorageFileFlow(t *testing.T) {
 	patchOperation := generatedProtocolOperation("patchTusUpload")
 	client := NewClient(http.DefaultClient, baseURL)
 	client.Capabilities = &ServerCapabilities{
-		Extensions:        []string{createOperation.Role},
+		Extensions:       []string{createOperation.Role},
 		ProtocolVersions: []string{DefaultProtocolVersion},
 	}
 

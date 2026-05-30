@@ -6,6 +6,7 @@ package tusgo
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -32,6 +33,10 @@ const (
 	generatedTusProgressBeforeRequestBody       = "current-offset"
 	generatedTusProgressDuringRequest           = "start-offset-plus-transmitted-bytes"
 	generatedTusProgressParallelPart            = "aggregated-part-progress"
+	generatedTusAbortErrorMessage               = "Request was aborted"
+	generatedTusAbortRemoveStoredURLAfterTerm   = "after-successful-termination"
+	generatedTusAbortSuppressErrorAfterAbort    = true
+	generatedTusAbortTerminateUpload            = "when-requested-and-upload-url-known"
 	generatedTusRetryClientErrorStatus          = 400
 	generatedTusRetryStatusCategoryDivisor      = 100
 	generatedTusSuccessCloseSource              = "after-hook-when-source-open"
@@ -48,6 +53,7 @@ const (
 )
 
 var generatedTusNodeFileFingerprintFields = []string{"prefix", "absolutePath", "size", "mtimeMs", "endpoint"}
+var generatedTusAbortSequence = []string{"mark-aborted", "abort-parallel-uploads", "abort-current-request", "clear-retry-timer", "terminate-upload-if-requested"}
 var generatedTusDefaultRetryDelays = []time.Duration{0 * time.Millisecond, 1000 * time.Millisecond, 3000 * time.Millisecond, 5000 * time.Millisecond}
 var generatedTusRetryableClientStatusCodes = []int{409, 423}
 
@@ -80,6 +86,7 @@ type URLStorage interface {
 }
 
 type URLStorageUploadOptions struct {
+	Context                    context.Context
 	Storage                    URLStorage
 	Source                     io.ReadSeeker
 	Fingerprint                string
@@ -93,6 +100,7 @@ type URLStorageUploadOptions struct {
 }
 
 type URLStorageFileUploadOptions struct {
+	Context                    context.Context
 	Storage                    URLStorage
 	Path                       string
 	Metadata                   map[string]string
@@ -104,6 +112,7 @@ type URLStorageFileUploadOptions struct {
 }
 
 type FileBackedURLStorageUploadOptions struct {
+	Context                    context.Context
 	URLStoragePath             string
 	Path                       string
 	Metadata                   map[string]string
@@ -293,6 +302,7 @@ func newURLStorageKey(fingerprint string) string {
 
 func (c *Client) UploadFileWithFileBackedURLStorage(options FileBackedURLStorageUploadOptions) (*Upload, error) {
 	return c.UploadFileWithURLStorage(URLStorageFileUploadOptions{
+		Context:                    options.Context,
 		Storage:                    NewFileURLStorage(options.URLStoragePath),
 		Path:                       options.Path,
 		Metadata:                   options.Metadata,
@@ -329,6 +339,7 @@ func (c *Client) UploadFileWithURLStorage(options URLStorageFileUploadOptions) (
 	})
 
 	return c.UploadWithURLStorage(URLStorageUploadOptions{
+		Context:                    options.Context,
 		Storage:                    options.Storage,
 		Source:                     file,
 		Fingerprint:                fingerprint,
@@ -353,22 +364,27 @@ func (c *Client) UploadWithURLStorage(options URLStorageUploadOptions) (*Upload,
 		return nil, errors.New("tus: unable to calculate fingerprint for this input file")
 	}
 
-	upload, storageKey, err := c.resumeUploadFromURLStorage(options)
+	uploadClient, err := generatedTusClientWithUploadContext(c, options.Context)
+	if err != nil {
+		return nil, err
+	}
+
+	upload, storageKey, err := uploadClient.resumeUploadFromURLStorage(options)
 	if err != nil {
 		return upload, err
 	}
 	if upload == nil {
-		upload, storageKey, err = c.createUploadForURLStorage(options)
+		upload, storageKey, err = uploadClient.createUploadForURLStorage(options)
 		if err != nil {
 			return upload, err
 		}
 	}
 
-	stream := NewUploadStream(c, upload)
+	stream := NewUploadStream(uploadClient, upload)
 	if options.ChunkSize != 0 {
 		stream.ChunkSize = options.ChunkSize
 	}
-	if err := c.uploadURLStorageSource(options, stream); err != nil {
+	if err := uploadClient.uploadURLStorageSource(options, stream); err != nil {
 		return upload, err
 	}
 	if err := generatedTusEmitSuccess(generatedTusSuccessInput{
@@ -501,6 +517,21 @@ func (us *UploadStream) lastResponseStatus() int {
 	}
 
 	return us.LastResponse.StatusCode
+}
+
+func generatedTusClientWithUploadContext(client *Client, ctx context.Context) (*Client, error) {
+	if ctx == nil {
+		return client, nil
+	}
+	if err := generatedTusAssertAbortPolicySupported(); err != nil {
+		return nil, err
+	}
+
+	return client.WithContext(ctx), nil
+}
+
+func IsUploadAbortError(err error) bool {
+	return errors.Is(err, context.Canceled)
 }
 
 func generatedTusRetryDelays(retryDelays []time.Duration) []time.Duration {
@@ -739,6 +770,35 @@ func generatedTusAssertEventHookPolicySupported() error {
 		return fmt.Errorf(
 			"tus: unsupported success storage cleanup policy %s",
 			generatedTusSuccessRemoveStoredURL,
+		)
+	}
+
+	return nil
+}
+
+func generatedTusAssertAbortPolicySupported() error {
+	supportedActions := map[string]bool{
+		"abort-current-request":         true,
+		"abort-parallel-uploads":        true,
+		"clear-retry-timer":             true,
+		"mark-aborted":                  true,
+		"terminate-upload-if-requested": true,
+	}
+	for _, action := range generatedTusAbortSequence {
+		if !supportedActions[action] {
+			return fmt.Errorf("tus: unsupported abort sequence action %s", action)
+		}
+	}
+	if generatedTusAbortTerminateUpload != "when-requested-and-upload-url-known" {
+		return fmt.Errorf(
+			"tus: unsupported abort termination policy %s",
+			generatedTusAbortTerminateUpload,
+		)
+	}
+	if generatedTusAbortRemoveStoredURLAfterTerm != "after-successful-termination" {
+		return fmt.Errorf(
+			"tus: unsupported abort storage cleanup policy %s",
+			generatedTusAbortRemoveStoredURLAfterTerm,
 		)
 	}
 

@@ -70,7 +70,7 @@ func TestGeneratedURLStorageRetryOffsetRecoveryFlow(t *testing.T) {
 	}
 	client := NewClient(http.DefaultClient, baseURL)
 	client.Capabilities = &ServerCapabilities{
-		Extensions:        []string{generatedProtocolOperation("createTusUpload").Role},
+		Extensions:       []string{generatedProtocolOperation("createTusUpload").Role},
 		ProtocolVersions: []string{DefaultProtocolVersion},
 	}
 
@@ -99,7 +99,7 @@ func TestGeneratedURLStorageRetryOffsetRecoveryFlow(t *testing.T) {
 			createOperation,
 			map[string]string{
 				"Upload-Metadata": encodedMetadata,
-				"Upload-Length": generatedTusRetryFlowUploadLength,
+				"Upload-Length":   generatedTusRetryFlowUploadLength,
 			},
 		).Repeat(1).Reply(createReply),
 	)
