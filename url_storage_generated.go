@@ -22,16 +22,25 @@ import (
 )
 
 const (
-	generatedTusNodeFileFingerprintPath      = "absolute"
-	generatedTusNodeFileFingerprintPrefix    = "node-file"
-	generatedTusNodeFileFingerprintSeparator = "-"
-	generatedTusRetryClientErrorStatus       = 400
-	generatedTusRetryStatusCategoryDivisor   = 100
-	generatedTusURLStorageIDMultiplier       = 1000000000000
-	generatedTusURLStorageIDStrategy         = "rounded-random-number"
-	generatedTusURLStorageNamespace          = "tus"
-	generatedTusURLStorageSeparator          = "::"
-	generatedTusURLStorageCreationTime       = "sdk-current-date-string"
+	generatedTusNodeFileFingerprintPath         = "absolute"
+	generatedTusNodeFileFingerprintPrefix       = "node-file"
+	generatedTusNodeFileFingerprintSeparator    = "-"
+	generatedTusChunkCompleteAfterChunkAccepted = "accepted-chunk-size-and-offset"
+	generatedTusProgressAfterChunkAccepted      = "accepted-offset"
+	generatedTusProgressAfterResumeComplete     = "upload-length"
+	generatedTusProgressBeforeRequestBody       = "current-offset"
+	generatedTusProgressDuringRequest           = "start-offset-plus-transmitted-bytes"
+	generatedTusProgressParallelPart            = "aggregated-part-progress"
+	generatedTusRetryClientErrorStatus          = 400
+	generatedTusRetryStatusCategoryDivisor      = 100
+	generatedTusUploadURLAvailableCreate        = "after-url-known-before-storage"
+	generatedTusUploadURLAvailableParallel      = "not-emitted"
+	generatedTusUploadURLAvailableResume        = "after-url-known-before-storage"
+	generatedTusURLStorageIDMultiplier          = 1000000000000
+	generatedTusURLStorageIDStrategy            = "rounded-random-number"
+	generatedTusURLStorageNamespace             = "tus"
+	generatedTusURLStorageSeparator             = "::"
+	generatedTusURLStorageCreationTime          = "sdk-current-date-string"
 )
 
 var generatedTusNodeFileFingerprintFields = []string{"prefix", "absolutePath", "size", "mtimeMs", "endpoint"}
@@ -46,6 +55,12 @@ type FileFingerprintInput struct {
 }
 
 type URLStorageUpload map[string]any
+
+type UploadEventHooks struct {
+	OnProgress           func(bytesSent int64, bytesTotal *int64) error
+	OnChunkComplete      func(chunkSize int64, bytesAccepted int64, bytesTotal *int64) error
+	OnUploadURLAvailable func() error
+}
 
 type URLStorage interface {
 	FindAllUploads() ([]URLStorageUpload, error)
@@ -64,6 +79,7 @@ type URLStorageUploadOptions struct {
 	ChunkSize                  int64
 	RetryDelays                []time.Duration
 	OnShouldRetry              func(error, int) bool
+	EventHooks                 UploadEventHooks
 }
 
 type URLStorageFileUploadOptions struct {
@@ -74,6 +90,7 @@ type URLStorageFileUploadOptions struct {
 	ChunkSize                  int64
 	RetryDelays                []time.Duration
 	OnShouldRetry              func(error, int) bool
+	EventHooks                 UploadEventHooks
 }
 
 type FileBackedURLStorageUploadOptions struct {
@@ -84,6 +101,7 @@ type FileBackedURLStorageUploadOptions struct {
 	ChunkSize                  int64
 	RetryDelays                []time.Duration
 	OnShouldRetry              func(error, int) bool
+	EventHooks                 UploadEventHooks
 }
 
 type MemoryURLStorage struct {
@@ -262,6 +280,7 @@ func (c *Client) UploadFileWithFileBackedURLStorage(options FileBackedURLStorage
 		ChunkSize:                  options.ChunkSize,
 		RetryDelays:                options.RetryDelays,
 		OnShouldRetry:              options.OnShouldRetry,
+		EventHooks:                 options.EventHooks,
 	})
 }
 
@@ -299,6 +318,7 @@ func (c *Client) UploadFileWithURLStorage(options URLStorageFileUploadOptions) (
 		ChunkSize:                  options.ChunkSize,
 		RetryDelays:                options.RetryDelays,
 		OnShouldRetry:              options.OnShouldRetry,
+		EventHooks:                 options.EventHooks,
 	})
 }
 
@@ -352,7 +372,27 @@ func (c *Client) uploadURLStorageSource(
 		if _, err := options.Source.Seek(stream.Upload.RemoteOffset, io.SeekStart); err != nil {
 			return err
 		}
-		if _, err := stream.ReadFrom(options.Source); err != nil {
+		chunk, err := readURLStorageUploadChunk(
+			options.Source,
+			stream.ChunkSize,
+			options.Size-stream.Upload.RemoteOffset,
+		)
+		if err != nil {
+			return err
+		}
+		if len(chunk) == 0 {
+			return nil
+		}
+
+		startOffset := stream.Upload.RemoteOffset
+		if err := generatedTusEmitProgressBeforeRequestBody(
+			options.EventHooks,
+			startOffset,
+			options.Size,
+		); err != nil {
+			return err
+		}
+		if _, err := stream.Write(chunk); err != nil {
 			effectiveRetryAttempt := generatedTusRetryAttempt(
 				stream.Upload.RemoteOffset,
 				offsetBeforeRetry,
@@ -379,9 +419,54 @@ func (c *Client) uploadURLStorageSource(
 			stream.ForceClean()
 			continue
 		}
+		if stream.Upload.RemoteOffset > startOffset {
+			chunkSize := stream.Upload.RemoteOffset - startOffset
+			if err := generatedTusEmitProgressAfterChunkAccepted(
+				options.EventHooks,
+				stream.Upload.RemoteOffset,
+				options.Size,
+			); err != nil {
+				return err
+			}
+			if err := generatedTusEmitChunkCompleteAfterChunkAccepted(
+				options.EventHooks,
+				chunkSize,
+				stream.Upload.RemoteOffset,
+				options.Size,
+			); err != nil {
+				return err
+			}
+		}
 
-		return nil
+		if stream.Upload.RemoteOffset >= options.Size {
+			return nil
+		}
 	}
+}
+
+func readURLStorageUploadChunk(
+	source io.Reader,
+	chunkSize int64,
+	remaining int64,
+) ([]byte, error) {
+	if remaining <= 0 {
+		return nil, nil
+	}
+
+	bytesToRead := remaining
+	if chunkSize > 0 && chunkSize < bytesToRead {
+		bytesToRead = chunkSize
+	}
+	if bytesToRead > int64(int(bytesToRead)) {
+		return nil, fmt.Errorf("tus: upload chunk size %d is too large for this platform", bytesToRead)
+	}
+
+	chunk := make([]byte, int(bytesToRead))
+	if _, err := io.ReadFull(source, chunk); err != nil {
+		return nil, err
+	}
+
+	return chunk, nil
 }
 
 func (us *UploadStream) lastResponseStatus() int {
@@ -439,6 +524,155 @@ func generatedTusShouldRetryStatus(statusCode int) bool {
 	}
 
 	return false
+}
+
+func generatedTusEmitUploadURLAvailable(hooks UploadEventHooks, context string) error {
+	if hooks.OnUploadURLAvailable == nil {
+		return nil
+	}
+	if err := generatedTusAssertUploadURLAvailableHookPolicySupported(); err != nil {
+		return err
+	}
+
+	switch context {
+	case "createUpload":
+		if generatedTusUploadURLAvailableCreate == "not-emitted" {
+			return nil
+		}
+	case "resumeUpload":
+		if generatedTusUploadURLAvailableResume == "not-emitted" {
+			return nil
+		}
+	case "parallelFinalUpload":
+		if generatedTusUploadURLAvailableParallel == "not-emitted" {
+			return nil
+		}
+	default:
+		return fmt.Errorf("tus: unsupported upload URL available hook context %s", context)
+	}
+
+	return hooks.OnUploadURLAvailable()
+}
+
+func generatedTusEmitProgressBeforeRequestBody(
+	hooks UploadEventHooks,
+	currentOffset int64,
+	bytesTotal int64,
+) error {
+	if hooks.OnProgress == nil {
+		return nil
+	}
+	if err := generatedTusAssertEventHookPolicySupported(); err != nil {
+		return err
+	}
+
+	return hooks.OnProgress(currentOffset, generatedTusInt64Pointer(bytesTotal))
+}
+
+func generatedTusEmitProgressAfterChunkAccepted(
+	hooks UploadEventHooks,
+	uploadOffset int64,
+	bytesTotal int64,
+) error {
+	if hooks.OnProgress == nil {
+		return nil
+	}
+	if err := generatedTusAssertEventHookPolicySupported(); err != nil {
+		return err
+	}
+
+	return hooks.OnProgress(uploadOffset, generatedTusInt64Pointer(bytesTotal))
+}
+
+func generatedTusEmitChunkCompleteAfterChunkAccepted(
+	hooks UploadEventHooks,
+	chunkSize int64,
+	bytesAccepted int64,
+	bytesTotal int64,
+) error {
+	if hooks.OnChunkComplete == nil {
+		return nil
+	}
+	if err := generatedTusAssertEventHookPolicySupported(); err != nil {
+		return err
+	}
+
+	return hooks.OnChunkComplete(
+		chunkSize,
+		bytesAccepted,
+		generatedTusInt64Pointer(bytesTotal),
+	)
+}
+
+func generatedTusInt64Pointer(value int64) *int64 {
+	return &value
+}
+
+func generatedTusAssertUploadURLAvailableHookPolicySupported() error {
+	if generatedTusUploadURLAvailableCreate != "after-url-known-before-storage" {
+		return fmt.Errorf(
+			"tus: unsupported create upload URL hook policy %s",
+			generatedTusUploadURLAvailableCreate,
+		)
+	}
+	if generatedTusUploadURLAvailableResume != "after-url-known-before-storage" {
+		return fmt.Errorf(
+			"tus: unsupported resume upload URL hook policy %s",
+			generatedTusUploadURLAvailableResume,
+		)
+	}
+	if generatedTusUploadURLAvailableParallel != "not-emitted" {
+		return fmt.Errorf(
+			"tus: unsupported parallel final upload URL hook policy %s",
+			generatedTusUploadURLAvailableParallel,
+		)
+	}
+
+	return nil
+}
+
+func generatedTusAssertEventHookPolicySupported() error {
+	if err := generatedTusAssertUploadURLAvailableHookPolicySupported(); err != nil {
+		return err
+	}
+	if generatedTusProgressAfterChunkAccepted != "accepted-offset" {
+		return fmt.Errorf(
+			"tus: unsupported chunk-accepted progress hook policy %s",
+			generatedTusProgressAfterChunkAccepted,
+		)
+	}
+	if generatedTusProgressAfterResumeComplete != "upload-length" {
+		return fmt.Errorf(
+			"tus: unsupported completed-resume progress hook policy %s",
+			generatedTusProgressAfterResumeComplete,
+		)
+	}
+	if generatedTusProgressBeforeRequestBody != "current-offset" {
+		return fmt.Errorf(
+			"tus: unsupported request-body progress hook policy %s",
+			generatedTusProgressBeforeRequestBody,
+		)
+	}
+	if generatedTusProgressDuringRequest != "start-offset-plus-transmitted-bytes" {
+		return fmt.Errorf(
+			"tus: unsupported request progress hook policy %s",
+			generatedTusProgressDuringRequest,
+		)
+	}
+	if generatedTusProgressParallelPart != "aggregated-part-progress" {
+		return fmt.Errorf(
+			"tus: unsupported parallel progress hook policy %s",
+			generatedTusProgressParallelPart,
+		)
+	}
+	if generatedTusChunkCompleteAfterChunkAccepted != "accepted-chunk-size-and-offset" {
+		return fmt.Errorf(
+			"tus: unsupported chunk-complete hook policy %s",
+			generatedTusChunkCompleteAfterChunkAccepted,
+		)
+	}
+
+	return nil
 }
 
 func FileFingerprint(input FileFingerprintInput) string {
@@ -503,6 +737,9 @@ func (c *Client) resumeUploadFromURLStorage(
 		if upload.Metadata == nil {
 			upload.Metadata = cloneStringMap(options.Metadata)
 		}
+		if err := generatedTusEmitUploadURLAvailable(options.EventHooks, "resumeUpload"); err != nil {
+			return upload, "", err
+		}
 
 		storageKey, _ := stringFromURLStorageUpload(storedUpload, "urlStorageKey")
 		return upload, storageKey, nil
@@ -516,6 +753,9 @@ func (c *Client) createUploadForURLStorage(
 ) (*Upload, string, error) {
 	upload := &Upload{}
 	if _, err := c.CreateUpload(upload, options.Size, false, options.Metadata); err != nil {
+		return upload, "", err
+	}
+	if err := generatedTusEmitUploadURLAvailable(options.EventHooks, "createUpload"); err != nil {
 		return upload, "", err
 	}
 

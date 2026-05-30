@@ -5,8 +5,10 @@
 package tusgo
 
 import (
+	"fmt"
 	"net/http"
 	"net/url"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -16,19 +18,19 @@ import (
 )
 
 const (
-	generatedTusCreateFlowContent                    = "hello world"
-	generatedTusCreateFlowCreatedUploadPath          = "/uploads/generated-contract"
-	generatedTusCreateFlowFingerprint                = "contract-single-fingerprint"
-	generatedTusCreateFlowPatchAcceptedOffset        = "11"
-	generatedTusCreateFlowPatchBody                  = "hello world"
-	generatedTusCreateFlowPatchOffset                = "0"
-	generatedTusCreateFlowRemoveFingerprintOnSuccess = false
-	generatedTusCreateFlowUploadLength               = "11"
+	generatedTusEventHooksContent             = "hello world"
+	generatedTusEventHooksCreatedUploadPath   = "/uploads/generated-contract"
+	generatedTusEventHooksFingerprint         = "contract-single-fingerprint"
+	generatedTusEventHooksPatchAcceptedOffset = "11"
+	generatedTusEventHooksPatchBody           = "hello world"
+	generatedTusEventHooksPatchOffset         = "0"
+	generatedTusEventHooksUploadLength        = "11"
 )
 
-var generatedTusCreateFlowMetadata = map[string]string{"filename": "hello.txt"}
+var generatedTusEventHooksExpectedEvents = []string{"upload-url-available", "progress:0:11", "progress:11:11", "chunk-complete:11:11:11"}
+var generatedTusEventHooksMetadata = map[string]string{"filename": "hello.txt"}
 
-func TestGeneratedURLStorageCreateFlow(t *testing.T) {
+func TestGeneratedURLStorageEventHooks(t *testing.T) {
 	srvMock := mocha.New(t)
 	srvMock.Start()
 	defer func() {
@@ -52,14 +54,14 @@ func TestGeneratedURLStorageCreateFlow(t *testing.T) {
 	}
 
 	storage := NewMemoryURLStorage()
-	createdUploadURL := srvMock.URL() + generatedTusCreateFlowCreatedUploadPath
-	encodedMetadata, err := EncodeMetadata(generatedTusCreateFlowMetadata)
+	createdUploadURL := srvMock.URL() + generatedTusEventHooksCreatedUploadPath
+	encodedMetadata, err := EncodeMetadata(generatedTusEventHooksMetadata)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	createResponse := generatedResponseFor(createOperation, http.StatusCreated)
-	createReply := generatedURLStorageCreateResponseHeaders(
+	createReply := generatedURLStorageEventHooksResponseHeaders(
 		reply.Status(createResponse.StatusCode),
 		createResponse,
 		map[string]string{
@@ -67,46 +69,71 @@ func TestGeneratedURLStorageCreateFlow(t *testing.T) {
 		},
 	)
 	srvMock.AddMocks(
-		generatedURLStorageCreateRequestHeaders(
+		generatedURLStorageEventHooksRequestHeaders(
 			mocha.Request().
 				URL(expect.URLPath("/uploads")).
 				Method(createOperation.Method),
 			createOperation,
 			map[string]string{
 				"Upload-Metadata": encodedMetadata,
-				"Upload-Length":   generatedTusCreateFlowUploadLength,
+				"Upload-Length":   generatedTusEventHooksUploadLength,
 			},
 		).Reply(createReply),
 	)
 
 	patchResponse := generatedResponseFor(patchOperation, http.StatusNoContent)
-	patchReply := generatedURLStorageCreateResponseHeaders(
+	patchReply := generatedURLStorageEventHooksResponseHeaders(
 		reply.Status(patchResponse.StatusCode),
 		patchResponse,
 		map[string]string{
-			"Upload-Offset": generatedTusCreateFlowPatchAcceptedOffset,
+			"Upload-Offset": generatedTusEventHooksPatchAcceptedOffset,
 		},
 	)
-	patchRequest := generatedURLStorageCreateRequestHeaders(
+	patchRequest := generatedURLStorageEventHooksRequestHeaders(
 		mocha.Request().
-			URL(expect.URLPath(generatedTusCreateFlowCreatedUploadPath)).
+			URL(expect.URLPath(generatedTusEventHooksCreatedUploadPath)).
 			Method(patchOperation.Method).
-			Body(expect.ToEqual([]byte(generatedTusCreateFlowPatchBody))),
+			Body(expect.ToEqual([]byte(generatedTusEventHooksPatchBody))),
 		patchOperation,
 		map[string]string{
 			"Content-Type":  patchOperation.Request.ContentType,
-			"Upload-Offset": generatedTusCreateFlowPatchOffset,
+			"Upload-Offset": generatedTusEventHooksPatchOffset,
 		},
 	)
 	srvMock.AddMocks(patchRequest.Reply(patchReply))
 
+	events := []string{}
 	upload, err := client.UploadWithURLStorage(URLStorageUploadOptions{
-		Storage:                    storage,
-		Source:                     strings.NewReader(generatedTusCreateFlowContent),
-		Fingerprint:                generatedTusCreateFlowFingerprint,
-		Size:                       11,
-		Metadata:                   generatedTusCreateFlowMetadata,
-		RemoveFingerprintOnSuccess: generatedTusCreateFlowRemoveFingerprintOnSuccess,
+		Storage:     storage,
+		Source:      strings.NewReader(generatedTusEventHooksContent),
+		Fingerprint: generatedTusEventHooksFingerprint,
+		Size:        11,
+		Metadata:    generatedTusEventHooksMetadata,
+		EventHooks: UploadEventHooks{
+			OnUploadURLAvailable: func() error {
+				events = append(events, "upload-url-available")
+				return nil
+			},
+			OnProgress: func(bytesSent int64, bytesTotal *int64) error {
+				events = append(
+					events,
+					fmt.Sprintf("progress:%d:%s", bytesSent, generatedTusEventHooksTotal(bytesTotal)),
+				)
+				return nil
+			},
+			OnChunkComplete: func(chunkSize int64, bytesAccepted int64, bytesTotal *int64) error {
+				events = append(
+					events,
+					fmt.Sprintf(
+						"chunk-complete:%d:%d:%s",
+						chunkSize,
+						bytesAccepted,
+						generatedTusEventHooksTotal(bytesTotal),
+					),
+				)
+				return nil
+			},
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -117,27 +144,20 @@ func TestGeneratedURLStorageCreateFlow(t *testing.T) {
 	if upload.RemoteOffset != 11 {
 		t.Fatalf("expected upload offset 11, got %d", upload.RemoteOffset)
 	}
-
-	storedUploads, err := storage.FindUploadsByFingerprint(generatedTusCreateFlowFingerprint)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if generatedTusCreateFlowRemoveFingerprintOnSuccess {
-		if len(storedUploads) != 0 {
-			t.Fatalf("expected successful create flow to remove stored upload, got %#v", storedUploads)
-		}
-		return
-	}
-	if len(storedUploads) != 1 {
-		t.Fatalf("expected successful create flow to store one upload, got %#v", storedUploads)
-	}
-	storedUploadURL, ok := stringFromURLStorageUpload(storedUploads[0], "uploadUrl")
-	if !ok || storedUploadURL != createdUploadURL {
-		t.Fatalf("expected stored upload URL %s, got %#v", createdUploadURL, storedUploads[0])
+	if !reflect.DeepEqual(events, generatedTusEventHooksExpectedEvents) {
+		t.Fatalf("expected event hooks %#v, got %#v", generatedTusEventHooksExpectedEvents, events)
 	}
 }
 
-func generatedURLStorageCreateRequestHeaders(
+func generatedTusEventHooksTotal(bytesTotal *int64) string {
+	if bytesTotal == nil {
+		return "null"
+	}
+
+	return fmt.Sprintf("%d", *bytesTotal)
+}
+
+func generatedURLStorageEventHooksRequestHeaders(
 	builder *mocha.MockBuilder,
 	operation generatedTusProtocolOperation,
 	values map[string]string,
@@ -157,7 +177,7 @@ func generatedURLStorageCreateRequestHeaders(
 	return builder
 }
 
-func generatedURLStorageCreateResponseHeaders(
+func generatedURLStorageEventHooksResponseHeaders(
 	response *reply.StdReply,
 	contract generatedTusResponseContract,
 	values map[string]string,
