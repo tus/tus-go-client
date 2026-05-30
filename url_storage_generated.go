@@ -9,12 +9,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"math/rand"
 	"os"
 	"sort"
 	"strings"
 	"sync"
+	"time"
 )
 
 const (
@@ -22,6 +24,7 @@ const (
 	generatedTusURLStorageIDStrategy   = "rounded-random-number"
 	generatedTusURLStorageNamespace    = "tus"
 	generatedTusURLStorageSeparator    = "::"
+	generatedTusURLStorageCreationTime = "sdk-current-date-string"
 )
 
 type URLStorageUpload map[string]any
@@ -31,6 +34,16 @@ type URLStorage interface {
 	FindUploadsByFingerprint(fingerprint string) ([]URLStorageUpload, error)
 	RemoveUpload(urlStorageKey string) error
 	AddUpload(fingerprint string, upload URLStorageUpload) (string, error)
+}
+
+type URLStorageUploadOptions struct {
+	Storage                    URLStorage
+	Source                     io.ReadSeeker
+	Fingerprint                string
+	Size                       int64
+	Metadata                   map[string]string
+	RemoveFingerprintOnSuccess bool
+	ChunkSize                  int64
 }
 
 type MemoryURLStorage struct {
@@ -198,6 +211,156 @@ func URLStorageID(randomValue float64) int64 {
 
 func newURLStorageKey(fingerprint string) string {
 	return URLStorageKey(fingerprint, URLStorageID(rand.Float64()))
+}
+
+func (c *Client) UploadWithURLStorage(options URLStorageUploadOptions) (*Upload, error) {
+	if options.Storage == nil {
+		return nil, errors.New("tus: URL storage is required")
+	}
+	if options.Source == nil {
+		return nil, errors.New("tus: upload source is required")
+	}
+	if options.Fingerprint == "" {
+		return nil, errors.New("tus: unable to calculate fingerprint for this input file")
+	}
+
+	upload, storageKey, err := c.resumeUploadFromURLStorage(options)
+	if err != nil {
+		return upload, err
+	}
+	if upload == nil {
+		upload, storageKey, err = c.createUploadForURLStorage(options)
+		if err != nil {
+			return upload, err
+		}
+	}
+
+	if _, err := options.Source.Seek(upload.RemoteOffset, io.SeekStart); err != nil {
+		return upload, err
+	}
+
+	stream := NewUploadStream(c, upload)
+	if options.ChunkSize != 0 {
+		stream.ChunkSize = options.ChunkSize
+	}
+	if _, err := stream.ReadFrom(options.Source); err != nil {
+		return upload, err
+	}
+	if options.RemoveFingerprintOnSuccess && storageKey != "" {
+		if err := options.Storage.RemoveUpload(storageKey); err != nil {
+			return upload, err
+		}
+	}
+
+	return upload, nil
+}
+
+func (c *Client) resumeUploadFromURLStorage(
+	options URLStorageUploadOptions,
+) (*Upload, string, error) {
+	storedUploads, err := options.Storage.FindUploadsByFingerprint(options.Fingerprint)
+	if err != nil {
+		return nil, "", err
+	}
+
+	for _, storedUpload := range storedUploads {
+		location, ok := stringFromURLStorageUpload(storedUpload, "uploadUrl")
+		if !ok || location == "" {
+			continue
+		}
+
+		upload := &Upload{
+			Location:   location,
+			Metadata:   cloneStringMap(options.Metadata),
+			RemoteSize: options.Size,
+		}
+		if _, err := c.GetUpload(upload, location); err != nil {
+			return upload, "", err
+		}
+		if upload.RemoteSize == 0 && options.Size > 0 {
+			upload.RemoteSize = options.Size
+		}
+		if upload.Metadata == nil {
+			upload.Metadata = cloneStringMap(options.Metadata)
+		}
+
+		storageKey, _ := stringFromURLStorageUpload(storedUpload, "urlStorageKey")
+		return upload, storageKey, nil
+	}
+
+	return nil, "", nil
+}
+
+func (c *Client) createUploadForURLStorage(
+	options URLStorageUploadOptions,
+) (*Upload, string, error) {
+	upload := &Upload{}
+	if _, err := c.CreateUpload(upload, options.Size, false, options.Metadata); err != nil {
+		return upload, "", err
+	}
+
+	storageKey, err := options.Storage.AddUpload(
+		options.Fingerprint,
+		URLStorageUploadFromUpload(*upload),
+	)
+	if err != nil {
+		return upload, "", err
+	}
+
+	return upload, storageKey, nil
+}
+
+func URLStorageUploadFromUpload(upload Upload) URLStorageUpload {
+	record := URLStorageUpload{
+		"creationTime": urlStorageCreationTime(),
+		"metadata":     stringMapToAnyMap(upload.Metadata),
+		"size":         upload.RemoteSize,
+	}
+	if upload.Location != "" {
+		record["uploadUrl"] = upload.Location
+	}
+
+	return record
+}
+
+func urlStorageCreationTime() string {
+	if generatedTusURLStorageCreationTime != "sdk-current-date-string" {
+		panic(fmt.Sprintf("tus: unsupported URL storage creation time policy %s", generatedTusURLStorageCreationTime))
+	}
+
+	return time.Now().String()
+}
+
+func stringFromURLStorageUpload(upload URLStorageUpload, key string) (string, bool) {
+	value, ok := upload[key]
+	if !ok {
+		return "", false
+	}
+
+	stringValue, ok := value.(string)
+	return stringValue, ok
+}
+
+func cloneStringMap(input map[string]string) map[string]string {
+	if input == nil {
+		return nil
+	}
+
+	result := make(map[string]string, len(input))
+	for key, value := range input {
+		result[key] = value
+	}
+
+	return result
+}
+
+func stringMapToAnyMap(input map[string]string) map[string]any {
+	result := make(map[string]any, len(input))
+	for key, value := range input {
+		result[key] = value
+	}
+
+	return result
 }
 
 func urlStorageUploadsWithPrefix(
