@@ -93,6 +93,7 @@ type URLStorageUploadOptions struct {
 	Size                       int64
 	Metadata                   map[string]string
 	RemoveFingerprintOnSuccess bool
+	TerminateUploadOnAbort     bool
 	ChunkSize                  int64
 	RetryDelays                []time.Duration
 	OnShouldRetry              func(error, int) bool
@@ -105,6 +106,7 @@ type URLStorageFileUploadOptions struct {
 	Path                       string
 	Metadata                   map[string]string
 	RemoveFingerprintOnSuccess bool
+	TerminateUploadOnAbort     bool
 	ChunkSize                  int64
 	RetryDelays                []time.Duration
 	OnShouldRetry              func(error, int) bool
@@ -117,6 +119,7 @@ type FileBackedURLStorageUploadOptions struct {
 	Path                       string
 	Metadata                   map[string]string
 	RemoveFingerprintOnSuccess bool
+	TerminateUploadOnAbort     bool
 	ChunkSize                  int64
 	RetryDelays                []time.Duration
 	OnShouldRetry              func(error, int) bool
@@ -307,6 +310,7 @@ func (c *Client) UploadFileWithFileBackedURLStorage(options FileBackedURLStorage
 		Path:                       options.Path,
 		Metadata:                   options.Metadata,
 		RemoveFingerprintOnSuccess: options.RemoveFingerprintOnSuccess,
+		TerminateUploadOnAbort:     options.TerminateUploadOnAbort,
 		ChunkSize:                  options.ChunkSize,
 		RetryDelays:                options.RetryDelays,
 		OnShouldRetry:              options.OnShouldRetry,
@@ -346,6 +350,7 @@ func (c *Client) UploadFileWithURLStorage(options URLStorageFileUploadOptions) (
 		Size:                       info.Size(),
 		Metadata:                   options.Metadata,
 		RemoveFingerprintOnSuccess: options.RemoveFingerprintOnSuccess,
+		TerminateUploadOnAbort:     options.TerminateUploadOnAbort,
 		ChunkSize:                  options.ChunkSize,
 		RetryDelays:                options.RetryDelays,
 		OnShouldRetry:              options.OnShouldRetry,
@@ -385,7 +390,7 @@ func (c *Client) UploadWithURLStorage(options URLStorageUploadOptions) (*Upload,
 		stream.ChunkSize = options.ChunkSize
 	}
 	if err := uploadClient.uploadURLStorageSource(options, stream); err != nil {
-		return upload, err
+		return upload, c.generatedTusHandleURLStorageUploadAbort(options, upload, storageKey, err)
 	}
 	if err := generatedTusEmitSuccess(generatedTusSuccessInput{
 		EventHooks:                 options.EventHooks,
@@ -532,6 +537,37 @@ func generatedTusClientWithUploadContext(client *Client, ctx context.Context) (*
 
 func IsUploadAbortError(err error) bool {
 	return errors.Is(err, context.Canceled)
+}
+
+func (c *Client) generatedTusHandleURLStorageUploadAbort(
+	options URLStorageUploadOptions,
+	upload *Upload,
+	storageKey string,
+	err error,
+) error {
+	if !IsUploadAbortError(err) {
+		return err
+	}
+	if err := generatedTusAssertAbortPolicySupported(); err != nil {
+		return err
+	}
+	if !options.TerminateUploadOnAbort || upload == nil || upload.Location == "" {
+		return err
+	}
+
+	if _, terminateErr := c.TerminateUploadWithRetry(*upload, TerminateUploadOptions{
+		RetryDelays:   options.RetryDelays,
+		OnShouldRetry: options.OnShouldRetry,
+	}); terminateErr != nil {
+		return terminateErr
+	}
+	if storageKey != "" {
+		if err := options.Storage.RemoveUpload(storageKey); err != nil {
+			return err
+		}
+	}
+
+	return err
 }
 
 func generatedTusRetryDelays(retryDelays []time.Duration) []time.Duration {

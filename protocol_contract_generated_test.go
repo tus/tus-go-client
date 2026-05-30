@@ -743,7 +743,7 @@ var generatedTusClientFeatures = []generatedTusClientFeature{
 	},
 	{
 		Conformance: generatedTusClientFeatureConformance{
-			ScenarioIDs: []string{"abortUpload"},
+			ScenarioIDs: []string{"abortUpload", "abortUploadAfterStoredUrl"},
 			Status:      "covered-by-generated-scenario",
 		},
 		Description: "Abort the active request, pending retry timer, and any partial uploads.",
@@ -757,8 +757,8 @@ var generatedTusClientFeatures = []generatedTusClientFeature{
 				Summary:     "Cancel in-flight transport work without emitting user callbacks after abort.",
 			},
 		},
-		OperationIDs: nil,
-		Primitives:   []string{"abort-current-request"},
+		OperationIDs: []string{"terminateTusUpload"},
+		Primitives:   []string{"abort-current-request", "terminate-upload"},
 	},
 	{
 		Conformance: generatedTusClientFeatureConformance{
