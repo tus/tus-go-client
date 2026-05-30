@@ -37,6 +37,12 @@ const (
 	generatedTusAbortRemoveStoredURLAfterTerm   = "after-successful-termination"
 	generatedTusAbortSuppressErrorAfterAbort    = true
 	generatedTusAbortTerminateUpload            = "when-requested-and-upload-url-known"
+	generatedTusDefaultParallelUploads          = 1
+	generatedTusMinimumParallelUploads          = 2
+	generatedTusParallelPartialMetadata         = "metadataForPartialUploads"
+	generatedTusParallelPartialNestedUploads    = "disabled"
+	generatedTusParallelPartialURLStorage       = "parent-managed"
+	generatedTusParallelUploadSplit             = "contiguous-floor-size-last-remainder"
 	generatedTusRetryClientErrorStatus          = 400
 	generatedTusRetryStatusCategoryDivisor      = 100
 	generatedTusSuccessCloseSource              = "after-hook-when-source-open"
@@ -92,6 +98,8 @@ type URLStorageUploadOptions struct {
 	Fingerprint                string
 	Size                       int64
 	Metadata                   map[string]string
+	MetadataForPartialUploads  map[string]string
+	ParallelUploads            int
 	RemoveFingerprintOnSuccess bool
 	TerminateUploadOnAbort     bool
 	ChunkSize                  int64
@@ -105,6 +113,8 @@ type URLStorageFileUploadOptions struct {
 	Storage                    URLStorage
 	Path                       string
 	Metadata                   map[string]string
+	MetadataForPartialUploads  map[string]string
+	ParallelUploads            int
 	RemoveFingerprintOnSuccess bool
 	TerminateUploadOnAbort     bool
 	ChunkSize                  int64
@@ -118,6 +128,8 @@ type FileBackedURLStorageUploadOptions struct {
 	URLStoragePath             string
 	Path                       string
 	Metadata                   map[string]string
+	MetadataForPartialUploads  map[string]string
+	ParallelUploads            int
 	RemoveFingerprintOnSuccess bool
 	TerminateUploadOnAbort     bool
 	ChunkSize                  int64
@@ -309,6 +321,8 @@ func (c *Client) UploadFileWithFileBackedURLStorage(options FileBackedURLStorage
 		Storage:                    NewFileURLStorage(options.URLStoragePath),
 		Path:                       options.Path,
 		Metadata:                   options.Metadata,
+		MetadataForPartialUploads:  options.MetadataForPartialUploads,
+		ParallelUploads:            options.ParallelUploads,
 		RemoveFingerprintOnSuccess: options.RemoveFingerprintOnSuccess,
 		TerminateUploadOnAbort:     options.TerminateUploadOnAbort,
 		ChunkSize:                  options.ChunkSize,
@@ -349,6 +363,8 @@ func (c *Client) UploadFileWithURLStorage(options URLStorageFileUploadOptions) (
 		Fingerprint:                fingerprint,
 		Size:                       info.Size(),
 		Metadata:                   options.Metadata,
+		MetadataForPartialUploads:  options.MetadataForPartialUploads,
+		ParallelUploads:            options.ParallelUploads,
 		RemoveFingerprintOnSuccess: options.RemoveFingerprintOnSuccess,
 		TerminateUploadOnAbort:     options.TerminateUploadOnAbort,
 		ChunkSize:                  options.ChunkSize,
@@ -372,6 +388,13 @@ func (c *Client) UploadWithURLStorage(options URLStorageUploadOptions) (*Upload,
 	uploadClient, err := generatedTusClientWithUploadContext(c, options.Context)
 	if err != nil {
 		return nil, err
+	}
+	parallelUploads, err := generatedTusParallelUploadCount(options.ParallelUploads)
+	if err != nil {
+		return nil, err
+	}
+	if parallelUploads > 1 {
+		return uploadClient.uploadParallelWithURLStorage(options, parallelUploads)
 	}
 
 	upload, storageKey, err := uploadClient.resumeUploadFromURLStorage(options)
@@ -405,6 +428,97 @@ func (c *Client) UploadWithURLStorage(options URLStorageUploadOptions) (*Upload,
 	}
 
 	return upload, nil
+}
+
+func (c *Client) uploadParallelWithURLStorage(
+	options URLStorageUploadOptions,
+	parallelUploads int,
+) (*Upload, error) {
+	if err := generatedTusAssertParallelUploadPolicySupported(); err != nil {
+		return nil, err
+	}
+	partSizes, err := generatedTusParallelUploadPartSizes(options.Size, parallelUploads)
+	if err != nil {
+		return nil, err
+	}
+
+	partials := make([]Upload, 0, len(partSizes))
+	acceptedBytes := int64(0)
+	for _, partSize := range partSizes {
+		if _, err := options.Source.Seek(acceptedBytes, io.SeekStart); err != nil {
+			return nil, err
+		}
+		partBytes, err := readURLStorageUploadChunk(options.Source, partSize, partSize)
+		if err != nil {
+			return nil, err
+		}
+
+		partialUpload := Upload{}
+		if _, err := c.CreateUpload(
+			&partialUpload,
+			partSize,
+			true,
+			generatedTusParallelPartialUploadMetadata(options),
+		); err != nil {
+			return &partialUpload, err
+		}
+		stream := NewUploadStream(c, &partialUpload)
+		stream.ChunkSize = partSize
+		written, err := stream.Write(partBytes)
+		if err != nil {
+			return &partialUpload, c.generatedTusHandleURLStorageUploadAbort(options, &partialUpload, "", err)
+		}
+		if int64(written) != partSize {
+			return &partialUpload, fmt.Errorf("tus: expected to upload %d parallel bytes, wrote %d", partSize, written)
+		}
+
+		acceptedBytes += partSize
+		if err := generatedTusEmitProgressAfterChunkAccepted(
+			options.EventHooks,
+			acceptedBytes,
+			options.Size,
+		); err != nil {
+			return &partialUpload, err
+		}
+		if err := generatedTusEmitChunkCompleteAfterChunkAccepted(
+			options.EventHooks,
+			partSize,
+			acceptedBytes,
+			options.Size,
+		); err != nil {
+			return &partialUpload, err
+		}
+		partials = append(partials, partialUpload)
+	}
+
+	finalUpload := &Upload{}
+	response, err := c.ConcatenateUploads(finalUpload, partials, options.Metadata)
+	if err != nil {
+		return finalUpload, err
+	}
+	if err := generatedTusEmitUploadURLAvailable(options.EventHooks, "parallelFinalUpload"); err != nil {
+		return finalUpload, err
+	}
+	storageKey, err := options.Storage.AddUpload(
+		options.Fingerprint,
+		URLStorageUploadFromUpload(*finalUpload),
+	)
+	if err != nil {
+		return finalUpload, err
+	}
+	if err := generatedTusEmitSuccess(generatedTusSuccessInput{
+		EventHooks:                 options.EventHooks,
+		LastResponse:               response,
+		RemoveFingerprintOnSuccess: options.RemoveFingerprintOnSuccess,
+		Source:                     options.Source,
+		Storage:                    options.Storage,
+		StorageKey:                 storageKey,
+		Upload:                     finalUpload,
+	}); err != nil {
+		return finalUpload, err
+	}
+
+	return finalUpload, nil
 }
 
 func (c *Client) uploadURLStorageSource(
@@ -537,6 +651,55 @@ func generatedTusClientWithUploadContext(client *Client, ctx context.Context) (*
 
 func IsUploadAbortError(err error) bool {
 	return errors.Is(err, context.Canceled)
+}
+
+func generatedTusParallelUploadCount(parallelUploads int) (int, error) {
+	if parallelUploads == 0 {
+		parallelUploads = generatedTusDefaultParallelUploads
+	}
+	if parallelUploads == 1 {
+		return parallelUploads, nil
+	}
+	if parallelUploads < generatedTusMinimumParallelUploads {
+		return 0, fmt.Errorf(
+			"tus: parallel uploads must be at least %d",
+			generatedTusMinimumParallelUploads,
+		)
+	}
+
+	return parallelUploads, nil
+}
+
+func generatedTusParallelUploadPartSizes(uploadSize int64, parallelUploads int) ([]int64, error) {
+	if uploadSize < 0 {
+		return nil, fmt.Errorf("tus: parallel upload size must be known")
+	}
+	if parallelUploads <= 0 {
+		return nil, fmt.Errorf("tus: parallel upload count must be positive")
+	}
+	partSize := uploadSize / int64(parallelUploads)
+	if partSize <= 0 {
+		return nil, fmt.Errorf("tus: parallel upload parts must not be empty")
+	}
+
+	partSizes := make([]int64, parallelUploads)
+	for index := range partSizes {
+		partSizes[index] = partSize
+	}
+	partSizes[len(partSizes)-1] += uploadSize - partSize*int64(parallelUploads)
+
+	return partSizes, nil
+}
+
+func generatedTusParallelPartialUploadMetadata(options URLStorageUploadOptions) map[string]string {
+	if generatedTusParallelPartialMetadata != "metadataForPartialUploads" {
+		panic(fmt.Sprintf(
+			"tus: unsupported parallel partial metadata policy %s",
+			generatedTusParallelPartialMetadata,
+		))
+	}
+
+	return cloneStringMap(options.MetadataForPartialUploads)
 }
 
 func (c *Client) generatedTusHandleURLStorageUploadAbort(
@@ -806,6 +969,41 @@ func generatedTusAssertEventHookPolicySupported() error {
 		return fmt.Errorf(
 			"tus: unsupported success storage cleanup policy %s",
 			generatedTusSuccessRemoveStoredURL,
+		)
+	}
+
+	return nil
+}
+
+func generatedTusAssertParallelUploadPolicySupported() error {
+	if generatedTusParallelUploadSplit != "contiguous-floor-size-last-remainder" {
+		return fmt.Errorf(
+			"tus: unsupported parallel upload split policy %s",
+			generatedTusParallelUploadSplit,
+		)
+	}
+	if generatedTusParallelPartialMetadata != "metadataForPartialUploads" {
+		return fmt.Errorf(
+			"tus: unsupported parallel partial metadata policy %s",
+			generatedTusParallelPartialMetadata,
+		)
+	}
+	if generatedTusParallelPartialNestedUploads != "disabled" {
+		return fmt.Errorf(
+			"tus: unsupported nested parallel upload policy %s",
+			generatedTusParallelPartialNestedUploads,
+		)
+	}
+	if generatedTusParallelPartialURLStorage != "parent-managed" {
+		return fmt.Errorf(
+			"tus: unsupported parallel URL storage policy %s",
+			generatedTusParallelPartialURLStorage,
+		)
+	}
+	if generatedTusProgressParallelPart != "aggregated-part-progress" {
+		return fmt.Errorf(
+			"tus: unsupported parallel progress hook policy %s",
+			generatedTusProgressParallelPart,
 		)
 	}
 
