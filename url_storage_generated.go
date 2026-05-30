@@ -13,19 +13,33 @@ import (
 	"math"
 	"math/rand"
 	"os"
+	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
 
 const (
-	generatedTusURLStorageIDMultiplier = 1000000000000
-	generatedTusURLStorageIDStrategy   = "rounded-random-number"
-	generatedTusURLStorageNamespace    = "tus"
-	generatedTusURLStorageSeparator    = "::"
-	generatedTusURLStorageCreationTime = "sdk-current-date-string"
+	generatedTusNodeFileFingerprintPath      = "absolute"
+	generatedTusNodeFileFingerprintPrefix    = "node-file"
+	generatedTusNodeFileFingerprintSeparator = "-"
+	generatedTusURLStorageIDMultiplier       = 1000000000000
+	generatedTusURLStorageIDStrategy         = "rounded-random-number"
+	generatedTusURLStorageNamespace          = "tus"
+	generatedTusURLStorageSeparator          = "::"
+	generatedTusURLStorageCreationTime       = "sdk-current-date-string"
 )
+
+var generatedTusNodeFileFingerprintFields = []string{"prefix", "absolutePath", "size", "mtimeMs", "endpoint"}
+
+type FileFingerprintInput struct {
+	AbsolutePath string
+	Endpoint     string
+	MtimeMs      int64
+	Size         int64
+}
 
 type URLStorageUpload map[string]any
 
@@ -41,6 +55,14 @@ type URLStorageUploadOptions struct {
 	Source                     io.ReadSeeker
 	Fingerprint                string
 	Size                       int64
+	Metadata                   map[string]string
+	RemoveFingerprintOnSuccess bool
+	ChunkSize                  int64
+}
+
+type URLStorageFileUploadOptions struct {
+	Storage                    URLStorage
+	Path                       string
 	Metadata                   map[string]string
 	RemoveFingerprintOnSuccess bool
 	ChunkSize                  int64
@@ -213,6 +235,41 @@ func newURLStorageKey(fingerprint string) string {
 	return URLStorageKey(fingerprint, URLStorageID(rand.Float64()))
 }
 
+func (c *Client) UploadFileWithURLStorage(options URLStorageFileUploadOptions) (*Upload, error) {
+	absolutePath, err := nodeFileFingerprintPath(options.Path)
+	if err != nil {
+		return nil, err
+	}
+
+	file, err := os.Open(absolutePath)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	info, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+
+	fingerprint := FileFingerprint(FileFingerprintInput{
+		AbsolutePath: absolutePath,
+		Endpoint:     c.BaseURL.String(),
+		MtimeMs:      fileModTimeMilliseconds(info),
+		Size:         info.Size(),
+	})
+
+	return c.UploadWithURLStorage(URLStorageUploadOptions{
+		Storage:                    options.Storage,
+		Source:                     file,
+		Fingerprint:                fingerprint,
+		Size:                       info.Size(),
+		Metadata:                   options.Metadata,
+		RemoveFingerprintOnSuccess: options.RemoveFingerprintOnSuccess,
+		ChunkSize:                  options.ChunkSize,
+	})
+}
+
 func (c *Client) UploadWithURLStorage(options URLStorageUploadOptions) (*Upload, error) {
 	if options.Storage == nil {
 		return nil, errors.New("tus: URL storage is required")
@@ -253,6 +310,40 @@ func (c *Client) UploadWithURLStorage(options URLStorageUploadOptions) (*Upload,
 	}
 
 	return upload, nil
+}
+
+func FileFingerprint(input FileFingerprintInput) string {
+	parts := make([]string, 0, len(generatedTusNodeFileFingerprintFields))
+	for _, field := range generatedTusNodeFileFingerprintFields {
+		switch field {
+		case "prefix":
+			parts = append(parts, generatedTusNodeFileFingerprintPrefix)
+		case "absolutePath":
+			parts = append(parts, input.AbsolutePath)
+		case "size":
+			parts = append(parts, strconv.FormatInt(input.Size, 10))
+		case "mtimeMs":
+			parts = append(parts, strconv.FormatInt(input.MtimeMs, 10))
+		case "endpoint":
+			parts = append(parts, input.Endpoint)
+		default:
+			panic(fmt.Sprintf("tus: unsupported Node file fingerprint field %s", field))
+		}
+	}
+
+	return strings.Join(parts, generatedTusNodeFileFingerprintSeparator)
+}
+
+func nodeFileFingerprintPath(path string) (string, error) {
+	if generatedTusNodeFileFingerprintPath != "absolute" {
+		return "", fmt.Errorf("tus: unsupported Node file fingerprint path policy %s", generatedTusNodeFileFingerprintPath)
+	}
+
+	return filepath.Abs(path)
+}
+
+func fileModTimeMilliseconds(info os.FileInfo) int64 {
+	return info.ModTime().UnixNano() / int64(time.Millisecond)
 }
 
 func (c *Client) resumeUploadFromURLStorage(
