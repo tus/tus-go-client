@@ -25,6 +25,8 @@ const (
 	generatedTusNodeFileFingerprintPath      = "absolute"
 	generatedTusNodeFileFingerprintPrefix    = "node-file"
 	generatedTusNodeFileFingerprintSeparator = "-"
+	generatedTusRetryClientErrorStatus       = 400
+	generatedTusRetryStatusCategoryDivisor   = 100
 	generatedTusURLStorageIDMultiplier       = 1000000000000
 	generatedTusURLStorageIDStrategy         = "rounded-random-number"
 	generatedTusURLStorageNamespace          = "tus"
@@ -33,6 +35,8 @@ const (
 )
 
 var generatedTusNodeFileFingerprintFields = []string{"prefix", "absolutePath", "size", "mtimeMs", "endpoint"}
+var generatedTusDefaultRetryDelays = []time.Duration{0 * time.Millisecond, 1000 * time.Millisecond, 3000 * time.Millisecond, 5000 * time.Millisecond}
+var generatedTusRetryableClientStatusCodes = []int{409, 423}
 
 type FileFingerprintInput struct {
 	AbsolutePath string
@@ -58,6 +62,8 @@ type URLStorageUploadOptions struct {
 	Metadata                   map[string]string
 	RemoveFingerprintOnSuccess bool
 	ChunkSize                  int64
+	RetryDelays                []time.Duration
+	OnShouldRetry              func(error, int) bool
 }
 
 type URLStorageFileUploadOptions struct {
@@ -66,6 +72,8 @@ type URLStorageFileUploadOptions struct {
 	Metadata                   map[string]string
 	RemoveFingerprintOnSuccess bool
 	ChunkSize                  int64
+	RetryDelays                []time.Duration
+	OnShouldRetry              func(error, int) bool
 }
 
 type FileBackedURLStorageUploadOptions struct {
@@ -74,6 +82,8 @@ type FileBackedURLStorageUploadOptions struct {
 	Metadata                   map[string]string
 	RemoveFingerprintOnSuccess bool
 	ChunkSize                  int64
+	RetryDelays                []time.Duration
+	OnShouldRetry              func(error, int) bool
 }
 
 type MemoryURLStorage struct {
@@ -250,6 +260,8 @@ func (c *Client) UploadFileWithFileBackedURLStorage(options FileBackedURLStorage
 		Metadata:                   options.Metadata,
 		RemoveFingerprintOnSuccess: options.RemoveFingerprintOnSuccess,
 		ChunkSize:                  options.ChunkSize,
+		RetryDelays:                options.RetryDelays,
+		OnShouldRetry:              options.OnShouldRetry,
 	})
 }
 
@@ -285,6 +297,8 @@ func (c *Client) UploadFileWithURLStorage(options URLStorageFileUploadOptions) (
 		Metadata:                   options.Metadata,
 		RemoveFingerprintOnSuccess: options.RemoveFingerprintOnSuccess,
 		ChunkSize:                  options.ChunkSize,
+		RetryDelays:                options.RetryDelays,
+		OnShouldRetry:              options.OnShouldRetry,
 	})
 }
 
@@ -310,15 +324,11 @@ func (c *Client) UploadWithURLStorage(options URLStorageUploadOptions) (*Upload,
 		}
 	}
 
-	if _, err := options.Source.Seek(upload.RemoteOffset, io.SeekStart); err != nil {
-		return upload, err
-	}
-
 	stream := NewUploadStream(c, upload)
 	if options.ChunkSize != 0 {
 		stream.ChunkSize = options.ChunkSize
 	}
-	if _, err := stream.ReadFrom(options.Source); err != nil {
+	if err := c.uploadURLStorageSource(options, stream); err != nil {
 		return upload, err
 	}
 	if options.RemoveFingerprintOnSuccess && storageKey != "" {
@@ -328,6 +338,101 @@ func (c *Client) UploadWithURLStorage(options URLStorageUploadOptions) (*Upload,
 	}
 
 	return upload, nil
+}
+
+func (c *Client) uploadURLStorageSource(
+	options URLStorageUploadOptions,
+	stream *UploadStream,
+) error {
+	retryDelays := urlStorageRetryDelays(options)
+	retryAttempt := 0
+	offsetBeforeRetry := stream.Upload.RemoteOffset
+
+	for {
+		if _, err := options.Source.Seek(stream.Upload.RemoteOffset, io.SeekStart); err != nil {
+			return err
+		}
+		if _, err := stream.ReadFrom(options.Source); err != nil {
+			effectiveRetryAttempt := urlStorageRetryAttempt(
+				stream.Upload.RemoteOffset,
+				offsetBeforeRetry,
+				retryAttempt,
+			)
+			if !urlStorageShouldScheduleRetry(options, err, stream.lastResponseStatus(), effectiveRetryAttempt, retryDelays) {
+				return err
+			}
+			delay := retryDelays[effectiveRetryAttempt]
+			if delay > 0 {
+				time.Sleep(delay)
+			}
+			retryAttempt = effectiveRetryAttempt + 1
+			offsetBeforeRetry = stream.Upload.RemoteOffset
+			if _, err := stream.Sync(); err != nil {
+				return err
+			}
+			stream.ForceClean()
+			continue
+		}
+
+		return nil
+	}
+}
+
+func (us *UploadStream) lastResponseStatus() int {
+	if us.LastResponse == nil {
+		return 0
+	}
+
+	return us.LastResponse.StatusCode
+}
+
+func urlStorageRetryDelays(options URLStorageUploadOptions) []time.Duration {
+	if options.RetryDelays == nil {
+		return append([]time.Duration(nil), generatedTusDefaultRetryDelays...)
+	}
+
+	return options.RetryDelays
+}
+
+func urlStorageRetryAttempt(offset int64, offsetBeforeRetry int64, retryAttempt int) int {
+	if offset > offsetBeforeRetry {
+		return 0
+	}
+
+	return retryAttempt
+}
+
+func urlStorageShouldScheduleRetry(
+	options URLStorageUploadOptions,
+	err error,
+	statusCode int,
+	retryAttempt int,
+	retryDelays []time.Duration,
+) bool {
+	if retryAttempt >= len(retryDelays) || !urlStorageShouldRetryStatus(statusCode) {
+		return false
+	}
+	if options.OnShouldRetry != nil {
+		return options.OnShouldRetry(err, retryAttempt)
+	}
+
+	return true
+}
+
+func urlStorageShouldRetryStatus(statusCode int) bool {
+	if statusCode == 0 {
+		return false
+	}
+	if statusCode/generatedTusRetryStatusCategoryDivisor != generatedTusRetryClientErrorStatus/generatedTusRetryStatusCategoryDivisor {
+		return true
+	}
+	for _, retryableStatusCode := range generatedTusRetryableClientStatusCodes {
+		if statusCode == retryableStatusCode {
+			return true
+		}
+	}
+
+	return false
 }
 
 func FileFingerprint(input FileFingerprintInput) string {
