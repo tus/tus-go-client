@@ -87,7 +87,7 @@ func TestGeneratedURLStorageFileFlow(t *testing.T) {
 		ProtocolVersions: []string{DefaultProtocolVersion},
 	}
 
-	storage := NewMemoryURLStorage()
+	storagePath := filepath.Join(t.TempDir(), "url-storage.json")
 	createdUploadURL := srvMock.URL() + generatedTusFileFlowCreatedUploadPath
 	encodedMetadata, err := EncodeMetadata(generatedTusFileFlowMetadata)
 	if err != nil {
@@ -136,8 +136,8 @@ func TestGeneratedURLStorageFileFlow(t *testing.T) {
 	)
 	srvMock.AddMocks(patchRequest.Reply(patchReply))
 
-	upload, err := client.UploadFileWithURLStorage(URLStorageFileUploadOptions{
-		Storage:                    storage,
+	upload, err := client.UploadFileWithFileBackedURLStorage(FileBackedURLStorageUploadOptions{
+		URLStoragePath:             storagePath,
 		Path:                       filePath,
 		Metadata:                   generatedTusFileFlowMetadata,
 		RemoveFingerprintOnSuccess: generatedTusFileFlowRemoveFingerprintOnSuccess,
@@ -152,6 +152,7 @@ func TestGeneratedURLStorageFileFlow(t *testing.T) {
 		t.Fatalf("expected upload offset 11, got %d", upload.RemoteOffset)
 	}
 
+	storage := NewFileURLStorage(storagePath)
 	storedUploads, err := storage.FindUploadsByFingerprint(expectedFingerprint)
 	if err != nil {
 		t.Fatal(err)

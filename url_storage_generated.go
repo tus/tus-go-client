@@ -68,6 +68,14 @@ type URLStorageFileUploadOptions struct {
 	ChunkSize                  int64
 }
 
+type FileBackedURLStorageUploadOptions struct {
+	URLStoragePath             string
+	Path                       string
+	Metadata                   map[string]string
+	RemoveFingerprintOnSuccess bool
+	ChunkSize                  int64
+}
+
 type MemoryURLStorage struct {
 	mu      sync.Mutex
 	records map[string]URLStorageUpload
@@ -233,6 +241,16 @@ func URLStorageID(randomValue float64) int64 {
 
 func newURLStorageKey(fingerprint string) string {
 	return URLStorageKey(fingerprint, URLStorageID(rand.Float64()))
+}
+
+func (c *Client) UploadFileWithFileBackedURLStorage(options FileBackedURLStorageUploadOptions) (*Upload, error) {
+	return c.UploadFileWithURLStorage(URLStorageFileUploadOptions{
+		Storage:                    NewFileURLStorage(options.URLStoragePath),
+		Path:                       options.Path,
+		Metadata:                   options.Metadata,
+		RemoveFingerprintOnSuccess: options.RemoveFingerprintOnSuccess,
+		ChunkSize:                  options.ChunkSize,
+	})
 }
 
 func (c *Client) UploadFileWithURLStorage(options URLStorageFileUploadOptions) (*Upload, error) {
