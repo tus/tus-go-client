@@ -37,6 +37,13 @@ const (
 	generatedTusAbortRemoveStoredURLAfterTerm   = "after-successful-termination"
 	generatedTusAbortSuppressErrorAfterAbort    = true
 	generatedTusAbortTerminateUpload            = "when-requested-and-upload-url-known"
+	generatedTusCreationWithUploadBodySource    = "first-upload-chunk"
+	generatedTusCreationWithUploadCompletion    = "continue-with-patch-when-offset-less-than-size"
+	generatedTusCreationWithUploadExtension     = "creation-with-upload"
+	generatedTusCreationWithUploadResponseOff   = "accepted-offset"
+	generatedTusDeferredLengthCreateSize        = "size-unknown"
+	generatedTusDeferredLengthDeclareLength     = "first-patch"
+	generatedTusDeferredLengthExtension         = "creation-defer-length"
 	generatedTusDefaultParallelUploads          = 1
 	generatedTusMinimumParallelUploads          = 2
 	generatedTusParallelPartialMetadata         = "metadataForPartialUploads"
@@ -108,6 +115,8 @@ type URLStorageUploadOptions struct {
 	ParallelUploads            int
 	RemoveFingerprintOnSuccess bool
 	TerminateUploadOnAbort     bool
+	UploadDataDuringCreation   bool
+	UploadLengthDeferred       bool
 	ChunkSize                  int64
 	RetryDelays                []time.Duration
 	OnShouldRetry              func(error, int) bool
@@ -123,6 +132,8 @@ type URLStorageFileUploadOptions struct {
 	ParallelUploads            int
 	RemoveFingerprintOnSuccess bool
 	TerminateUploadOnAbort     bool
+	UploadDataDuringCreation   bool
+	UploadLengthDeferred       bool
 	ChunkSize                  int64
 	RetryDelays                []time.Duration
 	OnShouldRetry              func(error, int) bool
@@ -138,6 +149,8 @@ type FileBackedURLStorageUploadOptions struct {
 	ParallelUploads            int
 	RemoveFingerprintOnSuccess bool
 	TerminateUploadOnAbort     bool
+	UploadDataDuringCreation   bool
+	UploadLengthDeferred       bool
 	ChunkSize                  int64
 	RetryDelays                []time.Duration
 	OnShouldRetry              func(error, int) bool
@@ -345,6 +358,8 @@ func (c *Client) UploadFileWithFileBackedURLStorage(options FileBackedURLStorage
 		ParallelUploads:            options.ParallelUploads,
 		RemoveFingerprintOnSuccess: options.RemoveFingerprintOnSuccess,
 		TerminateUploadOnAbort:     options.TerminateUploadOnAbort,
+		UploadDataDuringCreation:   options.UploadDataDuringCreation,
+		UploadLengthDeferred:       options.UploadLengthDeferred,
 		ChunkSize:                  options.ChunkSize,
 		RetryDelays:                options.RetryDelays,
 		OnShouldRetry:              options.OnShouldRetry,
@@ -387,6 +402,8 @@ func (c *Client) UploadFileWithURLStorage(options URLStorageFileUploadOptions) (
 		ParallelUploads:            options.ParallelUploads,
 		RemoveFingerprintOnSuccess: options.RemoveFingerprintOnSuccess,
 		TerminateUploadOnAbort:     options.TerminateUploadOnAbort,
+		UploadDataDuringCreation:   options.UploadDataDuringCreation,
+		UploadLengthDeferred:       options.UploadLengthDeferred,
 		ChunkSize:                  options.ChunkSize,
 		RetryDelays:                options.RetryDelays,
 		OnShouldRetry:              options.OnShouldRetry,
@@ -421,8 +438,9 @@ func (c *Client) UploadWithURLStorage(options URLStorageUploadOptions) (*Upload,
 	if err != nil {
 		return upload, err
 	}
+	var lastResponse *http.Response
 	if upload == nil {
-		upload, storageKey, err = uploadClient.createUploadForURLStorage(options)
+		upload, storageKey, lastResponse, err = uploadClient.createUploadForURLStorage(options)
 		if err != nil {
 			return upload, err
 		}
@@ -432,12 +450,18 @@ func (c *Client) UploadWithURLStorage(options URLStorageUploadOptions) (*Upload,
 	if options.ChunkSize != 0 {
 		stream.ChunkSize = options.ChunkSize
 	}
+	if options.UploadLengthDeferred {
+		stream.SetUploadSize = true
+	}
 	if err := uploadClient.uploadURLStorageSource(options, stream); err != nil {
 		return upload, c.generatedTusHandleURLStorageUploadAbort(options, upload, storageKey, err)
 	}
+	if stream.LastResponse != nil {
+		lastResponse = stream.LastResponse
+	}
 	if err := generatedTusEmitSuccess(generatedTusSuccessInput{
 		EventHooks:                 options.EventHooks,
-		LastResponse:               stream.LastResponse,
+		LastResponse:               lastResponse,
 		RemoveFingerprintOnSuccess: options.RemoveFingerprintOnSuccess,
 		Source:                     options.Source,
 		Storage:                    options.Storage,
@@ -738,6 +762,20 @@ func generatedTusParallelUploadCount(parallelUploads int) (int, error) {
 	}
 
 	return parallelUploads, nil
+}
+
+func generatedTusCreationWithUploadChunkSize(options URLStorageUploadOptions) int64 {
+	if generatedTusCreationWithUploadBodySource != "first-upload-chunk" {
+		panic(fmt.Sprintf(
+			"tus: unsupported creation-with-upload body source %s",
+			generatedTusCreationWithUploadBodySource,
+		))
+	}
+	if options.ChunkSize > 0 && options.ChunkSize < options.Size {
+		return options.ChunkSize
+	}
+
+	return options.Size
 }
 
 func generatedTusParallelUploadPartSizes(uploadSize int64, parallelUploads int) ([]int64, error) {
@@ -1203,6 +1241,46 @@ func generatedTusAssertParallelUploadPolicySupported() error {
 	return nil
 }
 
+func generatedTusAssertCreationWithUploadPolicySupported() error {
+	if generatedTusCreationWithUploadBodySource != "first-upload-chunk" {
+		return fmt.Errorf(
+			"tus: unsupported creation-with-upload body source %s",
+			generatedTusCreationWithUploadBodySource,
+		)
+	}
+	if generatedTusCreationWithUploadCompletion != "continue-with-patch-when-offset-less-than-size" {
+		return fmt.Errorf(
+			"tus: unsupported creation-with-upload completion policy %s",
+			generatedTusCreationWithUploadCompletion,
+		)
+	}
+	if generatedTusCreationWithUploadResponseOff != "accepted-offset" {
+		return fmt.Errorf(
+			"tus: unsupported creation-with-upload response offset policy %s",
+			generatedTusCreationWithUploadResponseOff,
+		)
+	}
+
+	return nil
+}
+
+func generatedTusAssertDeferredLengthPolicySupported() error {
+	if generatedTusDeferredLengthCreateSize != "size-unknown" {
+		return fmt.Errorf(
+			"tus: unsupported deferred length create size policy %s",
+			generatedTusDeferredLengthCreateSize,
+		)
+	}
+	if generatedTusDeferredLengthDeclareLength != "first-patch" {
+		return fmt.Errorf(
+			"tus: unsupported deferred length declaration policy %s",
+			generatedTusDeferredLengthDeclareLength,
+		)
+	}
+
+	return nil
+}
+
 func generatedTusAssertParallelCleanupPolicySupported() error {
 	if generatedTusParallelCleanupOnPartError != "terminate-created-partials-when-abort-termination-enabled" {
 		return fmt.Errorf(
@@ -1324,13 +1402,28 @@ func (c *Client) resumeUploadFromURLStorage(
 
 func (c *Client) createUploadForURLStorage(
 	options URLStorageUploadOptions,
-) (*Upload, string, error) {
+) (*Upload, string, *http.Response, error) {
+	if options.UploadDataDuringCreation {
+		return c.createUploadWithDataForURLStorage(options)
+	}
+
 	upload := &Upload{}
-	if _, err := c.CreateUpload(upload, options.Size, false, options.Metadata); err != nil {
-		return upload, "", err
+	remoteSize := options.Size
+	if options.UploadLengthDeferred {
+		if err := generatedTusAssertDeferredLengthPolicySupported(); err != nil {
+			return upload, "", nil, err
+		}
+		remoteSize = SizeUnknown
+	}
+	response, err := c.CreateUpload(upload, remoteSize, false, options.Metadata)
+	if err != nil {
+		return upload, "", response, err
+	}
+	if options.UploadLengthDeferred {
+		upload.RemoteSize = options.Size
 	}
 	if err := generatedTusEmitUploadURLAvailable(options.EventHooks, "createUpload"); err != nil {
-		return upload, "", err
+		return upload, "", response, err
 	}
 
 	storageKey, err := options.Storage.AddUpload(
@@ -1338,10 +1431,67 @@ func (c *Client) createUploadForURLStorage(
 		URLStorageUploadFromUpload(*upload),
 	)
 	if err != nil {
-		return upload, "", err
+		return upload, "", response, err
 	}
 
-	return upload, storageKey, nil
+	return upload, storageKey, response, nil
+}
+
+func (c *Client) createUploadWithDataForURLStorage(
+	options URLStorageUploadOptions,
+) (*Upload, string, *http.Response, error) {
+	if err := generatedTusAssertCreationWithUploadPolicySupported(); err != nil {
+		return nil, "", nil, err
+	}
+	if _, err := options.Source.Seek(0, io.SeekStart); err != nil {
+		return nil, "", nil, err
+	}
+	chunkSize := generatedTusCreationWithUploadChunkSize(options)
+	chunk, err := readURLStorageUploadChunk(options.Source, chunkSize, chunkSize)
+	if err != nil {
+		return nil, "", nil, err
+	}
+	if err := generatedTusEmitProgressBeforeRequestBody(
+		options.EventHooks,
+		0,
+		options.Size,
+	); err != nil {
+		return nil, "", nil, err
+	}
+
+	upload := &Upload{}
+	uploadedBytes, response, err := c.CreateUploadWithData(
+		upload,
+		chunk,
+		options.Size,
+		false,
+		options.Metadata,
+	)
+	if err != nil {
+		return upload, "", response, err
+	}
+	upload.RemoteSize = options.Size
+	upload.RemoteOffset = uploadedBytes
+	if err := generatedTusEmitProgressAfterChunkAccepted(
+		options.EventHooks,
+		uploadedBytes,
+		options.Size,
+	); err != nil {
+		return upload, "", response, err
+	}
+	if err := generatedTusEmitUploadURLAvailable(options.EventHooks, "createUpload"); err != nil {
+		return upload, "", response, err
+	}
+
+	storageKey, err := options.Storage.AddUpload(
+		options.Fingerprint,
+		URLStorageUploadFromUpload(*upload),
+	)
+	if err != nil {
+		return upload, "", response, err
+	}
+
+	return upload, storageKey, response, nil
 }
 
 func URLStorageUploadFromUpload(upload Upload) URLStorageUpload {
