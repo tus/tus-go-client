@@ -19,15 +19,22 @@ import (
 )
 
 const (
-	generatedTusAbortTerminationContent      = "hello world"
-	generatedTusAbortTerminationEndpointPath = "/uploads"
-	generatedTusAbortTerminationFingerprint  = "contract-abort-terminate-fingerprint"
-	generatedTusAbortTerminationPatchBody    = "hello world"
-	generatedTusAbortTerminationPatchOffset  = "0"
-	generatedTusAbortTerminationUploadLength = "11"
-	generatedTusAbortTerminationUploadPath   = "/uploads/abort-terminate-contract"
+	generatedTusAbortTerminationContent           = "hello world"
+	generatedTusAbortTerminationContentType       = "application/offset+octet-stream"
+	generatedTusAbortTerminationContentTypeHeader = "Content-Type"
+	generatedTusAbortTerminationEndpointPath      = "/uploads"
+	generatedTusAbortTerminationFingerprint       = "contract-abort-terminate-fingerprint"
+	generatedTusAbortTerminationMethod            = "POST"
+	generatedTusAbortTerminationOverrideHeader    = "X-HTTP-Method-Override"
+	generatedTusAbortTerminationOverrideValue     = "PATCH"
+	generatedTusAbortTerminationPatchBody         = "hello world"
+	generatedTusAbortTerminationPatchOffset       = "0"
+	generatedTusAbortTerminationOffsetHeader      = "Upload-Offset"
+	generatedTusAbortTerminationUploadLength      = "11"
+	generatedTusAbortTerminationUploadPath        = "/uploads/abort-terminate-contract"
 )
 
+var generatedTusAbortTerminationHeaders = map[string]string{"X-Tus-Contract": "abort-policy", "X-Tus-Trace": "abort-trace-123"}
 var generatedTusAbortTerminationExpectedEvents = []string{"request-abort:1"}
 var generatedTusAbortTerminationMetadata = map[string]string{"filename": "hello.txt"}
 
@@ -62,6 +69,10 @@ func TestGeneratedAbortTerminatesKnownUpload(t *testing.T) {
 					"Upload-Length":   generatedTusAbortTerminationUploadLength,
 				},
 			))
+			recordRequestErr(generatedAssertTusAbortTerminationCustomHeaders(
+				request,
+				generatedTusAbortTerminationHeaders,
+			))
 			createResponse := generatedResponseFor(createOperation, 201)
 			generatedWriteTusAbortTerminationResponseHeaders(
 				responseWriter,
@@ -72,7 +83,7 @@ func TestGeneratedAbortTerminatesKnownUpload(t *testing.T) {
 			)
 			responseWriter.WriteHeader(201)
 
-		case request.URL.Path == generatedTusAbortTerminationUploadPath && request.Method == patchOperation.Method:
+		case request.URL.Path == generatedTusAbortTerminationUploadPath && request.Method == generatedTusAbortTerminationMethod:
 			defer close(patchDone)
 			body, err := io.ReadAll(request.Body)
 			recordRequestErr(err)
@@ -83,10 +94,18 @@ func TestGeneratedAbortTerminatesKnownUpload(t *testing.T) {
 				request,
 				patchOperation,
 				map[string]string{
-					"Content-Type":  patchOperation.Request.ContentType,
-					"Upload-Offset": generatedTusAbortTerminationPatchOffset,
+					generatedTusAbortTerminationContentTypeHeader: generatedTusAbortTerminationContentType,
+					generatedTusAbortTerminationOffsetHeader:      generatedTusAbortTerminationPatchOffset,
+					generatedTusAbortTerminationOverrideHeader:    generatedTusAbortTerminationOverrideValue,
 				},
 			))
+			recordRequestErr(generatedAssertTusAbortTerminationCustomHeaders(
+				request,
+				generatedTusAbortTerminationHeaders,
+			))
+			if actual := request.Header.Get(generatedTusAbortTerminationOverrideHeader); actual != generatedTusAbortTerminationOverrideValue {
+				recordRequestErr(fmt.Errorf("expected override header %s, got %s", generatedTusAbortTerminationOverrideValue, actual))
+			}
 			events = append(events, "request-abort:1")
 			close(patchStarted)
 			<-request.Context().Done()
@@ -97,6 +116,13 @@ func TestGeneratedAbortTerminatesKnownUpload(t *testing.T) {
 				terminateOperation,
 				map[string]string{},
 			))
+			recordRequestErr(generatedAssertTusAbortTerminationCustomHeaders(
+				request,
+				generatedTusAbortTerminationHeaders,
+			))
+			if actual := request.Header.Get(generatedTusAbortTerminationOverrideHeader); actual != "" {
+				recordRequestErr(fmt.Errorf("expected no override header on termination request, got %s", actual))
+			}
 			terminateResponse := generatedResponseFor(terminateOperation, 204)
 			generatedWriteTusAbortTerminationResponseHeaders(
 				responseWriter,
@@ -133,7 +159,9 @@ func TestGeneratedAbortTerminatesKnownUpload(t *testing.T) {
 			Source:                 strings.NewReader(generatedTusAbortTerminationContent),
 			Fingerprint:            generatedTusAbortTerminationFingerprint,
 			Size:                   11,
+			Headers:                generatedTusAbortTerminationHeaders,
 			Metadata:               generatedTusAbortTerminationMetadata,
+			OverridePatchMethod:    true,
 			TerminateUploadOnAbort: true,
 		})
 		result <- err
@@ -203,6 +231,19 @@ func generatedAssertTusAbortTerminationRequestHeaders(
 				expected,
 				actual,
 			)
+		}
+	}
+
+	return nil
+}
+
+func generatedAssertTusAbortTerminationCustomHeaders(
+	request *http.Request,
+	expected map[string]string,
+) error {
+	for key, value := range expected {
+		if actual := request.Header.Get(key); actual != value {
+			return fmt.Errorf("expected custom header %s=%s, got %s", key, value, actual)
 		}
 	}
 

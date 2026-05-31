@@ -37,6 +37,7 @@ const (
 	generatedTusAbortRemoveStoredURLAfterTerm   = "after-successful-termination"
 	generatedTusAbortSuppressErrorAfterAbort    = true
 	generatedTusAbortTerminateUpload            = "when-requested-and-upload-url-known"
+	generatedTusAbortTerminateUploadContext     = "detached-from-aborted-request"
 	generatedTusCreationWithUploadBodySource    = "first-upload-chunk"
 	generatedTusCreationWithUploadCompletion    = "continue-with-patch-when-offset-less-than-size"
 	generatedTusCreationWithUploadExtension     = "creation-with-upload"
@@ -474,7 +475,12 @@ func (c *Client) UploadWithURLStorage(options URLStorageUploadOptions) (*Upload,
 		stream.SetUploadSize = true
 	}
 	if err := uploadClient.uploadURLStorageSource(options, stream); err != nil {
-		return upload, c.generatedTusHandleURLStorageUploadAbort(options, upload, storageKey, err)
+		return upload, uploadClient.generatedTusHandleURLStorageUploadAbort(
+			options,
+			upload,
+			storageKey,
+			err,
+		)
 	}
 	if stream.LastResponse != nil {
 		lastResponse = stream.LastResponse
@@ -536,7 +542,7 @@ func (c *Client) uploadParallelWithURLStorage(
 	}
 	if err := generatedTusParallelUploadError(results); err != nil {
 		return generatedTusFirstCreatedParallelPartialUpload(results),
-			c.generatedTusCleanupParallelPartialUploads(options, results, err)
+			uploadClient.generatedTusCleanupParallelPartialUploads(options, results, err)
 	}
 
 	partials := make([]Upload, 0, len(results))
@@ -549,7 +555,7 @@ func (c *Client) uploadParallelWithURLStorage(
 			options.Size,
 		); err != nil {
 			return &result.Upload,
-				c.generatedTusCleanupParallelPartialUploads(options, results, err)
+				uploadClient.generatedTusCleanupParallelPartialUploads(options, results, err)
 		}
 		if err := generatedTusEmitChunkCompleteAfterChunkAccepted(
 			options.EventHooks,
@@ -558,7 +564,7 @@ func (c *Client) uploadParallelWithURLStorage(
 			options.Size,
 		); err != nil {
 			return &result.Upload,
-				c.generatedTusCleanupParallelPartialUploads(options, results, err)
+				uploadClient.generatedTusCleanupParallelPartialUploads(options, results, err)
 		}
 		partials = append(partials, result.Upload)
 	}
@@ -566,7 +572,11 @@ func (c *Client) uploadParallelWithURLStorage(
 	finalUpload := &Upload{}
 	response, err := uploadClient.ConcatenateUploads(finalUpload, partials, options.Metadata)
 	if err != nil {
-		return finalUpload, c.generatedTusCleanupParallelPartialUploads(options, results, err)
+		return finalUpload, uploadClient.generatedTusCleanupParallelPartialUploads(
+			options,
+			results,
+			err,
+		)
 	}
 	if err := generatedTusEmitUploadURLAvailable(options.EventHooks, "parallelFinalUpload"); err != nil {
 		return finalUpload, err
@@ -791,6 +801,17 @@ func generatedTusClientWithURLStorageRequestPolicy(
 	return &result
 }
 
+func generatedTusClientWithAbortCleanupContext(client *Client) (*Client, error) {
+	if generatedTusAbortTerminateUploadContext != "detached-from-aborted-request" {
+		return nil, fmt.Errorf(
+			"tus: unsupported abort termination context policy %s",
+			generatedTusAbortTerminateUploadContext,
+		)
+	}
+
+	return client.WithContext(context.Background()), nil
+}
+
 type generatedTusURLStorageRequestPolicyTransport struct {
 	Base                http.RoundTripper
 	Headers             map[string]string
@@ -989,12 +1010,16 @@ func (c *Client) generatedTusCleanupParallelPartialUploads(
 	if err := generatedTusAssertParallelCleanupPolicySupported(); err != nil {
 		return err
 	}
+	cleanupClient, err := generatedTusClientWithAbortCleanupContext(c)
+	if err != nil {
+		return err
+	}
 
 	for _, result := range results {
 		if result.Upload.Location == "" {
 			continue
 		}
-		if _, err := c.TerminateUploadWithRetry(result.Upload, TerminateUploadOptions{
+		if _, err := cleanupClient.TerminateUploadWithRetry(result.Upload, TerminateUploadOptions{
 			RetryDelays:   options.RetryDelays,
 			OnShouldRetry: options.OnShouldRetry,
 		}); err != nil {
@@ -1020,8 +1045,12 @@ func (c *Client) generatedTusHandleURLStorageUploadAbort(
 	if !options.TerminateUploadOnAbort || upload == nil || upload.Location == "" {
 		return err
 	}
+	cleanupClient, cleanupClientErr := generatedTusClientWithAbortCleanupContext(c)
+	if cleanupClientErr != nil {
+		return cleanupClientErr
+	}
 
-	if _, terminateErr := c.TerminateUploadWithRetry(*upload, TerminateUploadOptions{
+	if _, terminateErr := cleanupClient.TerminateUploadWithRetry(*upload, TerminateUploadOptions{
 		RetryDelays:   options.RetryDelays,
 		OnShouldRetry: options.OnShouldRetry,
 	}); terminateErr != nil {
@@ -1405,6 +1434,12 @@ func generatedTusAssertAbortPolicySupported() error {
 		return fmt.Errorf(
 			"tus: unsupported abort termination policy %s",
 			generatedTusAbortTerminateUpload,
+		)
+	}
+	if generatedTusAbortTerminateUploadContext != "detached-from-aborted-request" {
+		return fmt.Errorf(
+			"tus: unsupported abort termination context policy %s",
+			generatedTusAbortTerminateUploadContext,
 		)
 	}
 	if generatedTusAbortRemoveStoredURLAfterTerm != "after-successful-termination" {
