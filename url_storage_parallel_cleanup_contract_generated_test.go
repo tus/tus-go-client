@@ -19,13 +19,20 @@ import (
 )
 
 const (
-	generatedTusParallelCleanupContent          = "hello world"
-	generatedTusParallelCleanupEndpointPath     = "/uploads"
-	generatedTusParallelCleanupFailurePartIndex = 0
-	generatedTusParallelCleanupFailureStatus    = 500
-	generatedTusParallelCleanupUploadCount      = 2
+	generatedTusParallelCleanupContent           = "hello world"
+	generatedTusParallelCleanupContentType       = "application/offset+octet-stream"
+	generatedTusParallelCleanupContentTypeHeader = "Content-Type"
+	generatedTusParallelCleanupEndpointPath      = "/uploads"
+	generatedTusParallelCleanupFailurePartIndex  = 0
+	generatedTusParallelCleanupFailureStatus     = 500
+	generatedTusParallelCleanupMethod            = "POST"
+	generatedTusParallelCleanupOffsetHeader      = "Upload-Offset"
+	generatedTusParallelCleanupOverrideHeader    = "X-HTTP-Method-Override"
+	generatedTusParallelCleanupOverrideValue     = "PATCH"
+	generatedTusParallelCleanupUploadCount       = 2
 )
 
+var generatedTusParallelCleanupHeaders = map[string]string{"X-Tus-Contract": "parallel-cleanup-policy", "X-Tus-Trace": "parallel-cleanup-trace-123"}
 var generatedTusParallelCleanupMetadataForPartialUploads = map[string]string{"test": "world"}
 var generatedTusParallelCleanupPartPatchBodies = []string{"hello", " world"}
 var generatedTusParallelCleanupPartPatchOffsets = []string{"0", "0"}
@@ -89,6 +96,10 @@ func TestGeneratedURLStorageParallelUploadCleanup(t *testing.T) {
 					"Upload-Length":   generatedTusParallelCleanupPartUploadLengths[partIndex],
 				},
 			))
+			recordRequestErr(generatedAssertTusParallelCleanupCustomHeaders(
+				request,
+				generatedTusParallelCleanupHeaders,
+			))
 			createResponse := generatedResponseFor(createOperation, http.StatusCreated)
 			generatedWriteTusParallelCleanupResponseHeaders(
 				responseWriter,
@@ -99,7 +110,7 @@ func TestGeneratedURLStorageParallelUploadCleanup(t *testing.T) {
 			)
 			responseWriter.WriteHeader(createResponse.StatusCode)
 
-		case request.Method == patchOperation.Method:
+		case request.Method == generatedTusParallelCleanupMethod:
 			partIndex := generatedTusParallelCleanupPartIndexForPath(request.URL.Path)
 			if partIndex < 0 {
 				recordRequestErr(fmt.Errorf("unexpected cleanup patch path %s", request.URL.Path))
@@ -134,10 +145,18 @@ func TestGeneratedURLStorageParallelUploadCleanup(t *testing.T) {
 				request,
 				patchOperation,
 				map[string]string{
-					"Content-Type":  patchOperation.Request.ContentType,
-					"Upload-Offset": generatedTusParallelCleanupPartPatchOffsets[partIndex],
+					generatedTusParallelCleanupContentTypeHeader: generatedTusParallelCleanupContentType,
+					generatedTusParallelCleanupOffsetHeader:      generatedTusParallelCleanupPartPatchOffsets[partIndex],
+					generatedTusParallelCleanupOverrideHeader:    generatedTusParallelCleanupOverrideValue,
 				},
 			))
+			recordRequestErr(generatedAssertTusParallelCleanupCustomHeaders(
+				request,
+				generatedTusParallelCleanupHeaders,
+			))
+			if actual := request.Header.Get(generatedTusParallelCleanupOverrideHeader); actual != generatedTusParallelCleanupOverrideValue {
+				recordRequestErr(fmt.Errorf("expected override header %s, got %s", generatedTusParallelCleanupOverrideValue, actual))
+			}
 			if partIndex == generatedTusParallelCleanupFailurePartIndex {
 				responseWriter.WriteHeader(generatedTusParallelCleanupFailureStatus)
 				return
@@ -161,6 +180,18 @@ func TestGeneratedURLStorageParallelUploadCleanup(t *testing.T) {
 			terminateIndex += 1
 			terminatedParts[partIndex] = true
 			requestMu.Unlock()
+			recordRequestErr(generatedAssertTusParallelCleanupRequestHeaders(
+				request,
+				terminateOperation,
+				map[string]string{},
+			))
+			recordRequestErr(generatedAssertTusParallelCleanupCustomHeaders(
+				request,
+				generatedTusParallelCleanupHeaders,
+			))
+			if actual := request.Header.Get(generatedTusParallelCleanupOverrideHeader); actual != "" {
+				recordRequestErr(fmt.Errorf("expected no override header on cleanup termination request, got %s", actual))
+			}
 			responseWriter.WriteHeader(http.StatusNoContent)
 
 		default:
@@ -186,7 +217,9 @@ func TestGeneratedURLStorageParallelUploadCleanup(t *testing.T) {
 		Source:                    strings.NewReader(generatedTusParallelCleanupContent),
 		Fingerprint:               "contract-parallel-cleanup-fingerprint",
 		Size:                      int64(len(generatedTusParallelCleanupContent)),
+		Headers:                   generatedTusParallelCleanupHeaders,
 		MetadataForPartialUploads: generatedTusParallelCleanupMetadataForPartialUploads,
+		OverridePatchMethod:       true,
 		ParallelUploads:           generatedTusParallelCleanupUploadCount,
 		TerminateUploadOnAbort:    true,
 	})
@@ -324,6 +357,19 @@ func generatedAssertTusParallelCleanupRequestHeaderVariant(
 				expected,
 				actual,
 			)
+		}
+	}
+
+	return nil
+}
+
+func generatedAssertTusParallelCleanupCustomHeaders(
+	request *http.Request,
+	expected map[string]string,
+) error {
+	for key, value := range expected {
+		if actual := request.Header.Get(key); actual != value {
+			return fmt.Errorf("expected custom header %s=%s, got %s", key, value, actual)
 		}
 	}
 
