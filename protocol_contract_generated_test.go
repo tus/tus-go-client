@@ -540,7 +540,7 @@ var generatedTusClientFeatures = []generatedTusClientFeature{
 	},
 	{
 		Conformance: generatedTusClientFeatureConformance{
-			ScenarioIDs: []string{"creationWithUpload"},
+			ScenarioIDs: []string{"creationWithUpload", "creationWithUploadPartialChunk"},
 			Status:      "covered-by-generated-scenario",
 		},
 		Description: "Send the first bytes on the creation request when the server/client support it.",
@@ -561,7 +561,7 @@ var generatedTusClientFeatures = []generatedTusClientFeature{
 				Summary:     "Interpret the creation response as an accepted offset.",
 			},
 		},
-		OperationIDs: []string{"createTusUpload"},
+		OperationIDs: []string{"createTusUpload", "patchTusUpload"},
 		Primitives:   []string{"upload-during-creation", "emit-progress"},
 	},
 	{
@@ -958,7 +958,7 @@ var generatedTusClientFeatures = []generatedTusClientFeature{
 	},
 	{
 		Conformance: generatedTusClientFeatureConformance{
-			ScenarioIDs: []string{"startValidationMissingInput", "startValidationMissingEndpointOrUploadUrl", "startValidationUnsupportedProtocol", "startValidationRetryDelaysNotArray", "startValidationParallelUploadsWithUploadUrl", "startValidationParallelUploadsWithUploadSize", "startValidationParallelUploadsWithDeferredLength", "startValidationParallelBoundariesWithoutParallelUploads", "startValidationParallelBoundariesLengthMismatch"},
+			ScenarioIDs: []string{"startValidationMissingInput", "startValidationMissingEndpointOrUploadUrl", "startValidationUnsupportedProtocol", "startValidationRetryDelaysNotArray", "startValidationParallelUploadsWithUploadUrl", "startValidationParallelUploadsWithUploadSize", "startValidationParallelUploadsWithDeferredLength", "startValidationParallelUploadsWithUploadDataDuringCreation", "startValidationParallelBoundariesWithoutParallelUploads", "startValidationParallelBoundariesLengthMismatch"},
 			Status:      "covered-by-generated-scenario",
 		},
 		Description: "Validate option combinations before starting runtime work.",

@@ -46,6 +46,8 @@ const (
 	generatedTusDeferredLengthExtension         = "creation-defer-length"
 	generatedTusDefaultParallelUploads          = 1
 	generatedTusMinimumParallelUploads          = 2
+	generatedTusValidationParallelDeferred      = "tus: cannot use the `uploadLengthDeferred` option when parallelUploads is enabled"
+	generatedTusValidationParallelCreateData    = "tus: cannot use the `uploadDataDuringCreation` option when parallelUploads is enabled"
 	generatedTusParallelPartialMetadata         = "metadataForPartialUploads"
 	generatedTusParallelPartialNestedUploads    = "disabled"
 	generatedTusParallelPartialURLStorage       = "parent-managed"
@@ -430,6 +432,9 @@ func (c *Client) UploadWithURLStorage(options URLStorageUploadOptions) (*Upload,
 	if err != nil {
 		return nil, err
 	}
+	if err := generatedTusValidateURLStorageUploadOptions(options, parallelUploads); err != nil {
+		return nil, err
+	}
 	if parallelUploads > 1 {
 		return c.uploadParallelWithURLStorage(options, uploadClient, parallelUploads)
 	}
@@ -762,6 +767,23 @@ func generatedTusParallelUploadCount(parallelUploads int) (int, error) {
 	}
 
 	return parallelUploads, nil
+}
+
+func generatedTusValidateURLStorageUploadOptions(
+	options URLStorageUploadOptions,
+	parallelUploads int,
+) error {
+	if parallelUploads <= 1 {
+		return nil
+	}
+	if options.UploadLengthDeferred {
+		return errors.New(generatedTusValidationParallelDeferred)
+	}
+	if options.UploadDataDuringCreation {
+		return errors.New(generatedTusValidationParallelCreateData)
+	}
+
+	return nil
 }
 
 func generatedTusCreationWithUploadChunkSize(options URLStorageUploadOptions) int64 {
