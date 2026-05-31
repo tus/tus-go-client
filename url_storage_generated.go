@@ -46,6 +46,10 @@ const (
 	generatedTusDeferredLengthExtension         = "creation-defer-length"
 	generatedTusDefaultParallelUploads          = 1
 	generatedTusMinimumParallelUploads          = 2
+	generatedTusMethodOverrideHeaderName        = "X-HTTP-Method-Override"
+	generatedTusMethodOverrideHeaderValue       = "PATCH"
+	generatedTusMethodOverrideMethod            = "POST"
+	generatedTusMethodOverrideSourceMethod      = "PATCH"
 	generatedTusValidationParallelDeferred      = "tus: cannot use the `uploadLengthDeferred` option when parallelUploads is enabled"
 	generatedTusValidationParallelCreateData    = "tus: cannot use the `uploadDataDuringCreation` option when parallelUploads is enabled"
 	generatedTusParallelPartialMetadata         = "metadataForPartialUploads"
@@ -112,8 +116,10 @@ type URLStorageUploadOptions struct {
 	Source                     io.ReadSeeker
 	Fingerprint                string
 	Size                       int64
+	Headers                    map[string]string
 	Metadata                   map[string]string
 	MetadataForPartialUploads  map[string]string
+	OverridePatchMethod        bool
 	ParallelUploads            int
 	RemoveFingerprintOnSuccess bool
 	TerminateUploadOnAbort     bool
@@ -129,8 +135,10 @@ type URLStorageFileUploadOptions struct {
 	Context                    context.Context
 	Storage                    URLStorage
 	Path                       string
+	Headers                    map[string]string
 	Metadata                   map[string]string
 	MetadataForPartialUploads  map[string]string
+	OverridePatchMethod        bool
 	ParallelUploads            int
 	RemoveFingerprintOnSuccess bool
 	TerminateUploadOnAbort     bool
@@ -146,8 +154,10 @@ type FileBackedURLStorageUploadOptions struct {
 	Context                    context.Context
 	URLStoragePath             string
 	Path                       string
+	Headers                    map[string]string
 	Metadata                   map[string]string
 	MetadataForPartialUploads  map[string]string
+	OverridePatchMethod        bool
 	ParallelUploads            int
 	RemoveFingerprintOnSuccess bool
 	TerminateUploadOnAbort     bool
@@ -355,8 +365,10 @@ func (c *Client) UploadFileWithFileBackedURLStorage(options FileBackedURLStorage
 		Context:                    options.Context,
 		Storage:                    NewFileURLStorage(options.URLStoragePath),
 		Path:                       options.Path,
+		Headers:                    options.Headers,
 		Metadata:                   options.Metadata,
 		MetadataForPartialUploads:  options.MetadataForPartialUploads,
+		OverridePatchMethod:        options.OverridePatchMethod,
 		ParallelUploads:            options.ParallelUploads,
 		RemoveFingerprintOnSuccess: options.RemoveFingerprintOnSuccess,
 		TerminateUploadOnAbort:     options.TerminateUploadOnAbort,
@@ -399,8 +411,10 @@ func (c *Client) UploadFileWithURLStorage(options URLStorageFileUploadOptions) (
 		Source:                     file,
 		Fingerprint:                fingerprint,
 		Size:                       info.Size(),
+		Headers:                    options.Headers,
 		Metadata:                   options.Metadata,
 		MetadataForPartialUploads:  options.MetadataForPartialUploads,
+		OverridePatchMethod:        options.OverridePatchMethod,
 		ParallelUploads:            options.ParallelUploads,
 		RemoveFingerprintOnSuccess: options.RemoveFingerprintOnSuccess,
 		TerminateUploadOnAbort:     options.TerminateUploadOnAbort,
@@ -435,6 +449,7 @@ func (c *Client) UploadWithURLStorage(options URLStorageUploadOptions) (*Upload,
 	if err := generatedTusValidateURLStorageUploadOptions(options, parallelUploads); err != nil {
 		return nil, err
 	}
+	uploadClient = generatedTusClientWithURLStorageRequestPolicy(uploadClient, options)
 	if parallelUploads > 1 {
 		return c.uploadParallelWithURLStorage(options, uploadClient, parallelUploads)
 	}
@@ -746,6 +761,59 @@ func generatedTusClientWithUploadContext(client *Client, ctx context.Context) (*
 	}
 
 	return client.WithContext(ctx), nil
+}
+
+func generatedTusClientWithURLStorageRequestPolicy(
+	client *Client,
+	options URLStorageUploadOptions,
+) *Client {
+	if len(options.Headers) == 0 && !options.OverridePatchMethod {
+		return client
+	}
+
+	result := *client
+	httpClient := http.DefaultClient
+	if client.client != nil {
+		httpClient = client.client
+	}
+	resultHTTPClient := *httpClient
+	baseTransport := resultHTTPClient.Transport
+	if baseTransport == nil {
+		baseTransport = http.DefaultTransport
+	}
+	resultHTTPClient.Transport = generatedTusURLStorageRequestPolicyTransport{
+		Base:                baseTransport,
+		Headers:             cloneStringMap(options.Headers),
+		OverridePatchMethod: options.OverridePatchMethod,
+	}
+	result.client = &resultHTTPClient
+
+	return &result
+}
+
+type generatedTusURLStorageRequestPolicyTransport struct {
+	Base                http.RoundTripper
+	Headers             map[string]string
+	OverridePatchMethod bool
+}
+
+func (transport generatedTusURLStorageRequestPolicyTransport) RoundTrip(
+	request *http.Request,
+) (*http.Response, error) {
+	cloned := request.Clone(request.Context())
+	for key, value := range transport.Headers {
+		cloned.Header.Set(key, value)
+	}
+	if transport.OverridePatchMethod &&
+		cloned.Method == generatedTusMethodOverrideSourceMethod {
+		cloned.Method = generatedTusMethodOverrideMethod
+		cloned.Header.Set(
+			generatedTusMethodOverrideHeaderName,
+			generatedTusMethodOverrideHeaderValue,
+		)
+	}
+
+	return transport.Base.RoundTrip(cloned)
 }
 
 func IsUploadAbortError(err error) bool {

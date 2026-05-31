@@ -592,6 +592,39 @@ var generatedTusClientFeatures = []generatedTusClientFeature{
 	},
 	{
 		Conformance: generatedTusClientFeatureConformance{
+			ScenarioIDs: []string{"customRequestHeaders"},
+			Status:      "covered-by-generated-scenario",
+		},
+		Description: "Apply user-provided request headers to every upload request.",
+		FeatureID:   "customRequestHeaders",
+		Flow: []generatedTusClientFeatureFlowStep{
+			{
+				Kind:        "primitive",
+				OperationID: "",
+				Primitive:   "apply-custom-request-headers",
+				Condition:   "",
+				Summary:     "Merge user-provided headers after protocol headers are prepared.",
+			},
+			{
+				Kind:        "operation",
+				OperationID: "createTusUpload",
+				Primitive:   "",
+				Condition:   "",
+				Summary:     "Create uploads with the configured custom headers.",
+			},
+			{
+				Kind:        "operation",
+				OperationID: "patchTusUpload",
+				Primitive:   "",
+				Condition:   "",
+				Summary:     "Upload bytes with the configured custom headers.",
+			},
+		},
+		OperationIDs: []string{"createTusUpload", "patchTusUpload"},
+		Primitives:   []string{"apply-custom-request-headers"},
+	},
+	{
+		Conformance: generatedTusClientFeatureConformance{
 			ScenarioIDs: []string{"overridePatchMethod"},
 			Status:      "covered-by-generated-scenario",
 		},

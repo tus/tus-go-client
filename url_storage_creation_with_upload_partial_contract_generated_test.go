@@ -147,7 +147,7 @@ func TestGeneratedURLStorageCreationWithUploadPartialChunk(t *testing.T) {
 				patchOperation,
 				map[string]string{
 					generatedTusCreationPartialContentTypeHeader: generatedTusCreationPartialContentType,
-					generatedTusCreationPartialOffsetHeader: expectedOffset,
+					generatedTusCreationPartialOffsetHeader:      expectedOffset,
 				},
 			))
 			patchResponse := generatedResponseFor(patchOperation, responseStatus)
