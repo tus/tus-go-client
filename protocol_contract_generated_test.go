@@ -625,10 +625,10 @@ var generatedTusClientFeatures = []generatedTusClientFeature{
 	},
 	{
 		Conformance: generatedTusClientFeatureConformance{
-			ScenarioIDs: []string{"parallelUploadConcat"},
+			ScenarioIDs: []string{"parallelUploadConcat", "parallelUploadAbortCleanup"},
 			Status:      "covered-by-generated-scenario",
 		},
-		Description: "Split one input into partial uploads and concatenate their upload URLs.",
+		Description: "Split one input into partial uploads, run the parts concurrently, clean up aborted parts, and concatenate their upload URLs.",
 		FeatureID:   "parallelUploadConcat",
 		Flow: []generatedTusClientFeatureFlowStep{
 			{
@@ -654,7 +654,7 @@ var generatedTusClientFeatures = []generatedTusClientFeature{
 			},
 		},
 		OperationIDs: []string{"createTusUpload", "patchTusUpload"},
-		Primitives:   []string{"concatenate-partial-uploads", "emit-progress", "split-parallel-upload-boundaries"},
+		Primitives:   []string{"concatenate-partial-uploads", "emit-progress", "split-parallel-upload-boundaries", "terminate-upload"},
 	},
 	{
 		Conformance: generatedTusClientFeatureConformance{

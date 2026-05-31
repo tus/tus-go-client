@@ -42,6 +42,12 @@ const (
 	generatedTusParallelPartialMetadata         = "metadataForPartialUploads"
 	generatedTusParallelPartialNestedUploads    = "disabled"
 	generatedTusParallelPartialURLStorage       = "parent-managed"
+	generatedTusParallelCleanupOnPartError      = "terminate-created-partials-when-abort-termination-enabled"
+	generatedTusParallelCleanupReturnedError    = "original-error-unless-cleanup-fails"
+	generatedTusParallelExecutionCancelOnError  = true
+	generatedTusParallelExecutionResultOrder    = "part-index"
+	generatedTusParallelExecutionSourceRead     = "before-worker-start"
+	generatedTusParallelExecutionWorkerStrategy = "one-worker-per-part"
 	generatedTusParallelUploadSplit             = "contiguous-floor-size-last-remainder"
 	generatedTusRetryClientErrorStatus          = 400
 	generatedTusRetryStatusCategoryDivisor      = 100
@@ -146,6 +152,20 @@ type generatedTusSuccessInput struct {
 	Storage                    URLStorage
 	StorageKey                 string
 	Upload                     *Upload
+}
+
+type generatedTusParallelPartInput struct {
+	Bytes []byte
+	Index int
+	Size  int64
+}
+
+type generatedTusParallelPartResult struct {
+	Err          error
+	Index        int
+	LastResponse *http.Response
+	Size         int64
+	Upload       Upload
 }
 
 type MemoryURLStorage struct {
@@ -394,7 +414,7 @@ func (c *Client) UploadWithURLStorage(options URLStorageUploadOptions) (*Upload,
 		return nil, err
 	}
 	if parallelUploads > 1 {
-		return uploadClient.uploadParallelWithURLStorage(options, parallelUploads)
+		return c.uploadParallelWithURLStorage(options, uploadClient, parallelUploads)
 	}
 
 	upload, storageKey, err := uploadClient.resumeUploadFromURLStorage(options)
@@ -432,6 +452,7 @@ func (c *Client) UploadWithURLStorage(options URLStorageUploadOptions) (*Upload,
 
 func (c *Client) uploadParallelWithURLStorage(
 	options URLStorageUploadOptions,
+	uploadClient *Client,
 	parallelUploads int,
 ) (*Upload, error) {
 	if err := generatedTusAssertParallelUploadPolicySupported(); err != nil {
@@ -441,60 +462,67 @@ func (c *Client) uploadParallelWithURLStorage(
 	if err != nil {
 		return nil, err
 	}
+	partInputs, err := generatedTusParallelUploadPartInputs(options.Source, partSizes)
+	if err != nil {
+		return nil, err
+	}
 
-	partials := make([]Upload, 0, len(partSizes))
+	parallelCtx, cancelParallelUploads := generatedTusParallelUploadContext(options.Context)
+	defer cancelParallelUploads()
+	parallelClient := uploadClient.WithContext(parallelCtx)
+	results := make([]generatedTusParallelPartResult, len(partInputs))
+	resultCh := make(chan generatedTusParallelPartResult, len(partInputs))
+	var workers sync.WaitGroup
+	for _, partInput := range partInputs {
+		workers.Add(1)
+		go func(partInput generatedTusParallelPartInput) {
+			defer workers.Done()
+			result := parallelClient.uploadParallelPartWithURLStorage(options, partInput)
+			if result.Err != nil && generatedTusParallelExecutionCancelOnError {
+				cancelParallelUploads()
+			}
+			resultCh <- result
+		}(partInput)
+	}
+	workers.Wait()
+	close(resultCh)
+
+	for result := range resultCh {
+		results[result.Index] = result
+	}
+	if err := generatedTusParallelUploadError(results); err != nil {
+		return generatedTusFirstCreatedParallelPartialUpload(results),
+			c.generatedTusCleanupParallelPartialUploads(options, results, err)
+	}
+
+	partials := make([]Upload, 0, len(results))
 	acceptedBytes := int64(0)
-	for _, partSize := range partSizes {
-		if _, err := options.Source.Seek(acceptedBytes, io.SeekStart); err != nil {
-			return nil, err
-		}
-		partBytes, err := readURLStorageUploadChunk(options.Source, partSize, partSize)
-		if err != nil {
-			return nil, err
-		}
-
-		partialUpload := Upload{}
-		if _, err := c.CreateUpload(
-			&partialUpload,
-			partSize,
-			true,
-			generatedTusParallelPartialUploadMetadata(options),
-		); err != nil {
-			return &partialUpload, err
-		}
-		stream := NewUploadStream(c, &partialUpload)
-		stream.ChunkSize = partSize
-		written, err := stream.Write(partBytes)
-		if err != nil {
-			return &partialUpload, c.generatedTusHandleURLStorageUploadAbort(options, &partialUpload, "", err)
-		}
-		if int64(written) != partSize {
-			return &partialUpload, fmt.Errorf("tus: expected to upload %d parallel bytes, wrote %d", partSize, written)
-		}
-
-		acceptedBytes += partSize
+	for _, result := range results {
+		acceptedBytes += result.Size
 		if err := generatedTusEmitProgressAfterChunkAccepted(
 			options.EventHooks,
 			acceptedBytes,
 			options.Size,
 		); err != nil {
-			return &partialUpload, err
+			return &result.Upload,
+				c.generatedTusCleanupParallelPartialUploads(options, results, err)
 		}
 		if err := generatedTusEmitChunkCompleteAfterChunkAccepted(
 			options.EventHooks,
-			partSize,
+			result.Size,
 			acceptedBytes,
 			options.Size,
 		); err != nil {
-			return &partialUpload, err
+			return &result.Upload,
+				c.generatedTusCleanupParallelPartialUploads(options, results, err)
 		}
-		partials = append(partials, partialUpload)
+		partials = append(partials, result.Upload)
 	}
 
 	finalUpload := &Upload{}
-	response, err := c.ConcatenateUploads(finalUpload, partials, options.Metadata)
+	response, err := uploadClient.ConcatenateUploads(finalUpload, partials, options.Metadata)
 	if err != nil {
-		return finalUpload, err
+		return finalUpload, c.generatedTusCleanupParallelPartialUploads(options, results, err)
 	}
 	if err := generatedTusEmitUploadURLAvailable(options.EventHooks, "parallelFinalUpload"); err != nil {
 		return finalUpload, err
@@ -519,6 +547,48 @@ func (c *Client) uploadParallelWithURLStorage(
 	}
 
 	return finalUpload, nil
+}
+
+func (c *Client) uploadParallelPartWithURLStorage(
+	options URLStorageUploadOptions,
+	partInput generatedTusParallelPartInput,
+) generatedTusParallelPartResult {
+	result := generatedTusParallelPartResult{
+		Index: partInput.Index,
+		Size:  partInput.Size,
+	}
+	partialUpload := Upload{}
+	response, err := c.CreateUpload(
+		&partialUpload,
+		partInput.Size,
+		true,
+		generatedTusParallelPartialUploadMetadata(options),
+	)
+	result.LastResponse = response
+	result.Upload = partialUpload
+	if err != nil {
+		result.Err = err
+		return result
+	}
+
+	stream := NewUploadStream(c, &partialUpload)
+	stream.ChunkSize = partInput.Size
+	written, err := stream.Write(partInput.Bytes)
+	result.LastResponse = stream.LastResponse
+	result.Upload = partialUpload
+	if err != nil {
+		result.Err = err
+		return result
+	}
+	if int64(written) != partInput.Size {
+		result.Err = fmt.Errorf(
+			"tus: expected to upload %d parallel bytes, wrote %d",
+			partInput.Size,
+			written,
+		)
+	}
+
+	return result
 }
 
 func (c *Client) uploadURLStorageSource(
@@ -691,6 +761,46 @@ func generatedTusParallelUploadPartSizes(uploadSize int64, parallelUploads int) 
 	return partSizes, nil
 }
 
+func generatedTusParallelUploadPartInputs(
+	source io.ReadSeeker,
+	partSizes []int64,
+) ([]generatedTusParallelPartInput, error) {
+	if generatedTusParallelExecutionSourceRead != "before-worker-start" {
+		return nil, fmt.Errorf(
+			"tus: unsupported parallel source read policy %s",
+			generatedTusParallelExecutionSourceRead,
+		)
+	}
+
+	partInputs := make([]generatedTusParallelPartInput, len(partSizes))
+	offset := int64(0)
+	for index, partSize := range partSizes {
+		if _, err := source.Seek(offset, io.SeekStart); err != nil {
+			return nil, err
+		}
+		partBytes, err := readURLStorageUploadChunk(source, partSize, partSize)
+		if err != nil {
+			return nil, err
+		}
+		partInputs[index] = generatedTusParallelPartInput{
+			Bytes: partBytes,
+			Index: index,
+			Size:  partSize,
+		}
+		offset += partSize
+	}
+
+	return partInputs, nil
+}
+
+func generatedTusParallelUploadContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	return context.WithCancel(ctx)
+}
+
 func generatedTusParallelPartialUploadMetadata(options URLStorageUploadOptions) map[string]string {
 	if generatedTusParallelPartialMetadata != "metadataForPartialUploads" {
 		panic(fmt.Sprintf(
@@ -700,6 +810,71 @@ func generatedTusParallelPartialUploadMetadata(options URLStorageUploadOptions) 
 	}
 
 	return cloneStringMap(options.MetadataForPartialUploads)
+}
+
+func generatedTusParallelUploadError(results []generatedTusParallelPartResult) error {
+	if generatedTusParallelExecutionResultOrder != "part-index" {
+		return fmt.Errorf(
+			"tus: unsupported parallel result order policy %s",
+			generatedTusParallelExecutionResultOrder,
+		)
+	}
+	for _, result := range results {
+		if result.Err == nil || IsUploadAbortError(result.Err) {
+			continue
+		}
+
+		return result.Err
+	}
+	for _, result := range results {
+		if result.Err != nil {
+			return result.Err
+		}
+	}
+
+	return nil
+}
+
+func generatedTusFirstCreatedParallelPartialUpload(
+	results []generatedTusParallelPartResult,
+) *Upload {
+	for _, result := range results {
+		if result.Upload.Location == "" {
+			continue
+		}
+
+		upload := result.Upload
+		return &upload
+	}
+
+	return nil
+}
+
+func (c *Client) generatedTusCleanupParallelPartialUploads(
+	options URLStorageUploadOptions,
+	results []generatedTusParallelPartResult,
+	originalErr error,
+) error {
+	if !options.TerminateUploadOnAbort {
+		return originalErr
+	}
+	if err := generatedTusAssertParallelCleanupPolicySupported(); err != nil {
+		return err
+	}
+
+	for _, result := range results {
+		if result.Upload.Location == "" {
+			continue
+		}
+		if _, err := c.TerminateUploadWithRetry(result.Upload, TerminateUploadOptions{
+			RetryDelays:   options.RetryDelays,
+			OnShouldRetry: options.OnShouldRetry,
+		}); err != nil {
+			return err
+		}
+	}
+
+	return originalErr
 }
 
 func (c *Client) generatedTusHandleURLStorageUploadAbort(
@@ -976,6 +1151,24 @@ func generatedTusAssertEventHookPolicySupported() error {
 }
 
 func generatedTusAssertParallelUploadPolicySupported() error {
+	if generatedTusParallelExecutionWorkerStrategy != "one-worker-per-part" {
+		return fmt.Errorf(
+			"tus: unsupported parallel worker strategy %s",
+			generatedTusParallelExecutionWorkerStrategy,
+		)
+	}
+	if generatedTusParallelExecutionResultOrder != "part-index" {
+		return fmt.Errorf(
+			"tus: unsupported parallel result order policy %s",
+			generatedTusParallelExecutionResultOrder,
+		)
+	}
+	if generatedTusParallelExecutionSourceRead != "before-worker-start" {
+		return fmt.Errorf(
+			"tus: unsupported parallel source read policy %s",
+			generatedTusParallelExecutionSourceRead,
+		)
+	}
 	if generatedTusParallelUploadSplit != "contiguous-floor-size-last-remainder" {
 		return fmt.Errorf(
 			"tus: unsupported parallel upload split policy %s",
@@ -1004,6 +1197,23 @@ func generatedTusAssertParallelUploadPolicySupported() error {
 		return fmt.Errorf(
 			"tus: unsupported parallel progress hook policy %s",
 			generatedTusProgressParallelPart,
+		)
+	}
+
+	return nil
+}
+
+func generatedTusAssertParallelCleanupPolicySupported() error {
+	if generatedTusParallelCleanupOnPartError != "terminate-created-partials-when-abort-termination-enabled" {
+		return fmt.Errorf(
+			"tus: unsupported parallel cleanup policy %s",
+			generatedTusParallelCleanupOnPartError,
+		)
+	}
+	if generatedTusParallelCleanupReturnedError != "original-error-unless-cleanup-fails" {
+		return fmt.Errorf(
+			"tus: unsupported parallel cleanup error policy %s",
+			generatedTusParallelCleanupReturnedError,
 		)
 	}
 

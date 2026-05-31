@@ -12,7 +12,9 @@ import (
 	"net/url"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 const (
@@ -47,22 +49,42 @@ func TestGeneratedURLStorageParallelUploadConcatFlow(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	var requestMu sync.Mutex
 	createIndex := 0
 	patchIndex := 0
+	patchArrivals := make(chan int, generatedTusParallelConformanceUploadCount)
+	releasePatches := make(chan struct{})
 	requestErrs := make(chan error, 8)
 	recordRequestErr := func(err error) {
 		if err != nil {
 			requestErrs <- err
 		}
 	}
+	go generatedTusReleaseParallelPatchesAfterAllStarted(
+		patchArrivals,
+		releasePatches,
+		requestErrs,
+	)
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(responseWriter http.ResponseWriter, request *http.Request) {
 		switch {
 		case request.URL.Path == generatedTusParallelEndpointPath &&
 			request.Method == createOperation.Method &&
-			createIndex < len(generatedTusParallelPartUploadPaths):
-			partIndex := createIndex
+			request.Header.Get("Upload-Concat") == "partial":
+			partIndex := generatedTusParallelPartIndexForUploadLength(
+				request.Header.Get("Upload-Length"),
+			)
+			if partIndex < 0 {
+				recordRequestErr(fmt.Errorf(
+					"unexpected parallel create upload length %s",
+					request.Header.Get("Upload-Length"),
+				))
+				responseWriter.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			requestMu.Lock()
 			createIndex += 1
+			requestMu.Unlock()
 			recordRequestErr(generatedAssertTusParallelRequestHeaders(
 				request,
 				createOperation,
@@ -84,8 +106,13 @@ func TestGeneratedURLStorageParallelUploadConcatFlow(t *testing.T) {
 
 		case request.URL.Path == generatedTusParallelEndpointPath &&
 			request.Method == createOperation.Method &&
-			createIndex == len(generatedTusParallelPartUploadPaths):
+			strings.HasPrefix(
+				request.Header.Get("Upload-Concat"),
+				generatedTusParallelFinalConcatPrefix,
+			):
+			requestMu.Lock()
 			createIndex += 1
+			requestMu.Unlock()
 			recordRequestErr(generatedAssertTusParallelAbsentHeaders(
 				request,
 				generatedTusParallelFinalAbsentHeaders,
@@ -115,7 +142,21 @@ func TestGeneratedURLStorageParallelUploadConcatFlow(t *testing.T) {
 				responseWriter.WriteHeader(http.StatusNotFound)
 				return
 			}
+			select {
+			case patchArrivals <- partIndex:
+			case <-request.Context().Done():
+				recordRequestErr(request.Context().Err())
+				return
+			}
+			select {
+			case <-releasePatches:
+			case <-request.Context().Done():
+				recordRequestErr(request.Context().Err())
+				return
+			}
+			requestMu.Lock()
 			patchIndex += 1
+			requestMu.Unlock()
 			body, err := io.ReadAll(request.Body)
 			recordRequestErr(err)
 			if string(body) != generatedTusParallelPartPatchBodies[partIndex] {
@@ -196,11 +237,15 @@ func TestGeneratedURLStorageParallelUploadConcatFlow(t *testing.T) {
 	if upload.Location != server.URL+generatedTusParallelFinalPath {
 		t.Fatalf("expected final upload URL %s, got %s", server.URL+generatedTusParallelFinalPath, upload.Location)
 	}
-	if createIndex != len(generatedTusParallelPartUploadPaths)+1 {
-		t.Fatalf("expected %d create requests, got %d", len(generatedTusParallelPartUploadPaths)+1, createIndex)
+	requestMu.Lock()
+	actualCreateIndex := createIndex
+	actualPatchIndex := patchIndex
+	requestMu.Unlock()
+	if actualCreateIndex != len(generatedTusParallelPartUploadPaths)+1 {
+		t.Fatalf("expected %d create requests, got %d", len(generatedTusParallelPartUploadPaths)+1, actualCreateIndex)
 	}
-	if patchIndex != len(generatedTusParallelPartUploadPaths) {
-		t.Fatalf("expected %d patch requests, got %d", len(generatedTusParallelPartUploadPaths), patchIndex)
+	if actualPatchIndex != len(generatedTusParallelPartUploadPaths) {
+		t.Fatalf("expected %d patch requests, got %d", len(generatedTusParallelPartUploadPaths), actualPatchIndex)
 	}
 	select {
 	case err := <-requestErrs:
@@ -242,6 +287,38 @@ func generatedTusParallelPartIndexForPath(path string) int {
 	}
 
 	return -1
+}
+
+func generatedTusParallelPartIndexForUploadLength(uploadLength string) int {
+	for index, candidate := range generatedTusParallelPartUploadLengths {
+		if uploadLength == candidate {
+			return index
+		}
+	}
+
+	return -1
+}
+
+func generatedTusReleaseParallelPatchesAfterAllStarted(
+	patchArrivals <-chan int,
+	releasePatches chan<- struct{},
+	requestErrs chan<- error,
+) {
+	seen := map[int]bool{}
+	timer := time.NewTimer(2 * time.Second)
+	defer timer.Stop()
+	for len(seen) < generatedTusParallelConformanceUploadCount {
+		select {
+		case partIndex := <-patchArrivals:
+			seen[partIndex] = true
+		case <-timer.C:
+			requestErrs <- fmt.Errorf("expected all parallel PATCH requests to be in flight")
+			close(releasePatches)
+			return
+		}
+	}
+
+	close(releasePatches)
 }
 
 func generatedTusParallelBytesTotalString(bytesTotal *int64) string {
