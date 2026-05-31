@@ -687,7 +687,7 @@ var generatedTusClientFeatures = []generatedTusClientFeature{
 			},
 		},
 		OperationIDs: []string{"createTusUpload", "patchTusUpload"},
-		Primitives:   []string{"concatenate-partial-uploads", "emit-progress", "split-parallel-upload-boundaries", "terminate-upload"},
+		Primitives:   []string{"abort-current-request", "concatenate-partial-uploads", "emit-progress", "split-parallel-upload-boundaries", "terminate-upload"},
 	},
 	{
 		Conformance: generatedTusClientFeatureConformance{
