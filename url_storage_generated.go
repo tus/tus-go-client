@@ -1607,6 +1607,14 @@ func (c *Client) createUploadWithDataForURLStorage(
 	if err := generatedTusEmitUploadURLAvailable(options.EventHooks, "createUpload"); err != nil {
 		return upload, "", response, err
 	}
+	if err := generatedTusEmitChunkCompleteAfterChunkAccepted(
+		options.EventHooks,
+		uploadedBytes,
+		uploadedBytes,
+		options.Size,
+	); err != nil {
+		return upload, "", response, err
+	}
 
 	storageKey, err := options.Storage.AddUpload(
 		options.Fingerprint,

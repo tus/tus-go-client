@@ -36,7 +36,7 @@ const (
 	generatedTusCreationPartialChunkSize         = 5
 )
 
-var generatedTusCreationPartialExpectedEvents = []string{"progress:0:11", "progress:5:11", "upload-url-available", "progress:5:11", "progress:10:11", "chunk-complete:5:10:11", "progress:10:11", "progress:11:11", "chunk-complete:1:11:11", "success", "source-close"}
+var generatedTusCreationPartialExpectedEvents = []string{"progress:0:11", "progress:5:11", "upload-url-available", "chunk-complete:5:5:11", "progress:5:11", "progress:10:11", "chunk-complete:5:10:11", "progress:10:11", "progress:11:11", "chunk-complete:1:11:11", "success", "source-close"}
 var generatedTusCreationPartialMetadata = map[string]string{"filename": "hello.txt"}
 
 func TestGeneratedURLStorageCreationWithUploadPartialChunk(t *testing.T) {
