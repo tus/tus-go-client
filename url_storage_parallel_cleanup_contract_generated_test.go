@@ -19,18 +19,19 @@ import (
 )
 
 const (
-	generatedTusParallelCleanupContent           = "hello world"
-	generatedTusParallelCleanupContentType       = "application/offset+octet-stream"
-	generatedTusParallelCleanupContentTypeHeader = "Content-Type"
-	generatedTusParallelCleanupEndpointPath      = "/uploads"
-	generatedTusParallelCleanupEventPolicy       = "exact"
-	generatedTusParallelCleanupFailurePartIndex  = 0
-	generatedTusParallelCleanupFailureStatus     = 500
-	generatedTusParallelCleanupMethod            = "POST"
-	generatedTusParallelCleanupOffsetHeader      = "Upload-Offset"
-	generatedTusParallelCleanupOverrideHeader    = "X-HTTP-Method-Override"
-	generatedTusParallelCleanupOverrideValue     = "PATCH"
-	generatedTusParallelCleanupUploadCount       = 2
+	generatedTusParallelCleanupContent            = "hello world"
+	generatedTusParallelCleanupContentType        = "application/offset+octet-stream"
+	generatedTusParallelCleanupContentTypeHeader  = "Content-Type"
+	generatedTusParallelCleanupEndpointPath       = "/uploads"
+	generatedTusParallelCleanupEventPolicy        = "exact"
+	generatedTusParallelCleanupFailurePartIndex   = 0
+	generatedTusParallelCleanupFailureStatus      = 500
+	generatedTusParallelCleanupMethod             = "POST"
+	generatedTusParallelCleanupOffsetHeader       = "Upload-Offset"
+	generatedTusParallelCleanupOverrideHeader     = "X-HTTP-Method-Override"
+	generatedTusParallelCleanupOverrideValue      = "PATCH"
+	generatedTusParallelCleanupPatchGateTimeoutMs = 2000
+	generatedTusParallelCleanupUploadCount        = 2
 )
 
 var generatedTusParallelCleanupExpectedEvents = []string{"request-abort:3"}
@@ -40,6 +41,7 @@ var generatedTusParallelCleanupPartPatchBodies = []string{"hello", " world"}
 var generatedTusParallelCleanupPartPatchOffsets = []string{"0", "0"}
 var generatedTusParallelCleanupPartUploadLengths = []string{"5", "6"}
 var generatedTusParallelCleanupPartUploadPaths = []string{"/uploads/parallel-cleanup-part-1", "/uploads/parallel-cleanup-part-2"}
+var generatedTusParallelCleanupPatchGateRequestIndexes = []int{2, 3}
 var generatedTusParallelCleanupTerminatePaths = []string{"/uploads/parallel-cleanup-part-1", "/uploads/parallel-cleanup-part-2"}
 
 func TestGeneratedURLStorageParallelUploadCleanup(t *testing.T) {
@@ -121,7 +123,7 @@ func TestGeneratedURLStorageParallelUploadCleanup(t *testing.T) {
 				return
 			}
 			select {
-			case patchArrivals <- partIndex:
+			case patchArrivals <- generatedTusParallelCleanupPatchGateRequestIndexes[partIndex]:
 			case <-request.Context().Done():
 				recordRequestErr(request.Context().Err())
 				return
@@ -307,12 +309,12 @@ func generatedTusReleaseParallelCleanupPatchesAfterAllStarted(
 	requestErrs chan<- error,
 ) {
 	seen := map[int]bool{}
-	timer := time.NewTimer(2 * time.Second)
+	timer := time.NewTimer(time.Duration(generatedTusParallelCleanupPatchGateTimeoutMs) * time.Millisecond)
 	defer timer.Stop()
-	for len(seen) < generatedTusParallelCleanupUploadCount {
+	for !generatedTusParallelCleanupPatchGateHasStartedAll(seen) {
 		select {
-		case partIndex := <-patchArrivals:
-			seen[partIndex] = true
+		case requestIndex := <-patchArrivals:
+			seen[requestIndex] = true
 		case <-timer.C:
 			requestErrs <- fmt.Errorf("expected all cleanup PATCH requests to be in flight")
 			close(releasePatches)
@@ -321,6 +323,16 @@ func generatedTusReleaseParallelCleanupPatchesAfterAllStarted(
 	}
 
 	close(releasePatches)
+}
+
+func generatedTusParallelCleanupPatchGateHasStartedAll(seen map[int]bool) bool {
+	for _, requestIndex := range generatedTusParallelCleanupPatchGateRequestIndexes {
+		if !seen[requestIndex] {
+			return false
+		}
+	}
+
+	return true
 }
 
 func generatedAssertTusParallelCleanupRequestHeaders(

@@ -23,6 +23,7 @@ const (
 	generatedTusParallelEventPolicy            = "exact-except-extra-progress"
 	generatedTusParallelFinalConcatPrefix      = "final;"
 	generatedTusParallelFinalPath              = "/uploads/parallel-final"
+	generatedTusParallelPatchGateTimeoutMs     = 2000
 	generatedTusParallelUploadURLSeparator     = " "
 	generatedTusParallelConformanceUploadCount = 2
 )
@@ -36,6 +37,7 @@ var generatedTusParallelPartPatchBodies = []string{"hello", " world"}
 var generatedTusParallelPartPatchOffsets = []string{"0", "0"}
 var generatedTusParallelPartUploadLengths = []string{"5", "6"}
 var generatedTusParallelPartUploadPaths = []string{"/uploads/parallel-part-1", "/uploads/parallel-part-2"}
+var generatedTusParallelPatchGateRequestIndexes = []int{2, 3}
 
 func TestGeneratedURLStorageParallelUploadConcatFlow(t *testing.T) {
 	createOperation := generatedProtocolOperation("createTusUpload")
@@ -143,7 +145,7 @@ func TestGeneratedURLStorageParallelUploadConcatFlow(t *testing.T) {
 				return
 			}
 			select {
-			case patchArrivals <- partIndex:
+			case patchArrivals <- generatedTusParallelPatchGateRequestIndexes[partIndex]:
 			case <-request.Context().Done():
 				recordRequestErr(request.Context().Err())
 				return
@@ -303,12 +305,12 @@ func generatedTusReleaseParallelPatchesAfterAllStarted(
 	requestErrs chan<- error,
 ) {
 	seen := map[int]bool{}
-	timer := time.NewTimer(2 * time.Second)
+	timer := time.NewTimer(time.Duration(generatedTusParallelPatchGateTimeoutMs) * time.Millisecond)
 	defer timer.Stop()
-	for len(seen) < generatedTusParallelConformanceUploadCount {
+	for !generatedTusParallelPatchGateHasStartedAll(seen) {
 		select {
-		case partIndex := <-patchArrivals:
-			seen[partIndex] = true
+		case requestIndex := <-patchArrivals:
+			seen[requestIndex] = true
 		case <-timer.C:
 			requestErrs <- fmt.Errorf("expected all parallel PATCH requests to be in flight")
 			close(releasePatches)
@@ -317,6 +319,16 @@ func generatedTusReleaseParallelPatchesAfterAllStarted(
 	}
 
 	close(releasePatches)
+}
+
+func generatedTusParallelPatchGateHasStartedAll(seen map[int]bool) bool {
+	for _, requestIndex := range generatedTusParallelPatchGateRequestIndexes {
+		if !seen[requestIndex] {
+			return false
+		}
+	}
+
+	return true
 }
 
 func generatedTusParallelBytesTotalString(bytesTotal *int64) string {
