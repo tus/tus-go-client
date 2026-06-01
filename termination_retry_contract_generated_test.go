@@ -34,8 +34,19 @@ type generatedTusTerminateRetryDecision struct {
 	RetryAttempt int
 }
 
+type generatedTusChunkCompleteAction struct {
+	Kind            string
+	TerminateUpload bool
+}
+
 var generatedTusTerminateFlowExpectedEvents = []string{"should-retry:0:true", "retry-schedule:0"}
 var generatedTusTerminateFlowMetadata = map[string]string{"filename": "hello.txt"}
+var generatedTusTerminateFlowOnChunkCompleteActions = []generatedTusChunkCompleteAction{
+	{
+		Kind:            "abort-upload",
+		TerminateUpload: true,
+	},
+}
 var generatedTusTerminateFlowRetryDelays = []time.Duration{0 * time.Millisecond, 0 * time.Millisecond}
 var generatedTusTerminateFlowShouldRetryEvents = []generatedTusTerminateRetryDecision{
 	{
@@ -166,7 +177,7 @@ func TestGeneratedTerminationRetryFlow(t *testing.T) {
 
 	events := []string{}
 	retryDecisionIndex := 0
-	response, err := client.TerminateUploadWithRetry(*upload, TerminateUploadOptions{
+	response, err := generatedTusRunTerminateFlowChunkCompleteActions(t, client, *upload, generatedTusTerminateFlowOnChunkCompleteActions, TerminateUploadOptions{
 		RetryDelays: generatedTusTerminateFlowRetryDelays,
 		OnShouldRetry: func(err error, retryAttempt int) bool {
 			if retryDecisionIndex >= len(generatedTusTerminateFlowShouldRetryEvents) {
@@ -197,6 +208,34 @@ func TestGeneratedTerminationRetryFlow(t *testing.T) {
 		t.Fatalf("expected %d termination retry decisions, got %d", len(generatedTusTerminateFlowShouldRetryEvents), retryDecisionIndex)
 	}
 	generatedTusAssertEvents(t, "terminateWithRetry", generatedTusTerminateFlowEventPolicy, generatedTusTerminateFlowExpectedEvents, events)
+}
+
+func generatedTusRunTerminateFlowChunkCompleteActions(
+	t *testing.T,
+	client *Client,
+	upload Upload,
+	actions []generatedTusChunkCompleteAction,
+	options TerminateUploadOptions,
+) (*http.Response, error) {
+	t.Helper()
+
+	var response *http.Response
+	for _, action := range actions {
+		if action.Kind != "abort-upload" {
+			t.Fatalf("unsupported generated onChunkComplete action %s", action.Kind)
+		}
+		if !action.TerminateUpload {
+			continue
+		}
+
+		var err error
+		response, err = client.TerminateUploadWithRetry(upload, options)
+		if err != nil {
+			return response, err
+		}
+	}
+
+	return response, nil
 }
 
 func generatedTerminationRetryRequestHeaders(
