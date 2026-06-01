@@ -5,6 +5,7 @@
 package tusgo
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -20,6 +21,7 @@ import (
 
 const (
 	generatedTusTerminateFlowContent             = "hello world"
+	generatedTusTerminateFlowEventPolicy         = "exact"
 	generatedTusTerminateFlowPatchAcceptedOffset = "5"
 	generatedTusTerminateFlowPatchBody           = "hello"
 	generatedTusTerminateFlowPatchOffset         = "0"
@@ -27,8 +29,20 @@ const (
 	generatedTusTerminateFlowUploadPath          = "/uploads/terminate-contract"
 )
 
+type generatedTusTerminateRetryDecision struct {
+	Decision     bool
+	RetryAttempt int
+}
+
+var generatedTusTerminateFlowExpectedEvents = []string{"should-retry:0:true", "retry-schedule:0"}
 var generatedTusTerminateFlowMetadata = map[string]string{"filename": "hello.txt"}
 var generatedTusTerminateFlowRetryDelays = []time.Duration{0 * time.Millisecond, 0 * time.Millisecond}
+var generatedTusTerminateFlowShouldRetryEvents = []generatedTusTerminateRetryDecision{
+	{
+		Decision:     true,
+		RetryAttempt: 0,
+	},
+}
 
 func TestGeneratedTerminationRetryFlow(t *testing.T) {
 	srvMock := mocha.New(t)
@@ -150,8 +164,25 @@ func TestGeneratedTerminationRetryFlow(t *testing.T) {
 		t.Fatalf("expected uploaded offset 5, got %d", upload.RemoteOffset)
 	}
 
+	events := []string{}
+	retryDecisionIndex := 0
 	response, err := client.TerminateUploadWithRetry(*upload, TerminateUploadOptions{
 		RetryDelays: generatedTusTerminateFlowRetryDelays,
+		OnShouldRetry: func(err error, retryAttempt int) bool {
+			if retryDecisionIndex >= len(generatedTusTerminateFlowShouldRetryEvents) {
+				t.Fatalf("unexpected termination retry decision request %d for %v", retryDecisionIndex, err)
+			}
+			expected := generatedTusTerminateFlowShouldRetryEvents[retryDecisionIndex]
+			if retryAttempt != expected.RetryAttempt {
+				t.Fatalf("expected termination retry attempt %d, got %d", expected.RetryAttempt, retryAttempt)
+			}
+			events = append(events, fmt.Sprintf("should-retry:%d:%t", retryAttempt, expected.Decision))
+			if expected.Decision {
+				events = append(events, fmt.Sprintf("retry-schedule:%d", generatedTusTerminateFlowRetryDelays[retryAttempt].Milliseconds()))
+			}
+			retryDecisionIndex += 1
+			return expected.Decision
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -162,6 +193,10 @@ func TestGeneratedTerminationRetryFlow(t *testing.T) {
 	if terminateReplyIndex != len(terminateReplies) {
 		t.Fatalf("expected %d termination requests, got %d", len(terminateReplies), terminateReplyIndex)
 	}
+	if retryDecisionIndex != len(generatedTusTerminateFlowShouldRetryEvents) {
+		t.Fatalf("expected %d termination retry decisions, got %d", len(generatedTusTerminateFlowShouldRetryEvents), retryDecisionIndex)
+	}
+	generatedTusAssertEvents(t, "terminateWithRetry", generatedTusTerminateFlowEventPolicy, generatedTusTerminateFlowExpectedEvents, events)
 }
 
 func generatedTerminationRetryRequestHeaders(

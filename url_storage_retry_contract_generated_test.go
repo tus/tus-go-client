@@ -5,6 +5,7 @@
 package tusgo
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -20,6 +21,7 @@ import (
 
 const (
 	generatedTusRetryFlowContent                  = "hello world"
+	generatedTusRetryFlowEventPolicy              = "exact"
 	generatedTusRetryFlowFinalPatchAcceptedOffset = "11"
 	generatedTusRetryFlowFinalPatchBody           = " world"
 	generatedTusRetryFlowFinalPatchOffset         = "5"
@@ -41,6 +43,7 @@ type generatedTusRetryDecision struct {
 	RetryAttempt int
 }
 
+var generatedTusRetryFlowExpectedEvents = []string{"should-retry:0:true", "retry-schedule:0", "should-retry:0:true", "retry-schedule:0"}
 var generatedTusRetryFlowMetadata = map[string]string{"filename": "hello.txt"}
 var generatedTusRetryFlowRetryDelays = []time.Duration{0 * time.Millisecond}
 var generatedTusRetryFlowShouldRetryEvents = []generatedTusRetryDecision{
@@ -209,6 +212,7 @@ func TestGeneratedURLStorageRetryOffsetRecoveryFlow(t *testing.T) {
 
 	storage := NewMemoryURLStorage()
 	retryDecisionIndex := 0
+	events := []string{}
 	upload, err := client.UploadWithURLStorage(URLStorageUploadOptions{
 		Storage:     storage,
 		Source:      strings.NewReader(generatedTusRetryFlowContent),
@@ -223,6 +227,10 @@ func TestGeneratedURLStorageRetryOffsetRecoveryFlow(t *testing.T) {
 			expected := generatedTusRetryFlowShouldRetryEvents[retryDecisionIndex]
 			if retryAttempt != expected.RetryAttempt {
 				t.Fatalf("expected retry attempt %d, got %d", expected.RetryAttempt, retryAttempt)
+			}
+			events = append(events, fmt.Sprintf("should-retry:%d:%t", retryAttempt, expected.Decision))
+			if expected.Decision {
+				events = append(events, fmt.Sprintf("retry-schedule:%d", generatedTusRetryFlowRetryDelays[retryAttempt].Milliseconds()))
 			}
 			retryDecisionIndex += 1
 			return expected.Decision
@@ -246,6 +254,7 @@ func TestGeneratedURLStorageRetryOffsetRecoveryFlow(t *testing.T) {
 	if upload.RemoteOffset != 11 {
 		t.Fatalf("expected upload offset 11, got %d", upload.RemoteOffset)
 	}
+	generatedTusAssertEvents(t, "retryPatchAfterOffsetRecovery", generatedTusRetryFlowEventPolicy, generatedTusRetryFlowExpectedEvents, events)
 }
 
 func generatedURLStorageRetryRequestHeaders(
