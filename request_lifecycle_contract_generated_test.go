@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"reflect"
 	"testing"
 
 	"github.com/vitorsalgado/mocha/v3"
@@ -17,6 +16,7 @@ import (
 )
 
 const (
+	generatedTusRequestLifecycleEventPolicy   = "exact"
 	generatedTusRequestLifecycleUploadLength = "11"
 	generatedTusRequestLifecycleUploadOffset = "11"
 	generatedTusRequestLifecycleUploadPath   = "/uploads/request-hooks-contract"
@@ -128,13 +128,7 @@ func TestGeneratedRequestLifecycleHooks(t *testing.T) {
 	if upload.RemoteSize != 11 {
 		t.Fatalf("expected upload length %s, got %d", generatedTusRequestLifecycleUploadLength, upload.RemoteSize)
 	}
-	if !reflect.DeepEqual(events, generatedTusRequestLifecycleExpectedHookEvents) {
-		t.Fatalf(
-			"expected request lifecycle events %#v, got %#v",
-			generatedTusRequestLifecycleExpectedHookEvents,
-			events,
-		)
-	}
+	generatedTusAssertEvents(t, "requestLifecycleHooks", generatedTusRequestLifecycleEventPolicy, generatedTusRequestLifecycleExpectedHookEvents, events)
 }
 
 func generatedRequestLifecycleRequestHeaders(

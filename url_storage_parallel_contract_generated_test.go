@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -21,6 +20,7 @@ const (
 	generatedTusParallelConcatExtension        = "concatenation"
 	generatedTusParallelContent                = "hello world"
 	generatedTusParallelEndpointPath           = "/uploads"
+	generatedTusParallelEventPolicy            = "exact-except-extra-progress"
 	generatedTusParallelFinalConcatPrefix      = "final;"
 	generatedTusParallelFinalPath              = "/uploads/parallel-final"
 	generatedTusParallelUploadURLSeparator     = " "
@@ -252,9 +252,7 @@ func TestGeneratedURLStorageParallelUploadConcatFlow(t *testing.T) {
 		t.Fatal(err)
 	default:
 	}
-	if !reflect.DeepEqual(events, generatedTusParallelExpectedEvents) {
-		t.Fatalf("expected parallel events %#v, got %#v", generatedTusParallelExpectedEvents, events)
-	}
+	generatedTusAssertEvents(t, "parallelUploadConcat", generatedTusParallelEventPolicy, generatedTusParallelExpectedEvents, events)
 
 	storedUploads, err := storage.FindUploadsByFingerprint("contract-parallel-fingerprint")
 	if err != nil {

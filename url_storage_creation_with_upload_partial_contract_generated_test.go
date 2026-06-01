@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"reflect"
 	"strings"
 	"testing"
 )
@@ -21,6 +20,7 @@ const (
 	generatedTusCreationPartialContentTypeHeader = "Content-Type"
 	generatedTusCreationPartialCreateBodySize    = 5
 	generatedTusCreationPartialEndpointPath      = "/uploads"
+	generatedTusCreationPartialEventPolicy       = "exact-except-extra-progress"
 	generatedTusCreationPartialLength            = "11"
 	generatedTusCreationPartialLengthHeader      = "Upload-Length"
 	generatedTusCreationPartialMetadataHeader    = "Upload-Metadata"
@@ -241,9 +241,7 @@ func TestGeneratedURLStorageCreationWithUploadPartialChunk(t *testing.T) {
 		t.Fatal(err)
 	default:
 	}
-	if !reflect.DeepEqual(events, generatedTusCreationPartialExpectedEvents) {
-		t.Fatalf("expected partial creation events %#v, got %#v", generatedTusCreationPartialExpectedEvents, events)
-	}
+	generatedTusAssertEvents(t, "creationWithUploadPartialChunk", generatedTusCreationPartialEventPolicy, generatedTusCreationPartialExpectedEvents, events)
 
 	storedUploads, err := storage.FindUploadsByFingerprint("contract-creation-with-upload-partial-fingerprint")
 	if err != nil {

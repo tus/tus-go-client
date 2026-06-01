@@ -11,13 +11,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
 )
 
 const (
+	generatedTusAbortEventPolicy   = "exact"
 	generatedTusAbortContent      = "hello world"
 	generatedTusAbortEndpointPath = "/uploads"
 	generatedTusAbortUploadLength = "11"
@@ -109,9 +109,7 @@ func TestGeneratedAbortUploadContext(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for server to observe abort")
 	}
-	if !reflect.DeepEqual(events, generatedTusAbortExpectedEvents) {
-		t.Fatalf("expected abort events %#v, got %#v", generatedTusAbortExpectedEvents, events)
-	}
+	generatedTusAssertEvents(t, "abortUpload", generatedTusAbortEventPolicy, generatedTusAbortExpectedEvents, events)
 
 	storedUploads, err := storage.FindAllUploads()
 	if err != nil {

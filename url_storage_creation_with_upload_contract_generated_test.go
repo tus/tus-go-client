@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"reflect"
 	"strings"
 	"testing"
 )
@@ -20,6 +19,7 @@ const (
 	generatedTusCreationWithUploadContentType       = "application/offset+octet-stream"
 	generatedTusCreationWithUploadContentTypeHeader = "Content-Type"
 	generatedTusCreationWithUploadEndpointPath      = "/uploads"
+	generatedTusCreationWithUploadEventPolicy       = "exact-except-extra-progress"
 	generatedTusCreationWithUploadLength            = "11"
 	generatedTusCreationWithUploadLengthHeader      = "Upload-Length"
 	generatedTusCreationWithUploadMetadataHeader    = "Upload-Metadata"
@@ -150,9 +150,7 @@ func TestGeneratedURLStorageCreationWithUpload(t *testing.T) {
 		t.Fatal(err)
 	default:
 	}
-	if !reflect.DeepEqual(events, generatedTusCreationWithUploadExpectedEvents) {
-		t.Fatalf("expected creation-with-upload events %#v, got %#v", generatedTusCreationWithUploadExpectedEvents, events)
-	}
+	generatedTusAssertEvents(t, "creationWithUpload", generatedTusCreationWithUploadEventPolicy, generatedTusCreationWithUploadExpectedEvents, events)
 
 	storedUploads, err := storage.FindUploadsByFingerprint("contract-creation-with-upload-fingerprint")
 	if err != nil {

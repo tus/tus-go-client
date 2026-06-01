@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"reflect"
 	"strings"
 	"testing"
 
@@ -20,6 +19,7 @@ import (
 const (
 	generatedTusEventHooksContent             = "hello world"
 	generatedTusEventHooksCreatedUploadPath   = "/uploads/generated-contract"
+	generatedTusEventHooksEventPolicy         = "exact-except-extra-progress"
 	generatedTusEventHooksFingerprint         = "contract-single-fingerprint"
 	generatedTusEventHooksPatchAcceptedOffset = "11"
 	generatedTusEventHooksPatchBody           = "hello world"
@@ -162,9 +162,7 @@ func TestGeneratedURLStorageEventHooks(t *testing.T) {
 	if upload.RemoteOffset != 11 {
 		t.Fatalf("expected upload offset 11, got %d", upload.RemoteOffset)
 	}
-	if !reflect.DeepEqual(events, generatedTusEventHooksExpectedEvents) {
-		t.Fatalf("expected event hooks %#v, got %#v", generatedTusEventHooksExpectedEvents, events)
-	}
+	generatedTusAssertEvents(t, "singleUploadLifecycle", generatedTusEventHooksEventPolicy, generatedTusEventHooksExpectedEvents, events)
 }
 
 func generatedTusEventHooksTotal(bytesTotal *int64) string {

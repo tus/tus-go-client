@@ -12,13 +12,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
 )
 
 const (
+	generatedTusAbortTerminationEventPolicy   = "exact"
 	generatedTusAbortTerminationContent           = "hello world"
 	generatedTusAbortTerminationContentType       = "application/offset+octet-stream"
 	generatedTusAbortTerminationContentTypeHeader = "Content-Type"
@@ -197,9 +197,7 @@ func TestGeneratedAbortTerminatesKnownUpload(t *testing.T) {
 		t.Fatal(err)
 	default:
 	}
-	if !reflect.DeepEqual(events, generatedTusAbortTerminationExpectedEvents) {
-		t.Fatalf("expected abort termination events %#v, got %#v", generatedTusAbortTerminationExpectedEvents, events)
-	}
+	generatedTusAssertEvents(t, "abortUploadAfterStoredUrl", generatedTusAbortTerminationEventPolicy, generatedTusAbortTerminationExpectedEvents, events)
 
 	storedUploads, err := storage.FindAllUploads()
 	if err != nil {

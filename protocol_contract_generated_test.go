@@ -1276,3 +1276,73 @@ var generatedTusClientUrlStorageConformanceScenarios = []generatedTusClientUrlSt
 		ScenarioID: "fileUrlStorageBackend",
 	},
 }
+
+type generatedTusTestingT interface {
+	Fatalf(format string, args ...any)
+	Helper()
+}
+
+func generatedTusAssertEvents(
+	t generatedTusTestingT,
+	scenarioID string,
+	matching string,
+	expected []string,
+	actual []string,
+) {
+	t.Helper()
+
+	if matching == "exact" {
+		if generatedTusStringSlicesEqual(expected, actual) {
+			return
+		}
+		t.Fatalf("expected %s events %#v, got %#v", scenarioID, expected, actual)
+	}
+
+	if matching != "exact-except-extra-progress" {
+		t.Fatalf("unsupported generated event policy %s for %s", matching, scenarioID)
+	}
+
+	expectedIndex := 0
+	for _, event := range actual {
+		if expectedIndex < len(expected) && event == expected[expectedIndex] {
+			expectedIndex += 1
+			continue
+		}
+		if generatedTusIsProgressEventKey(event) {
+			continue
+		}
+		t.Fatalf(
+			"%s emitted unexpected non-progress event %s; expected %#v, got %#v",
+			scenarioID,
+			event,
+			expected,
+			actual,
+		)
+	}
+	if expectedIndex == len(expected) {
+		return
+	}
+	t.Fatalf(
+		"%s did not emit every expected non-extra event; expected %#v, got %#v",
+		scenarioID,
+		expected,
+		actual,
+	)
+}
+
+func generatedTusIsProgressEventKey(event string) bool {
+	const prefix = "progress:"
+	return len(event) >= len(prefix) && event[:len(prefix)] == prefix
+}
+
+func generatedTusStringSlicesEqual(expected []string, actual []string) bool {
+	if len(expected) != len(actual) {
+		return false
+	}
+	for index, expectedValue := range expected {
+		if actual[index] != expectedValue {
+			return false
+		}
+	}
+	return true
+}

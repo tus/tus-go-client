@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"reflect"
 	"strings"
 	"testing"
 )
@@ -22,6 +21,7 @@ const (
 	generatedTusDeferredLengthCreateDeferHeader = "Upload-Defer-Length"
 	generatedTusDeferredLengthCreateDeferValue  = "1"
 	generatedTusDeferredLengthEndpointPath      = "/uploads"
+	generatedTusDeferredLengthEventPolicy       = "exact-except-extra-progress"
 	generatedTusDeferredLengthMetadataHeader    = "Upload-Metadata"
 	generatedTusDeferredLengthPatchLength       = "11"
 	generatedTusDeferredLengthPatchLengthHeader = "Upload-Length"
@@ -182,9 +182,7 @@ func TestGeneratedURLStorageDeferredLengthUpload(t *testing.T) {
 		t.Fatal(err)
 	default:
 	}
-	if !reflect.DeepEqual(events, generatedTusDeferredLengthExpectedEvents) {
-		t.Fatalf("expected deferred length events %#v, got %#v", generatedTusDeferredLengthExpectedEvents, events)
-	}
+	generatedTusAssertEvents(t, "deferredLengthUpload", generatedTusDeferredLengthEventPolicy, generatedTusDeferredLengthExpectedEvents, events)
 
 	storedUploads, err := storage.FindUploadsByFingerprint("contract-deferred-length-fingerprint")
 	if err != nil {
