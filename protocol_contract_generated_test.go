@@ -1044,6 +1044,7 @@ const generatedTusManagedUploadJSON = `{
   "capabilities": {
     "cleanup": {
       "policies": [
+        "absent-after-source-unavailable",
         "remove-owned-source-after-success",
         "remove-owned-source-after-cancel",
         "retain-owned-source-after-permanent-failure",
@@ -1110,6 +1111,7 @@ const generatedTusManagedUploadJSON = `{
       "managedUploadDurableRetry",
       "managedUploadPermanentFailure",
       "managedUploadRetryPolicyExhausted",
+      "managedUploadSourceUnavailable",
       "managedUploadNetworkConstraint"
     ],
     "status": "needs-generated-scenario"
@@ -1343,6 +1345,7 @@ const generatedTusManagedUploadJSON = `{
           "retryDelays": [
             0
           ],
+          "sourceAvailability": "available",
           "sourceDurability": "copy-to-owned-storage",
           "states": [
             "pending",
@@ -1448,6 +1451,7 @@ const generatedTusManagedUploadJSON = `{
           "retryDelays": [
             0
           ],
+          "sourceAvailability": "available",
           "sourceDurability": "copy-to-owned-storage",
           "states": [
             "pending",
@@ -1517,6 +1521,7 @@ const generatedTusManagedUploadJSON = `{
             "uploadPath": "managed-permanent-failure"
           },
           "retryDelays": [],
+          "sourceAvailability": "available",
           "sourceDurability": "copy-to-owned-storage",
           "states": [
             "pending",
@@ -1570,6 +1575,7 @@ const generatedTusManagedUploadJSON = `{
             "uploadPath": "managed-permanent-failure"
           },
           "retryDelays": [],
+          "sourceAvailability": "available",
           "sourceDurability": "copy-to-owned-storage",
           "states": [
             "pending",
@@ -1595,7 +1601,7 @@ const generatedTusManagedUploadJSON = `{
         "cleanup-managed-upload"
       ],
       "scenarioId": "managedUploadPermanentFailure",
-      "summary": "Classify missing sources and unretryable protocol failures as terminal without further retry."
+      "summary": "Classify unretryable protocol failures as terminal without further retry."
     },
     {
       "proofs": [
@@ -1685,6 +1691,7 @@ const generatedTusManagedUploadJSON = `{
             0,
             0
           ],
+          "sourceAvailability": "available",
           "sourceDurability": "copy-to-owned-storage",
           "states": [
             "pending",
@@ -1789,6 +1796,7 @@ const generatedTusManagedUploadJSON = `{
             0,
             0
           ],
+          "sourceAvailability": "available",
           "sourceDurability": "copy-to-owned-storage",
           "states": [
             "pending",
@@ -1820,6 +1828,102 @@ const generatedTusManagedUploadJSON = `{
       ],
       "scenarioId": "managedUploadRetryPolicyExhausted",
       "summary": "Retry transient protocol failures up to the managed retry budget and then classify the upload as terminally failed."
+    },
+    {
+      "proofs": [
+        {
+          "attempts": [
+            {
+              "attemptIndex": 0,
+              "failure": {
+                "kind": "source-unavailable",
+                "phase": "before-protocol-request"
+              },
+              "requests": [],
+              "stateAfterAttempt": "failed"
+            }
+          ],
+          "cleanup": {
+            "ownedSource": "absent-after-source-unavailable",
+            "resumeUrl": "absent-after-permanent-failure"
+          },
+          "input": {
+            "chunkSize": 7,
+            "content": "hello missing!",
+            "fingerprint": "managed-source-unavailable-fingerprint",
+            "metadata": {
+              "filename": "managed-source-unavailable.txt"
+            },
+            "uploadPath": "managed-source-unavailable"
+          },
+          "retryDelays": [],
+          "sourceAvailability": "missing-before-durable-copy",
+          "sourceDurability": "copy-to-owned-storage",
+          "states": [
+            "pending",
+            "running",
+            "failed"
+          ],
+          "terminal": {
+            "failure": "source-unavailable",
+            "state": "failed"
+          },
+          "runtime": "java",
+          "scheduler": "process-lifetime-worker-pool",
+          "stateBackend": "filesystem"
+        },
+        {
+          "attempts": [
+            {
+              "attemptIndex": 0,
+              "failure": {
+                "kind": "source-unavailable",
+                "phase": "before-protocol-request"
+              },
+              "requests": [],
+              "stateAfterAttempt": "failed"
+            }
+          ],
+          "cleanup": {
+            "ownedSource": "absent-after-source-unavailable",
+            "resumeUrl": "absent-after-permanent-failure"
+          },
+          "input": {
+            "chunkSize": 7,
+            "content": "hello missing!",
+            "fingerprint": "managed-source-unavailable-fingerprint",
+            "metadata": {
+              "filename": "managed-source-unavailable.txt"
+            },
+            "uploadPath": "managed-source-unavailable"
+          },
+          "retryDelays": [],
+          "sourceAvailability": "missing-before-durable-copy",
+          "sourceDurability": "copy-to-owned-storage",
+          "states": [
+            "pending",
+            "running",
+            "failed"
+          ],
+          "terminal": {
+            "failure": "source-unavailable",
+            "state": "failed"
+          },
+          "runtime": "android",
+          "scheduler": "durable-os-scheduler",
+          "stateBackend": "platform-key-value-store"
+        }
+      ],
+      "requiredPrimitives": [
+        "accept-upload-submission",
+        "make-source-durable",
+        "schedule-upload-work",
+        "classify-failure",
+        "publish-upload-state",
+        "cleanup-managed-upload"
+      ],
+      "scenarioId": "managedUploadSourceUnavailable",
+      "summary": "Classify source disappearance before protocol requests as terminal without issuing a TUS request."
     },
     {
       "requiredPrimitives": [
@@ -1856,6 +1960,14 @@ var generatedTusManagedUploadProofCases = []generatedTusManagedUploadProofCase{
 		Layer:              "feature-over-protocol",
 		ScenarioID:         "managedUploadRetryPolicyExhausted",
 		RequiredPrimitives: []string{"accept-upload-submission", "make-source-durable", "schedule-upload-work", "run-protocol-upload", "apply-managed-retry-policy", "classify-failure", "publish-upload-state", "cleanup-managed-upload"},
+		ProtocolFeatureIDs: []string{"singleUploadLifecycle", "retryOffsetRecovery"},
+		RuntimeProfiles:    []string{"android", "ios", "browser", "java", "node", "react-native"},
+	},
+	{
+		FeatureID:          "managedUpload",
+		Layer:              "feature-over-protocol",
+		ScenarioID:         "managedUploadSourceUnavailable",
+		RequiredPrimitives: []string{"accept-upload-submission", "make-source-durable", "schedule-upload-work", "classify-failure", "publish-upload-state", "cleanup-managed-upload"},
 		ProtocolFeatureIDs: []string{"singleUploadLifecycle", "retryOffsetRecovery"},
 		RuntimeProfiles:    []string{"android", "ios", "browser", "java", "node", "react-native"},
 	},
