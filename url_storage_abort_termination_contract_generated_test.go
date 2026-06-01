@@ -18,6 +18,7 @@ import (
 )
 
 const (
+	generatedTusAbortTerminationCancelRequestIndex = 1
 	generatedTusAbortTerminationEventPolicy   = "exact"
 	generatedTusAbortTerminationContent           = "hello world"
 	generatedTusAbortTerminationContentType       = "application/offset+octet-stream"
@@ -106,7 +107,7 @@ func TestGeneratedAbortTerminatesKnownUpload(t *testing.T) {
 			if actual := request.Header.Get(generatedTusAbortTerminationOverrideHeader); actual != generatedTusAbortTerminationOverrideValue {
 				recordRequestErr(fmt.Errorf("expected override header %s, got %s", generatedTusAbortTerminationOverrideValue, actual))
 			}
-			events = append(events, "request-abort:1")
+			events = append(events, fmt.Sprintf("request-abort:%d", generatedTusAbortTerminationCancelRequestIndex))
 			close(patchStarted)
 			<-request.Context().Done()
 

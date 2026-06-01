@@ -17,6 +17,7 @@ import (
 )
 
 const (
+	generatedTusAbortCancelRequestIndex = 0
 	generatedTusAbortEventPolicy   = "exact"
 	generatedTusAbortContent      = "hello world"
 	generatedTusAbortEndpointPath = "/uploads"
@@ -55,7 +56,7 @@ func TestGeneratedAbortUploadContext(t *testing.T) {
 		); err != nil {
 			requestErr = err
 		}
-		events = append(events, "request-abort:0")
+		events = append(events, fmt.Sprintf("request-abort:%d", generatedTusAbortCancelRequestIndex))
 		close(requestStarted)
 		<-request.Context().Done()
 	}))
