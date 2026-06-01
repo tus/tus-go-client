@@ -4,6 +4,8 @@
 
 package tusgo
 
+import "testing"
+
 type generatedTusWireVersion struct {
 	Default bool
 	Value   string
@@ -92,6 +94,15 @@ type generatedTusClientUrlStorageConformanceAction struct {
 	KeyRef            string
 	Kind              string
 	Upload            map[string]any
+}
+
+type generatedTusManagedUploadProofCase struct {
+	FeatureID          string
+	Layer              string
+	ScenarioID         string
+	RequiredPrimitives []string
+	ProtocolFeatureIDs []string
+	RuntimeProfiles    []string
 }
 
 var generatedTusWireVersions = []generatedTusWireVersion{
@@ -1276,6 +1287,33 @@ const generatedTusManagedUploadJSON = `{
 }
 `
 
+var generatedTusManagedUploadProofCases = []generatedTusManagedUploadProofCase{
+	{
+		FeatureID:          "managedUpload",
+		Layer:              "feature-over-protocol",
+		ScenarioID:         "managedUploadDurableRetry",
+		RequiredPrimitives: []string{"accept-upload-submission", "make-source-durable", "schedule-upload-work", "run-protocol-upload", "apply-managed-retry-policy", "publish-upload-state", "cleanup-managed-upload"},
+		ProtocolFeatureIDs: []string{"singleUploadLifecycle", "retryOffsetRecovery"},
+		RuntimeProfiles:    []string{"android", "ios", "browser", "java", "node", "react-native"},
+	},
+	{
+		FeatureID:          "managedUpload",
+		Layer:              "feature-over-protocol",
+		ScenarioID:         "managedUploadPermanentFailure",
+		RequiredPrimitives: []string{"accept-upload-submission", "make-source-durable", "schedule-upload-work", "classify-failure", "publish-upload-state"},
+		ProtocolFeatureIDs: []string{"singleUploadLifecycle", "retryOffsetRecovery"},
+		RuntimeProfiles:    []string{"android", "ios", "browser", "java", "node", "react-native"},
+	},
+	{
+		FeatureID:          "managedUpload",
+		Layer:              "feature-over-protocol",
+		ScenarioID:         "managedUploadNetworkConstraint",
+		RequiredPrimitives: []string{"accept-upload-submission", "schedule-upload-work", "publish-upload-state"},
+		ProtocolFeatureIDs: []string{"singleUploadLifecycle", "retryOffsetRecovery"},
+		RuntimeProfiles:    []string{"android", "ios", "browser", "java", "node", "react-native"},
+	},
+}
+
 var generatedTusClientFlow = generatedTusClientFlowContract{
 	UrlStorage: generatedTusClientUrlStoragePolicy{
 		ID: generatedTusClientUrlStorageIDPolicy{
@@ -1575,6 +1613,46 @@ func generatedTusAssertEvents(
 		expected,
 		actual,
 	)
+}
+
+func TestGeneratedTusManagedUploadProofCases(t *testing.T) {
+	if len(generatedTusManagedUploadProofCases) == 0 {
+		t.Fatal("expected generated managed upload proof cases")
+	}
+
+	for _, testCase := range generatedTusManagedUploadProofCases {
+		if testCase.FeatureID != "managedUpload" {
+			t.Fatalf("expected managed upload feature ID, got %s", testCase.FeatureID)
+		}
+		if testCase.Layer != "feature-over-protocol" {
+			t.Fatalf("expected managed upload feature-over-protocol layer, got %s", testCase.Layer)
+		}
+		if len(testCase.RequiredPrimitives) == 0 {
+			t.Fatalf("expected %s required primitives", testCase.ScenarioID)
+		}
+		if len(testCase.RuntimeProfiles) == 0 {
+			t.Fatalf("expected %s runtime profiles", testCase.ScenarioID)
+		}
+		for _, featureID := range testCase.ProtocolFeatureIDs {
+			if generatedTusFindClientFeature(featureID) == nil {
+				t.Fatalf(
+					"managed upload proof case %s references missing feature %s",
+					testCase.ScenarioID,
+					featureID,
+				)
+			}
+		}
+	}
+}
+
+func generatedTusFindClientFeature(featureID string) *generatedTusClientFeature {
+	for index := range generatedTusClientFeatures {
+		if generatedTusClientFeatures[index].FeatureID == featureID {
+			return &generatedTusClientFeatures[index]
+		}
+	}
+
+	return nil
 }
 
 func generatedTusIsProgressEventKey(event string) bool {
