@@ -11,22 +11,11 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strconv"
 	"time"
 
 	tusgo "github.com/bdragon300/tusgo"
-	transloadit "github.com/transloadit/go-sdk"
 )
-
-func requiredEnv(name string) string {
-	value := os.Getenv(name)
-	if value == "" {
-		panic(fmt.Sprintf("%s must be set", name))
-	}
-
-	return value
-}
 
 func fail(format string, args ...interface{}) {
 	panic(fmt.Sprintf(format, args...))
@@ -176,106 +165,13 @@ func resolveValue(
 	return readPath(rootValue, pathParts, label)
 }
 
-func emptyValue(value interface{}) bool {
-	return value == nil || value == ""
-}
-
-func newTransloaditClient() (*transloadit.Client, string) {
-	endpoint := requiredEnv("TRANSLOADIT_ENDPOINT")
-	config := transloadit.DefaultConfig
-	config.AuthKey = requiredEnv("TRANSLOADIT_KEY")
-	config.AuthSecret = requiredEnv("TRANSLOADIT_SECRET")
-	config.Endpoint = endpoint
-	client := transloadit.NewClient(config)
-
-	return &client, endpoint
-}
-
-func assemblyInfoToMap(info *transloadit.AssemblyInfo, label string) (map[string]interface{}, error) {
-	serialized, err := json.Marshal(info)
+func createResponseFromScenario(scenario map[string]interface{}) (map[string]interface{}, error) {
+	prepared, err := objectValue(scenario["prepared"], "prepared")
 	if err != nil {
-		return nil, fmt.Errorf("serialize %s: %w", label, err)
+		return nil, err
 	}
 
-	var result map[string]interface{}
-	if err := json.Unmarshal(serialized, &result); err != nil {
-		return nil, fmt.Errorf("decode %s: %w", label, err)
-	}
-
-	return result, nil
-}
-
-func createAssemblyFileCount(scenario map[string]interface{}) (int, error) {
-	feature, err := objectValue(scenario["createTusAssembly"], "createTusAssembly")
-	if err != nil {
-		return 0, err
-	}
-	input, err := objectValue(feature["input"], "createTusAssembly.input")
-	if err != nil {
-		return 0, err
-	}
-	if len(input) != 1 {
-		return 0, fmt.Errorf("createTusAssembly.input must contain exactly one value")
-	}
-
-	for _, value := range input {
-		return intValue(value, "createTusAssembly.input value")
-	}
-
-	return 0, fmt.Errorf("createTusAssembly.input did not contain a value")
-}
-
-func createAssembly(
-	ctx context.Context,
-	client *transloadit.Client,
-	scenario map[string]interface{},
-) (*transloadit.AssemblyInfo, map[string]interface{}, error) {
-	fileCount, err := createAssemblyFileCount(scenario)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	assembly, err := client.CreateTusAssembly(ctx, fileCount)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	response, err := assemblyInfoToMap(assembly, "createTusAssembly response")
-	if err != nil {
-		return nil, nil, err
-	}
-
-	if errorText, ok := response["error"].(string); ok && errorText != "" {
-		return nil, nil, fmt.Errorf("create assembly returned %s: %s", errorText, response["message"])
-	}
-
-	feature, err := objectValue(scenario["createTusAssembly"], "createTusAssembly")
-	if err != nil {
-		return nil, nil, err
-	}
-
-	requiredResponsePaths, err := arrayValue(
-		feature["requiredResponsePaths"],
-		"createTusAssembly.requiredResponsePaths",
-	)
-	if err != nil {
-		return nil, nil, err
-	}
-	for index, rawPath := range requiredResponsePaths {
-		pathParts, err := arrayValue(rawPath, fmt.Sprintf("createTusAssembly.requiredResponsePaths[%d]", index))
-		if err != nil {
-			return nil, nil, err
-		}
-		value, err := readPath(response, pathParts, fmt.Sprintf("createTusAssembly.requiredResponsePaths[%d]", index))
-		if err != nil {
-			return nil, nil, err
-		}
-		if emptyValue(value) {
-			return nil, nil, fmt.Errorf("create assembly returned an empty value at path %v", pathParts)
-		}
-	}
-
-	return assembly, response, nil
+	return objectValue(prepared["createResponse"], "prepared.createResponse")
 }
 
 func scenarioBytes(scenario map[string]interface{}) ([]byte, error) {
@@ -409,101 +305,24 @@ func uploadWithTus(
 	return upload.Location, nil
 }
 
-func valueLength(value interface{}, label string) (int, error) {
-	switch typed := value.(type) {
-	case []interface{}:
-		return len(typed), nil
-	case map[string]interface{}:
-		return len(typed), nil
-	case string:
-		return len(typed), nil
-	default:
-		return 0, fmt.Errorf("%s has no length", label)
+func writeResult(uploadURL string) error {
+	resultPath := os.Getenv("API2_SDK_EXAMPLE_RESULT")
+	if resultPath == "" {
+		return nil
 	}
-}
 
-func assertionsError(
-	scenario map[string]interface{},
-	createResponse map[string]interface{},
-	status map[string]interface{},
-	uploadURL string,
-) error {
-	rawAssertions, err := arrayValue(scenario["assertions"], "assertions")
+	contents, err := json.MarshalIndent(
+		map[string]string{
+			"uploadUrl": uploadURL,
+		},
+		"",
+		"  ",
+	)
 	if err != nil {
 		return err
 	}
-	context := map[string]interface{}{
-		"captured": map[string]interface{}{
-			"uploadUrl": uploadURL,
-		},
-		"createResponse": createResponse,
-		"scenario":       scenario,
-		"status":         status,
-	}
 
-	for index, rawAssertion := range rawAssertions {
-		label := fmt.Sprintf("assertions[%d]", index)
-		assertion, err := objectValue(rawAssertion, label)
-		if err != nil {
-			return err
-		}
-		actual, err := resolveValue(assertion["actual"], context, label+".actual")
-		if err != nil {
-			return err
-		}
-		expected, err := resolveValue(assertion["expected"], context, label+".expected")
-		if err != nil {
-			return err
-		}
-		kind, err := stringValue(assertion["kind"], label+".kind")
-		if err != nil {
-			return err
-		}
-
-		switch kind {
-		case "equals":
-			if !reflect.DeepEqual(actual, expected) {
-				return fmt.Errorf("%s expected %v, got %v", label, expected, actual)
-			}
-		case "length":
-			actualLength, err := valueLength(actual, label+".actual")
-			if err != nil {
-				return err
-			}
-			expectedLength, err := intValue(expected, label+".expected")
-			if err != nil {
-				return err
-			}
-			if actualLength != expectedLength {
-				return fmt.Errorf("%s expected length %d, got %d", label, expectedLength, actualLength)
-			}
-		default:
-			return fmt.Errorf("%s has unsupported assertion kind %q", label, kind)
-		}
-	}
-
-	return nil
-}
-
-func waitForAssembly(
-	ctx context.Context,
-	client *transloadit.Client,
-	assembly *transloadit.AssemblyInfo,
-) (map[string]interface{}, error) {
-	statusInfo, err := client.WaitForAssembly(ctx, assembly)
-	if err != nil {
-		return nil, err
-	}
-
-	status, err := assemblyInfoToMap(statusInfo, "waitForAssembly response")
-	if err != nil {
-		return nil, err
-	}
-	if errorText, ok := status["error"].(string); ok && errorText != "" {
-		return status, fmt.Errorf("assembly failed with %s: %s", errorText, status["message"])
-	}
-
-	return status, nil
+	return os.WriteFile(resultPath, append(contents, '\n'), 0o644)
 }
 
 func main() {
@@ -515,28 +334,22 @@ func main() {
 		fail("load scenario: %v", err)
 	}
 
-	client, endpoint := newTransloaditClient()
-	assembly, createResponse, err := createAssembly(ctx, client, scenario)
+	createResponse, err := createResponseFromScenario(scenario)
 	if err != nil {
-		fail("create assembly: %v", err)
+		fail("read prepared create response: %v", err)
 	}
 
 	uploadURL, err := uploadWithTus(ctx, scenario, createResponse)
 	if err != nil {
 		fail("upload: %v", err)
 	}
-
-	status, err := waitForAssembly(ctx, client, assembly)
-	if err != nil {
-		fail("wait for assembly: %v", err)
-	}
-	if err := assertionsError(scenario, createResponse, status, uploadURL); err != nil {
-		fail("assert scenario: %v", err)
+	if err := writeResult(uploadURL); err != nil {
+		fail("write result: %v", err)
 	}
 
 	scenarioID, err := stringValue(scenario["scenarioId"], "scenarioId")
 	if err != nil {
 		fail("read scenario id: %v", err)
 	}
-	fmt.Printf("Go TUS SDK devdock scenario %s passed for %s\n", scenarioID, endpoint)
+	fmt.Printf("Go TUS SDK devdock scenario %s uploaded to %s\n", scenarioID, uploadURL)
 }
