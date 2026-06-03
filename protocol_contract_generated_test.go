@@ -79,6 +79,25 @@ type generatedTusClientUrlStorageIDPolicy struct {
 	Strategy   string
 }
 
+var generatedTusDefaultRequestHeaderValues = map[string]string{"Tus-Resumable": "1.0.0"}
+var generatedTusDefaultResponseHeaderValues = map[string]string{"Tus-Resumable": "1.0.0"}
+
+func generatedTusHeaderValue(defaultValues map[string]string, values map[string]string, name string) string {
+	if value, ok := values[name]; ok {
+		return value
+	}
+
+	return defaultValues[name]
+}
+
+func generatedTusRequestHeaderValue(values map[string]string, name string) string {
+	return generatedTusHeaderValue(generatedTusDefaultRequestHeaderValues, values, name)
+}
+
+func generatedTusResponseHeaderValue(values map[string]string, name string) string {
+	return generatedTusHeaderValue(generatedTusDefaultResponseHeaderValues, values, name)
+}
+
 type generatedTusClientUrlStorageConformanceScenario struct {
 	Actions    []generatedTusClientUrlStorageConformanceAction
 	Backend    string

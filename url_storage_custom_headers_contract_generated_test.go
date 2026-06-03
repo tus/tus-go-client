@@ -175,10 +175,7 @@ func generatedAssertTusCustomRequestHeaders(
 		if !field.Required {
 			continue
 		}
-		expected := values[field.DisplayName]
-		if expected == "" {
-			expected = DefaultProtocolVersion
-		}
+		expected := generatedTusRequestHeaderValue(values, field.DisplayName)
 		if actual := request.Header.Get(field.DisplayName); actual != expected {
 			return fmt.Errorf(
 				"expected request header %s=%s, got %s",
@@ -205,10 +202,7 @@ func generatedWriteTusCustomResponseHeaders(
 		if !field.Required {
 			continue
 		}
-		value := values[field.DisplayName]
-		if value == "" {
-			value = DefaultProtocolVersion
-		}
+		value := generatedTusResponseHeaderValue(values, field.DisplayName)
 		responseWriter.Header().Set(field.DisplayName, value)
 	}
 	if value := values[generatedTusCustomHeadersOffsetHeader]; value != "" {

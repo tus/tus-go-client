@@ -159,10 +159,7 @@ func generatedURLStorageResumeRequestHeaders(
 		if !field.Required {
 			continue
 		}
-		value := values[field.DisplayName]
-		if value == "" {
-			value = DefaultProtocolVersion
-		}
+		value := generatedTusRequestHeaderValue(values, field.DisplayName)
 		builder = builder.Header(field.DisplayName, expect.ToEqual(value))
 	}
 
@@ -179,10 +176,7 @@ func generatedURLStorageResumeResponseHeaders(
 		if !field.Required {
 			continue
 		}
-		value := values[field.DisplayName]
-		if value == "" {
-			value = DefaultProtocolVersion
-		}
+		value := generatedTusResponseHeaderValue(values, field.DisplayName)
 		response = response.Header(field.DisplayName, value)
 	}
 
