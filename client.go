@@ -49,7 +49,7 @@ type Client struct {
 	// BaseURL is base url the client making queries to. For example, "http://example.com/files"
 	BaseURL *url.URL
 
-	// ProtocolVersion is TUS protocol version will be used in requests. Default is "1.0.0"
+	// ProtocolVersion is TUS protocol version will be used in requests. Default is DefaultProtocolVersion.
 	ProtocolVersion string
 
 	// Server capabilities and settings. Use UpdateCapabilities to query the capabilities from a server
@@ -429,8 +429,13 @@ func (c *Client) UpdateCapabilities() (response *http.Response, err error) {
 }
 
 func (c *Client) tusRequest(ctx context.Context, req *http.Request) (response *http.Response, err error) {
-	if req.Method != http.MethodOptions && req.Header.Get("Tus-Resumable") == "" {
-		req.Header.Set("Tus-Resumable", c.ProtocolVersion)
+	if req.Method != http.MethodOptions {
+		for headerName := range defaultProtocolRequestHeaders {
+			if req.Header.Get(headerName) != "" {
+				continue
+			}
+			req.Header.Set(headerName, c.ProtocolVersion)
+		}
 	}
 	if ctx != nil {
 		req = req.WithContext(ctx)

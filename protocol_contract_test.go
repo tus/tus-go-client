@@ -183,4 +183,17 @@ var _ = Describe("generated TUS protocol contract", func() {
 		Ω(written).Should(Equal(5))
 		Ω(upload.RemoteOffset).Should(Equal(int64(5)))
 	})
+
+	It("exposes generated default protocol headers as defensive copies", func() {
+		Ω(DefaultProtocolRequestHeaders()).Should(Equal(generatedTusDefaultRequestHeaderValues))
+		Ω(DefaultProtocolResponseHeaders()).Should(Equal(generatedTusDefaultResponseHeaderValues))
+
+		requestHeaders := DefaultProtocolRequestHeaders()
+		for headerName := range requestHeaders {
+			requestHeaders[headerName] = "mutated"
+			break
+		}
+
+		Ω(DefaultProtocolRequestHeaders()).Should(Equal(generatedTusDefaultRequestHeaderValues))
+	})
 })
