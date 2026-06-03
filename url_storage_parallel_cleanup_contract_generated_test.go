@@ -340,28 +340,7 @@ func generatedAssertTusParallelCleanupRequestHeaders(
 	operation generatedTusProtocolOperation,
 	values map[string]string,
 ) error {
-	failures := []string{}
-	for _, variant := range operation.Request.HeaderVariants {
-		if err := generatedAssertTusParallelCleanupRequestHeaderVariant(request, variant, values); err != nil {
-			failures = append(failures, err.Error())
-			continue
-		}
-
-		return nil
-	}
-
-	return fmt.Errorf(
-		"no %s request header variant matched: %s",
-		operation.OperationID,
-		strings.Join(failures, "; "),
-	)
-}
-
-func generatedAssertTusParallelCleanupRequestHeaderVariant(
-	request *http.Request,
-	variant generatedTusHeaderVariant,
-	values map[string]string,
-) error {
+	variant := operation.Request.HeaderVariants[0]
 	for _, field := range variant.Fields {
 		if !field.Required {
 			continue
