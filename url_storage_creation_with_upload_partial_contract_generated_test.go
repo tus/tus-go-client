@@ -198,28 +198,26 @@ func TestGeneratedURLStorageCreationWithUploadPartialChunk(t *testing.T) {
 		UploadDataDuringCreation: true,
 		EventHooks: UploadEventHooks{
 			OnProgress: func(bytesSent int64, bytesTotal *int64) error {
-				events = append(events, fmt.Sprintf(
-					"progress:%d:%s",
-					bytesSent,
+				events = append(events, generatedTusEventKeyProgress(
+					generatedTusEventKeyNumber(bytesSent),
 					generatedTusCreationPartialBytesTotalString(bytesTotal),
 				))
 				return nil
 			},
 			OnChunkComplete: func(chunkSize int64, bytesAccepted int64, bytesTotal *int64) error {
-				events = append(events, fmt.Sprintf(
-					"chunk-complete:%d:%d:%s",
-					chunkSize,
-					bytesAccepted,
+				events = append(events, generatedTusEventKeyChunkComplete(
+					generatedTusEventKeyNumber(chunkSize),
+					generatedTusEventKeyNumber(bytesAccepted),
 					generatedTusCreationPartialBytesTotalString(bytesTotal),
 				))
 				return nil
 			},
 			OnUploadURLAvailable: func() error {
-				events = append(events, "upload-url-available")
+				events = append(events, generatedTusEventKeyUploadUrlAvailable())
 				return nil
 			},
 			OnSuccess: func(UploadSuccessPayload) error {
-				events = append(events, "success")
+				events = append(events, generatedTusEventKeySuccess())
 				return nil
 			},
 		},
@@ -263,7 +261,7 @@ type generatedTusCreationPartialSource struct {
 }
 
 func (source *generatedTusCreationPartialSource) Close() error {
-	*source.events = append(*source.events, "source-close")
+	*source.events = append(*source.events, generatedTusEventKeySourceClose())
 	return nil
 }
 

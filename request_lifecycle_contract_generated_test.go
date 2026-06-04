@@ -85,7 +85,9 @@ func TestGeneratedRequestLifecycleHooks(t *testing.T) {
 			); err != nil {
 				return err
 			}
-			events = append(events, fmt.Sprintf("before-request:%d", beforeRequestIndex))
+			events = append(events, generatedTusEventKeyBeforeRequest(
+				generatedTusEventKeyNumber(int64(beforeRequestIndex)),
+			))
 			beforeRequestIndex += 1
 			return nil
 		},
@@ -107,7 +109,9 @@ func TestGeneratedRequestLifecycleHooks(t *testing.T) {
 			); err != nil {
 				return err
 			}
-			events = append(events, fmt.Sprintf("after-response:%d", afterResponseIndex))
+			events = append(events, generatedTusEventKeyAfterResponse(
+				generatedTusEventKeyNumber(int64(afterResponseIndex)),
+			))
 			afterResponseIndex += 1
 			return nil
 		},

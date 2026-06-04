@@ -5,7 +5,6 @@
 package tusgo
 
 import (
-	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -234,9 +233,14 @@ func TestGeneratedURLStorageRetryOffsetRecoveryFlow(t *testing.T) {
 			if retryAttempt != expected.RetryAttempt {
 				t.Fatalf("expected retry attempt %d, got %d", expected.RetryAttempt, retryAttempt)
 			}
-			events = append(events, fmt.Sprintf("should-retry:%d:%t", retryAttempt, expected.Decision))
+			events = append(events, generatedTusEventKeyShouldRetry(
+				generatedTusEventKeyNumber(int64(retryAttempt)),
+				generatedTusEventKeyBool(expected.Decision),
+			))
 			if expected.Decision {
-				events = append(events, fmt.Sprintf("retry-schedule:%d", generatedTusRetryFlowRetryDelays[retryAttempt].Milliseconds()))
+				events = append(events, generatedTusEventKeyRetrySchedule(
+					generatedTusEventKeyNumber(generatedTusRetryFlowRetryDelays[retryAttempt].Milliseconds()),
+				))
 			}
 			retryDecisionIndex += 1
 			return expected.Decision

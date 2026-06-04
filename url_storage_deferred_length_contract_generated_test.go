@@ -146,28 +146,26 @@ func TestGeneratedURLStorageDeferredLengthUpload(t *testing.T) {
 		UploadLengthDeferred: true,
 		EventHooks: UploadEventHooks{
 			OnProgress: func(bytesSent int64, bytesTotal *int64) error {
-				events = append(events, fmt.Sprintf(
-					"progress:%d:%s",
-					bytesSent,
+				events = append(events, generatedTusEventKeyProgress(
+					generatedTusEventKeyNumber(bytesSent),
 					generatedTusDeferredLengthBytesTotalString(bytesTotal),
 				))
 				return nil
 			},
 			OnChunkComplete: func(chunkSize int64, bytesAccepted int64, bytesTotal *int64) error {
-				events = append(events, fmt.Sprintf(
-					"chunk-complete:%d:%d:%s",
-					chunkSize,
-					bytesAccepted,
+				events = append(events, generatedTusEventKeyChunkComplete(
+					generatedTusEventKeyNumber(chunkSize),
+					generatedTusEventKeyNumber(bytesAccepted),
 					generatedTusDeferredLengthBytesTotalString(bytesTotal),
 				))
 				return nil
 			},
 			OnUploadURLAvailable: func() error {
-				events = append(events, "upload-url-available")
+				events = append(events, generatedTusEventKeyUploadUrlAvailable())
 				return nil
 			},
 			OnSuccess: func(UploadSuccessPayload) error {
-				events = append(events, "success")
+				events = append(events, generatedTusEventKeySuccess())
 				return nil
 			},
 		},
@@ -203,7 +201,7 @@ type generatedTusDeferredLengthSource struct {
 }
 
 func (source *generatedTusDeferredLengthSource) Close() error {
-	*source.events = append(*source.events, "source-close")
+	*source.events = append(*source.events, generatedTusEventKeySourceClose())
 	return nil
 }
 

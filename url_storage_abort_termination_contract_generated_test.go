@@ -114,7 +114,9 @@ func TestGeneratedAbortTerminatesKnownUpload(t *testing.T) {
 			if actual := request.Header.Get(generatedTusAbortTerminationOverrideHeader); actual != generatedTusAbortTerminationOverrideValue {
 				recordRequestErr(fmt.Errorf("expected override header %s, got %s", generatedTusAbortTerminationOverrideValue, actual))
 			}
-			events = append(events, fmt.Sprintf("request-abort:%d", generatedTusAbortTerminationCancelRequestIndex))
+			events = append(events, generatedTusEventKeyRequestAbort(
+				generatedTusEventKeyNumber(int64(generatedTusAbortTerminationCancelRequestIndex)),
+			))
 			close(patchStarted)
 			<-request.Context().Done()
 

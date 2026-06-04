@@ -221,18 +221,16 @@ func TestGeneratedURLStorageParallelUploadConcatFlow(t *testing.T) {
 		ParallelUploads:           generatedTusParallelConformanceUploadCount,
 		EventHooks: UploadEventHooks{
 			OnProgress: func(bytesSent int64, bytesTotal *int64) error {
-				events = append(events, fmt.Sprintf(
-					"progress:%d:%s",
-					bytesSent,
+				events = append(events, generatedTusEventKeyProgress(
+					generatedTusEventKeyNumber(bytesSent),
 					generatedTusParallelBytesTotalString(bytesTotal),
 				))
 				return nil
 			},
 			OnChunkComplete: func(chunkSize int64, bytesAccepted int64, bytesTotal *int64) error {
-				events = append(events, fmt.Sprintf(
-					"chunk-complete:%d:%d:%s",
-					chunkSize,
-					bytesAccepted,
+				events = append(events, generatedTusEventKeyChunkComplete(
+					generatedTusEventKeyNumber(chunkSize),
+					generatedTusEventKeyNumber(bytesAccepted),
 					generatedTusParallelBytesTotalString(bytesTotal),
 				))
 				return nil

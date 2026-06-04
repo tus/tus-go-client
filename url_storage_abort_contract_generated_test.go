@@ -57,7 +57,9 @@ func TestGeneratedAbortUploadContext(t *testing.T) {
 		); err != nil {
 			requestErr = err
 		}
-		events = append(events, fmt.Sprintf("request-abort:%d", generatedTusAbortCancelRequestIndex))
+		events = append(events, generatedTusEventKeyRequestAbort(
+			generatedTusEventKeyNumber(int64(generatedTusAbortCancelRequestIndex)),
+		))
 		close(requestStarted)
 		<-request.Context().Done()
 	}))

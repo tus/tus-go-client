@@ -119,19 +119,18 @@ func TestGeneratedURLStorageCreationWithUpload(t *testing.T) {
 		UploadDataDuringCreation: true,
 		EventHooks: UploadEventHooks{
 			OnProgress: func(bytesSent int64, bytesTotal *int64) error {
-				events = append(events, fmt.Sprintf(
-					"progress:%d:%s",
-					bytesSent,
+				events = append(events, generatedTusEventKeyProgress(
+					generatedTusEventKeyNumber(bytesSent),
 					generatedTusCreationWithUploadBytesTotalString(bytesTotal),
 				))
 				return nil
 			},
 			OnUploadURLAvailable: func() error {
-				events = append(events, "upload-url-available")
+				events = append(events, generatedTusEventKeyUploadUrlAvailable())
 				return nil
 			},
 			OnSuccess: func(UploadSuccessPayload) error {
-				events = append(events, "success")
+				events = append(events, generatedTusEventKeySuccess())
 				return nil
 			},
 		},
@@ -170,7 +169,7 @@ type generatedTusCreationWithUploadSource struct {
 }
 
 func (source *generatedTusCreationWithUploadSource) Close() error {
-	*source.events = append(*source.events, "source-close")
+	*source.events = append(*source.events, generatedTusEventKeySourceClose())
 	return nil
 }
 

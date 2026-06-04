@@ -4,7 +4,11 @@
 
 package tusgo
 
-import "testing"
+import (
+	"strconv"
+	"strings"
+	"testing"
+)
 
 type generatedTusWireVersion struct {
 	Default bool
@@ -81,6 +85,7 @@ type generatedTusClientUrlStorageIDPolicy struct {
 
 var generatedTusDefaultRequestHeaderValues = map[string]string{"Tus-Resumable": "1.0.0"}
 var generatedTusDefaultResponseHeaderValues = map[string]string{"Tus-Resumable": "1.0.0"}
+var generatedTusAllowedExtraEventPrefixes = []string{"progress:"}
 
 func generatedTusHeaderValue(defaultValues map[string]string, values map[string]string, name string) string {
 	if value, ok := values[name]; ok {
@@ -2399,13 +2404,14 @@ func generatedTusAssertEvents(
 			expectedIndex += 1
 			continue
 		}
-		if generatedTusIsProgressEventKey(event) {
+		if generatedTusHasAllowedExtraEventPrefix(event, generatedTusAllowedExtraEventPrefixes) {
 			continue
 		}
 		t.Fatalf(
-			"%s emitted unexpected non-progress event %s; expected %#v, got %#v",
+			"%s emitted unexpected extra event %s; allowed prefixes %#v; expected %#v, got %#v",
 			scenarioID,
 			event,
+			generatedTusAllowedExtraEventPrefixes,
 			expected,
 			actual,
 		)
@@ -2461,9 +2467,94 @@ func generatedTusFindClientFeature(featureID string) *generatedTusClientFeature 
 	return nil
 }
 
-func generatedTusIsProgressEventKey(event string) bool {
-	const prefix = "progress:"
-	return len(event) >= len(prefix) && event[:len(prefix)] == prefix
+func generatedTusHasAllowedExtraEventPrefix(event string, allowedExtraPrefixes []string) bool {
+	for _, prefix := range allowedExtraPrefixes {
+		if len(event) >= len(prefix) && event[:len(prefix)] == prefix {
+			return true
+		}
+	}
+
+	return false
+}
+
+func generatedTusEventKey(kind string, parts ...string) string {
+	if len(parts) == 0 {
+		return kind
+	}
+
+	return kind + ":" + strings.Join(parts, ":")
+}
+
+func generatedTusEventKeyBool(value bool) string {
+	if value {
+		return "true"
+	}
+
+	return "false"
+}
+
+func generatedTusEventKeyNumber(value int64) string {
+	return strconv.FormatInt(value, 10)
+}
+
+func generatedTusEventKeyAfterResponse(requestIndex string) string {
+	return generatedTusEventKey("after-response", requestIndex)
+}
+
+func generatedTusEventKeyBeforeRequest(requestIndex string) string {
+	return generatedTusEventKey("before-request", requestIndex)
+}
+
+func generatedTusEventKeyChunkComplete(chunkSize string, bytesAccepted string, bytesTotal string) string {
+	return generatedTusEventKey("chunk-complete", chunkSize, bytesAccepted, bytesTotal)
+}
+
+func generatedTusEventKeyFingerprint(fingerprint string) string {
+	return generatedTusEventKey("fingerprint", fingerprint)
+}
+
+func generatedTusEventKeyProgress(bytesSent string, bytesTotal string) string {
+	return generatedTusEventKey("progress", bytesSent, bytesTotal)
+}
+
+func generatedTusEventKeyRequestAbort(requestIndex string) string {
+	return generatedTusEventKey("request-abort", requestIndex)
+}
+
+func generatedTusEventKeyRetrySchedule(delay string) string {
+	return generatedTusEventKey("retry-schedule", delay)
+}
+
+func generatedTusEventKeyShouldRetry(retryAttempt string, decision string) string {
+	return generatedTusEventKey("should-retry", retryAttempt, decision)
+}
+
+func generatedTusEventKeySourceClose() string {
+	return generatedTusEventKey("source-close")
+}
+
+func generatedTusEventKeySourceOpen(inputKind string, size string) string {
+	return generatedTusEventKey("source-open", inputKind, size)
+}
+
+func generatedTusEventKeySuccess() string {
+	return generatedTusEventKey("success")
+}
+
+func generatedTusEventKeyUploadUrlAvailable() string {
+	return generatedTusEventKey("upload-url-available")
+}
+
+func generatedTusEventKeyUrlStorageAdd(fingerprint string, uploadUrl string) string {
+	return generatedTusEventKey("url-storage-add", fingerprint, uploadUrl)
+}
+
+func generatedTusEventKeyUrlStorageFind(fingerprint string, count string) string {
+	return generatedTusEventKey("url-storage-find", fingerprint, count)
+}
+
+func generatedTusEventKeyUrlStorageRemove(urlStorageKey string) string {
+	return generatedTusEventKey("url-storage-remove", urlStorageKey)
 }
 
 func generatedTusStringSlicesEqual(expected []string, actual []string) bool {

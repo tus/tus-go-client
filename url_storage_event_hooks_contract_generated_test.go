@@ -119,23 +119,25 @@ func TestGeneratedURLStorageEventHooks(t *testing.T) {
 		Metadata:    generatedTusEventHooksMetadata,
 		EventHooks: UploadEventHooks{
 			OnUploadURLAvailable: func() error {
-				events = append(events, "upload-url-available")
+				events = append(events, generatedTusEventKeyUploadUrlAvailable())
 				return nil
 			},
 			OnProgress: func(bytesSent int64, bytesTotal *int64) error {
 				events = append(
 					events,
-					fmt.Sprintf("progress:%d:%s", bytesSent, generatedTusEventHooksTotal(bytesTotal)),
+					generatedTusEventKeyProgress(
+						generatedTusEventKeyNumber(bytesSent),
+						generatedTusEventHooksTotal(bytesTotal),
+					),
 				)
 				return nil
 			},
 			OnChunkComplete: func(chunkSize int64, bytesAccepted int64, bytesTotal *int64) error {
 				events = append(
 					events,
-					fmt.Sprintf(
-						"chunk-complete:%d:%d:%s",
-						chunkSize,
-						bytesAccepted,
+					generatedTusEventKeyChunkComplete(
+						generatedTusEventKeyNumber(chunkSize),
+						generatedTusEventKeyNumber(bytesAccepted),
 						generatedTusEventHooksTotal(bytesTotal),
 					),
 				)
@@ -152,7 +154,7 @@ func TestGeneratedURLStorageEventHooks(t *testing.T) {
 						payload.LastResponse,
 					)
 				}
-				events = append(events, "success")
+				events = append(events, generatedTusEventKeySuccess())
 				return nil
 			},
 		},
@@ -183,7 +185,7 @@ type generatedTusEventHooksSource struct {
 }
 
 func (source *generatedTusEventHooksSource) Close() error {
-	*source.events = append(*source.events, "source-close")
+	*source.events = append(*source.events, generatedTusEventKeySourceClose())
 	return nil
 }
 
