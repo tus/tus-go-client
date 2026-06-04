@@ -66,8 +66,11 @@ func TestGeneratedAbortTerminatesKnownUpload(t *testing.T) {
 				request,
 				createOperation,
 				map[string]string{
-					"Upload-Metadata": encodedMetadata,
+					"Tus-Resumable":   "1.0.0",
 					"Upload-Length":   generatedTusAbortTerminationUploadLength,
+					"Upload-Metadata": encodedMetadata,
+					"X-Tus-Contract":  "abort-policy",
+					"X-Tus-Trace":     "abort-trace-123",
 				},
 			))
 			recordRequestErr(generatedAssertTusAbortTerminationCustomHeaders(
@@ -79,7 +82,8 @@ func TestGeneratedAbortTerminatesKnownUpload(t *testing.T) {
 				responseWriter,
 				createResponse,
 				map[string]string{
-					"Location": server.URL + generatedTusAbortTerminationUploadPath,
+					"Location":      server.URL + generatedTusAbortTerminationUploadPath,
+					"Tus-Resumable": "1.0.0",
 				},
 			)
 			responseWriter.WriteHeader(201)
@@ -95,9 +99,12 @@ func TestGeneratedAbortTerminatesKnownUpload(t *testing.T) {
 				request,
 				patchOperation,
 				map[string]string{
-					generatedTusAbortTerminationContentTypeHeader: generatedTusAbortTerminationContentType,
-					generatedTusAbortTerminationOffsetHeader:      generatedTusAbortTerminationPatchOffset,
-					generatedTusAbortTerminationOverrideHeader:    generatedTusAbortTerminationOverrideValue,
+					"Content-Type":           generatedTusAbortTerminationContentType,
+					"Tus-Resumable":          "1.0.0",
+					"Upload-Offset":          generatedTusAbortTerminationPatchOffset,
+					"X-HTTP-Method-Override": generatedTusAbortTerminationOverrideValue,
+					"X-Tus-Contract":         "abort-policy",
+					"X-Tus-Trace":            "abort-trace-123",
 				},
 			))
 			recordRequestErr(generatedAssertTusAbortTerminationCustomHeaders(

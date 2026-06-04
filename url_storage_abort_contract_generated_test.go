@@ -50,8 +50,9 @@ func TestGeneratedAbortUploadContext(t *testing.T) {
 			request,
 			createOperation,
 			map[string]string{
-				"Upload-Metadata": encodedMetadata,
+				"Tus-Resumable":   "1.0.0",
 				"Upload-Length":   generatedTusAbortUploadLength,
+				"Upload-Metadata": encodedMetadata,
 			},
 		); err != nil {
 			requestErr = err

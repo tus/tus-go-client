@@ -74,8 +74,10 @@ func TestGeneratedURLStorageCreationWithUpload(t *testing.T) {
 			request,
 			createOperation,
 			map[string]string{
-				generatedTusCreationWithUploadLengthHeader:   generatedTusCreationWithUploadLength,
-				generatedTusCreationWithUploadMetadataHeader: encodedMetadata,
+				"Content-Type":    generatedTusCreationWithUploadContentType,
+				"Tus-Resumable":   "1.0.0",
+				"Upload-Length":   generatedTusCreationWithUploadLength,
+				"Upload-Metadata": encodedMetadata,
 			},
 		))
 		createResponse := generatedResponseFor(createOperation, 201)
@@ -84,7 +86,8 @@ func TestGeneratedURLStorageCreationWithUpload(t *testing.T) {
 			createResponse,
 			map[string]string{
 				"Location": server.URL + generatedTusCreationWithUploadPath,
-				generatedTusCreationWithUploadOffsetHeader: generatedTusCreationWithUploadOffset,
+				"Tus-Resumable": "1.0.0",
+				"Upload-Offset": generatedTusCreationWithUploadOffset,
 			},
 		)
 		responseWriter.WriteHeader(createResponse.StatusCode)

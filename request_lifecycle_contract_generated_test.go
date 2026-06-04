@@ -48,6 +48,7 @@ func TestGeneratedRequestLifecycleHooks(t *testing.T) {
 		reply.Status(getResponse.StatusCode),
 		getResponse,
 		map[string]string{
+			"Tus-Resumable": "1.0.0",
 			"Upload-Length": generatedTusRequestLifecycleUploadLength,
 			"Upload-Offset": generatedTusRequestLifecycleUploadOffset,
 		},
@@ -99,6 +100,7 @@ func TestGeneratedRequestLifecycleHooks(t *testing.T) {
 				response,
 				getResponse,
 				map[string]string{
+					"Tus-Resumable": "1.0.0",
 					"Upload-Length": generatedTusRequestLifecycleUploadLength,
 					"Upload-Offset": generatedTusRequestLifecycleUploadOffset,
 				},
