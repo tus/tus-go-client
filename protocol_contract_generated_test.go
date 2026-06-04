@@ -540,7 +540,7 @@ var generatedTusClientFeatures = []generatedTusClientFeature{
 			ScenarioIDs: []string{"deferredLengthUpload", "deferredLengthChunkedUpload"},
 			Status:      "covered-by-generated-scenario",
 		},
-		Description: "Create an upload without a known length and declare the length on first PATCH.",
+		Description: "Create an upload without a known length and declare the length on the final upload request.",
 		FeatureID:   "deferredLengthUpload",
 		Flow: []generatedTusClientFeatureFlowStep{
 			{
@@ -555,18 +555,18 @@ var generatedTusClientFeatures = []generatedTusClientFeature{
 				OperationID: "",
 				Primitive:   "defer-upload-length",
 				Condition:   "",
-				Summary:     "Track the source so the first PATCH can declare the total size.",
+				Summary:     "Track the source until the final upload request reveals the total size.",
 			},
 			{
 				Kind:        "operation",
 				OperationID: "patchTusUpload",
 				Primitive:   "",
 				Condition:   "",
-				Summary:     "Declare Upload-Length on the first chunk request.",
+				Summary:     "Declare Upload-Length on the final upload request.",
 			},
 		},
 		OperationIDs: []string{"createTusUpload", "patchTusUpload"},
-		Primitives:   []string{"defer-upload-length", "emit-progress"},
+		Primitives:   []string{"defer-upload-length", "emit-chunk-complete", "emit-progress"},
 	},
 	{
 		Conformance: generatedTusClientFeatureConformance{

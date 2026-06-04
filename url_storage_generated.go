@@ -43,7 +43,7 @@ const (
 	generatedTusCreationWithUploadExtension     = "creation-with-upload"
 	generatedTusCreationWithUploadResponseOff   = "accepted-offset"
 	generatedTusDeferredLengthCreateSize        = "size-unknown"
-	generatedTusDeferredLengthDeclareLength     = "first-patch"
+	generatedTusDeferredLengthDeclareLength     = "final-upload-request"
 	generatedTusDeferredLengthExtension         = "creation-defer-length"
 	generatedTusDefaultParallelUploads          = 1
 	generatedTusMinimumParallelUploads          = 2
@@ -1424,7 +1424,7 @@ func generatedTusAssertDeferredLengthPolicySupported() error {
 			generatedTusDeferredLengthCreateSize,
 		)
 	}
-	if generatedTusDeferredLengthDeclareLength != "first-patch" {
+	if generatedTusDeferredLengthDeclareLength != "final-upload-request" {
 		return fmt.Errorf(
 			"tus: unsupported deferred length declaration policy %s",
 			generatedTusDeferredLengthDeclareLength,

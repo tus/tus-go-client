@@ -16,7 +16,7 @@ import (
 
 const (
 	generatedTusCustomHeadersContent           = "hello world"
-	generatedTusCustomHeadersContentType       = "application/x-tus-custom-body"
+	generatedTusCustomHeadersContentType       = "application/offset+octet-stream"
 	generatedTusCustomHeadersContentTypeHeader = "Content-Type"
 	generatedTusCustomHeadersEndpointPath      = "/uploads"
 	generatedTusCustomHeadersLength            = "11"
@@ -28,7 +28,7 @@ const (
 	generatedTusCustomHeadersAcceptedOffset    = "11"
 )
 
-var generatedTusCustomHeaders = map[string]string{"Content-Type": "application/x-tus-custom-body", "X-Tus-Contract": "custom-header", "X-Tus-Trace": "trace-123"}
+var generatedTusCustomHeaders = map[string]string{"X-Tus-Contract": "custom-header", "X-Tus-Trace": "trace-123"}
 var generatedTusCustomHeadersMetadata = map[string]string{"filename": "hello.txt"}
 
 func TestGeneratedURLStorageCustomRequestHeaders(t *testing.T) {
@@ -56,7 +56,6 @@ func TestGeneratedURLStorageCustomRequestHeaders(t *testing.T) {
 				request,
 				createOperation,
 				map[string]string{
-					"Content-Type":    "application/x-tus-custom-body",
 					"Tus-Resumable":   "1.0.0",
 					"Upload-Length":   generatedTusCustomHeadersLength,
 					"Upload-Metadata": encodedMetadata,
