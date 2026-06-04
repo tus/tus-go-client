@@ -91,9 +91,10 @@ func TestGeneratedURLStorageParallelUploadConcatFlow(t *testing.T) {
 				request,
 				createOperation,
 				map[string]string{
+					"Tus-Resumable":   "1.0.0",
 					"Upload-Concat":   "partial",
-					"Upload-Metadata": encodedPartialMetadata,
 					"Upload-Length":   generatedTusParallelPartUploadLengths[partIndex],
+					"Upload-Metadata": encodedPartialMetadata,
 				},
 			))
 			createResponse := generatedResponseFor(createOperation, http.StatusCreated)
@@ -101,7 +102,8 @@ func TestGeneratedURLStorageParallelUploadConcatFlow(t *testing.T) {
 				responseWriter,
 				createResponse,
 				map[string]string{
-					"Location": server.URL + generatedTusParallelPartUploadPaths[partIndex],
+					"Location":      server.URL + generatedTusParallelPartUploadPaths[partIndex],
+					"Tus-Resumable": "1.0.0",
 				},
 			)
 			responseWriter.WriteHeader(createResponse.StatusCode)
@@ -123,6 +125,7 @@ func TestGeneratedURLStorageParallelUploadConcatFlow(t *testing.T) {
 				request,
 				createOperation,
 				map[string]string{
+					"Tus-Resumable":   "1.0.0",
 					"Upload-Concat":   generatedTusParallelFinalConcatHeader(server.URL),
 					"Upload-Metadata": encodedMetadata,
 				},
@@ -132,7 +135,8 @@ func TestGeneratedURLStorageParallelUploadConcatFlow(t *testing.T) {
 				responseWriter,
 				finalResponse,
 				map[string]string{
-					"Location": server.URL + generatedTusParallelFinalPath,
+					"Location":      server.URL + generatedTusParallelFinalPath,
+					"Tus-Resumable": "1.0.0",
 				},
 			)
 			responseWriter.WriteHeader(finalResponse.StatusCode)
@@ -172,7 +176,8 @@ func TestGeneratedURLStorageParallelUploadConcatFlow(t *testing.T) {
 				request,
 				patchOperation,
 				map[string]string{
-					"Content-Type":  patchOperation.Request.ContentType,
+					"Content-Type":  "application/offset+octet-stream",
+					"Tus-Resumable": "1.0.0",
 					"Upload-Offset": generatedTusParallelPartPatchOffsets[partIndex],
 				},
 			))
@@ -181,6 +186,7 @@ func TestGeneratedURLStorageParallelUploadConcatFlow(t *testing.T) {
 				responseWriter,
 				patchResponse,
 				map[string]string{
+					"Tus-Resumable": "1.0.0",
 					"Upload-Offset": generatedTusParallelPartPatchAcceptedOffsets[partIndex],
 				},
 			)

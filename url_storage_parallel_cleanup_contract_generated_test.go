@@ -96,9 +96,12 @@ func TestGeneratedURLStorageParallelUploadCleanup(t *testing.T) {
 				request,
 				createOperation,
 				map[string]string{
+					"Tus-Resumable":   "1.0.0",
 					"Upload-Concat":   "partial",
-					"Upload-Metadata": encodedPartialMetadata,
 					"Upload-Length":   generatedTusParallelCleanupPartUploadLengths[partIndex],
+					"Upload-Metadata": encodedPartialMetadata,
+					"X-Tus-Contract":  "parallel-cleanup-policy",
+					"X-Tus-Trace":     "parallel-cleanup-trace-123",
 				},
 			))
 			recordRequestErr(generatedAssertTusParallelCleanupCustomHeaders(
@@ -110,7 +113,8 @@ func TestGeneratedURLStorageParallelUploadCleanup(t *testing.T) {
 				responseWriter,
 				createResponse,
 				map[string]string{
-					"Location": server.URL + generatedTusParallelCleanupPartUploadPaths[partIndex],
+					"Location":      server.URL + generatedTusParallelCleanupPartUploadPaths[partIndex],
+					"Tus-Resumable": "1.0.0",
 				},
 			)
 			responseWriter.WriteHeader(createResponse.StatusCode)
@@ -150,9 +154,12 @@ func TestGeneratedURLStorageParallelUploadCleanup(t *testing.T) {
 				request,
 				patchOperation,
 				map[string]string{
-					generatedTusParallelCleanupContentTypeHeader: generatedTusParallelCleanupContentType,
-					generatedTusParallelCleanupOffsetHeader:      generatedTusParallelCleanupPartPatchOffsets[partIndex],
-					generatedTusParallelCleanupOverrideHeader:    generatedTusParallelCleanupOverrideValue,
+					"Content-Type":           generatedTusParallelCleanupContentType,
+					"Tus-Resumable":          "1.0.0",
+					"Upload-Offset":          generatedTusParallelCleanupPartPatchOffsets[partIndex],
+					"X-HTTP-Method-Override": generatedTusParallelCleanupOverrideValue,
+					"X-Tus-Contract":         "parallel-cleanup-policy",
+					"X-Tus-Trace":            "parallel-cleanup-trace-123",
 				},
 			))
 			recordRequestErr(generatedAssertTusParallelCleanupCustomHeaders(
@@ -340,7 +347,28 @@ func generatedAssertTusParallelCleanupRequestHeaders(
 	operation generatedTusProtocolOperation,
 	values map[string]string,
 ) error {
-	variant := operation.Request.HeaderVariants[0]
+	failures := []string{}
+	for _, variant := range operation.Request.HeaderVariants {
+		if err := generatedAssertTusParallelCleanupRequestHeaderVariant(request, variant, values); err != nil {
+			failures = append(failures, err.Error())
+			continue
+		}
+
+		return nil
+	}
+
+	return fmt.Errorf(
+		"no %s request header variant matched: %s",
+		operation.OperationID,
+		strings.Join(failures, "; "),
+	)
+}
+
+func generatedAssertTusParallelCleanupRequestHeaderVariant(
+	request *http.Request,
+	variant generatedTusHeaderVariant,
+	values map[string]string,
+) error {
 	for _, field := range variant.Fields {
 		if !field.Required {
 			continue
