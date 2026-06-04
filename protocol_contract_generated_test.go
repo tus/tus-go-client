@@ -2477,12 +2477,10 @@ func generatedTusHasAllowedExtraEventPrefix(event string, allowedExtraPrefixes [
 	return false
 }
 
-func generatedTusEventKey(kind string, parts ...string) string {
-	if len(parts) == 0 {
-		return kind
-	}
+const generatedTusEventKeyPartSeparator = ":"
 
-	return kind + ":" + strings.Join(parts, ":")
+func generatedTusEventKey(parts ...string) string {
+	return strings.Join(parts, generatedTusEventKeyPartSeparator)
 }
 
 func generatedTusEventKeyBool(value bool) string {
