@@ -22,6 +22,7 @@ const (
 	generatedTusRequestLifecycleUploadPath   = "/uploads/request-hooks-contract"
 )
 
+var generatedTusRequestLifecycleExtraEventPrefixes = []string{}
 var generatedTusRequestLifecycleExpectedHookEvents = []string{"before-request:0", "after-response:0"}
 
 func TestGeneratedRequestLifecycleHooks(t *testing.T) {
@@ -134,7 +135,7 @@ func TestGeneratedRequestLifecycleHooks(t *testing.T) {
 	if upload.RemoteSize != 11 {
 		t.Fatalf("expected upload length %s, got %d", generatedTusRequestLifecycleUploadLength, upload.RemoteSize)
 	}
-	generatedTusAssertEvents(t, "requestLifecycleHooks", generatedTusRequestLifecycleEventPolicy, generatedTusRequestLifecycleExpectedHookEvents, events)
+	generatedTusAssertEvents(t, "requestLifecycleHooks", generatedTusRequestLifecycleEventPolicy, generatedTusRequestLifecycleExtraEventPrefixes, generatedTusRequestLifecycleExpectedHookEvents, events)
 }
 
 func generatedRequestLifecycleRequestHeaders(

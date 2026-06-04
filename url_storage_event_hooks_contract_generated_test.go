@@ -27,6 +27,7 @@ const (
 	generatedTusEventHooksUploadLength        = "11"
 )
 
+var generatedTusEventHooksExtraEventPrefixes = []string{"progress:"}
 var generatedTusEventHooksExpectedEvents = []string{"upload-url-available", "progress:0:11", "progress:11:11", "chunk-complete:11:11:11", "success", "source-close"}
 var generatedTusEventHooksMetadata = map[string]string{"filename": "hello.txt"}
 
@@ -168,7 +169,7 @@ func TestGeneratedURLStorageEventHooks(t *testing.T) {
 	if upload.RemoteOffset != 11 {
 		t.Fatalf("expected upload offset 11, got %d", upload.RemoteOffset)
 	}
-	generatedTusAssertEvents(t, "singleUploadLifecycle", generatedTusEventHooksEventPolicy, generatedTusEventHooksExpectedEvents, events)
+	generatedTusAssertEvents(t, "singleUploadLifecycle", generatedTusEventHooksEventPolicy, generatedTusEventHooksExtraEventPrefixes, generatedTusEventHooksExpectedEvents, events)
 }
 
 func generatedTusEventHooksTotal(bytesTotal *int64) string {

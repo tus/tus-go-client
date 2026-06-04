@@ -34,6 +34,7 @@ const (
 	generatedTusParallelCleanupUploadCount        = 2
 )
 
+var generatedTusParallelCleanupExtraEventPrefixes = []string{}
 var generatedTusParallelCleanupExpectedEvents = []string{"request-abort:3"}
 var generatedTusParallelCleanupHeaders = map[string]string{"X-Tus-Contract": "parallel-cleanup-policy", "X-Tus-Trace": "parallel-cleanup-trace-123"}
 var generatedTusParallelCleanupMetadataForPartialUploads = map[string]string{"test": "world"}
@@ -264,7 +265,7 @@ func TestGeneratedURLStorageParallelUploadCleanup(t *testing.T) {
 	if actualTerminatedParts != generatedTusParallelCleanupUploadCount {
 		t.Fatalf("expected all partial uploads to be terminated, got %#v", terminatedParts)
 	}
-	generatedTusAssertEvents(t, "parallelUploadAbortCleanup", generatedTusParallelCleanupEventPolicy, generatedTusParallelCleanupExpectedEvents, actualEvents)
+	generatedTusAssertEvents(t, "parallelUploadAbortCleanup", generatedTusParallelCleanupEventPolicy, generatedTusParallelCleanupExtraEventPrefixes, generatedTusParallelCleanupExpectedEvents, actualEvents)
 	select {
 	case err := <-requestErrs:
 		t.Fatal(err)

@@ -36,6 +36,7 @@ const (
 )
 
 var generatedTusAbortTerminationHeaders = map[string]string{"X-Tus-Contract": "abort-policy", "X-Tus-Trace": "abort-trace-123"}
+var generatedTusAbortTerminationExtraEventPrefixes = []string{}
 var generatedTusAbortTerminationExpectedEvents = []string{"request-abort:1"}
 var generatedTusAbortTerminationMetadata = map[string]string{"filename": "hello.txt"}
 
@@ -207,7 +208,7 @@ func TestGeneratedAbortTerminatesKnownUpload(t *testing.T) {
 		t.Fatal(err)
 	default:
 	}
-	generatedTusAssertEvents(t, "abortUploadAfterStoredUrl", generatedTusAbortTerminationEventPolicy, generatedTusAbortTerminationExpectedEvents, events)
+	generatedTusAssertEvents(t, "abortUploadAfterStoredUrl", generatedTusAbortTerminationEventPolicy, generatedTusAbortTerminationExtraEventPrefixes, generatedTusAbortTerminationExpectedEvents, events)
 
 	storedUploads, err := storage.FindAllUploads()
 	if err != nil {

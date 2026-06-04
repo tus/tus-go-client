@@ -36,6 +36,7 @@ const (
 	generatedTusCreationPartialChunkSize         = 5
 )
 
+var generatedTusCreationPartialExtraEventPrefixes = []string{"progress:"}
 var generatedTusCreationPartialExpectedEvents = []string{"progress:0:11", "progress:5:11", "upload-url-available", "chunk-complete:5:5:11", "progress:5:11", "progress:10:11", "chunk-complete:5:10:11", "progress:10:11", "progress:11:11", "chunk-complete:1:11:11", "success", "source-close"}
 var generatedTusCreationPartialMetadata = map[string]string{"filename": "hello.txt"}
 
@@ -244,7 +245,7 @@ func TestGeneratedURLStorageCreationWithUploadPartialChunk(t *testing.T) {
 		t.Fatal(err)
 	default:
 	}
-	generatedTusAssertEvents(t, "creationWithUploadPartialChunk", generatedTusCreationPartialEventPolicy, generatedTusCreationPartialExpectedEvents, events)
+	generatedTusAssertEvents(t, "creationWithUploadPartialChunk", generatedTusCreationPartialEventPolicy, generatedTusCreationPartialExtraEventPrefixes, generatedTusCreationPartialExpectedEvents, events)
 
 	storedUploads, err := storage.FindUploadsByFingerprint("contract-creation-with-upload-partial-fingerprint")
 	if err != nil {

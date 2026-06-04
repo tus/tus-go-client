@@ -38,6 +38,7 @@ type generatedTusChunkCompleteAction struct {
 	TerminateUpload bool
 }
 
+var generatedTusTerminateFlowExtraEventPrefixes = []string{}
 var generatedTusTerminateFlowExpectedEvents = []string{"should-retry:0:true", "retry-schedule:0"}
 var generatedTusTerminateFlowMetadata = map[string]string{"filename": "hello.txt"}
 var generatedTusTerminateFlowOnChunkCompleteActions = []generatedTusChunkCompleteAction{
@@ -215,7 +216,7 @@ func TestGeneratedTerminationRetryFlow(t *testing.T) {
 	if retryDecisionIndex != len(generatedTusTerminateFlowShouldRetryEvents) {
 		t.Fatalf("expected %d termination retry decisions, got %d", len(generatedTusTerminateFlowShouldRetryEvents), retryDecisionIndex)
 	}
-	generatedTusAssertEvents(t, "terminateWithRetry", generatedTusTerminateFlowEventPolicy, generatedTusTerminateFlowExpectedEvents, events)
+	generatedTusAssertEvents(t, "terminateWithRetry", generatedTusTerminateFlowEventPolicy, generatedTusTerminateFlowExtraEventPrefixes, generatedTusTerminateFlowExpectedEvents, events)
 }
 
 func generatedTusRunTerminateFlowChunkCompleteActions(

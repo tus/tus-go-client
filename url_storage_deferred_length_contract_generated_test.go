@@ -31,6 +31,7 @@ const (
 )
 
 var generatedTusDeferredLengthCreateAbsentHeaders = []string{"Upload-Length"}
+var generatedTusDeferredLengthExtraEventPrefixes = []string{"progress:"}
 var generatedTusDeferredLengthExpectedEvents = []string{"upload-url-available", "progress:0:11", "progress:11:11", "chunk-complete:11:11:11", "success", "source-close"}
 var generatedTusDeferredLengthMetadata = map[string]string{"filename": "hello.txt"}
 
@@ -184,7 +185,7 @@ func TestGeneratedURLStorageDeferredLengthUpload(t *testing.T) {
 		t.Fatal(err)
 	default:
 	}
-	generatedTusAssertEvents(t, "deferredLengthUpload", generatedTusDeferredLengthEventPolicy, generatedTusDeferredLengthExpectedEvents, events)
+	generatedTusAssertEvents(t, "deferredLengthUpload", generatedTusDeferredLengthEventPolicy, generatedTusDeferredLengthExtraEventPrefixes, generatedTusDeferredLengthExpectedEvents, events)
 
 	storedUploads, err := storage.FindUploadsByFingerprint("contract-deferred-length-fingerprint")
 	if err != nil {

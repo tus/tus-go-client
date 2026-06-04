@@ -28,6 +28,7 @@ const (
 	generatedTusParallelConformanceUploadCount = 2
 )
 
+var generatedTusParallelExtraEventPrefixes = []string{"progress:"}
 var generatedTusParallelExpectedEvents = []string{"progress:5:11", "chunk-complete:5:5:11", "progress:11:11", "chunk-complete:6:11:11"}
 var generatedTusParallelFinalAbsentHeaders = []string{"Upload-Length"}
 var generatedTusParallelMetadata = map[string]string{"foo": "hello"}
@@ -258,7 +259,7 @@ func TestGeneratedURLStorageParallelUploadConcatFlow(t *testing.T) {
 		t.Fatal(err)
 	default:
 	}
-	generatedTusAssertEvents(t, "parallelUploadConcat", generatedTusParallelEventPolicy, generatedTusParallelExpectedEvents, events)
+	generatedTusAssertEvents(t, "parallelUploadConcat", generatedTusParallelEventPolicy, generatedTusParallelExtraEventPrefixes, generatedTusParallelExpectedEvents, events)
 
 	storedUploads, err := storage.FindUploadsByFingerprint("contract-parallel-fingerprint")
 	if err != nil {

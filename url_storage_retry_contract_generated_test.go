@@ -42,6 +42,7 @@ type generatedTusRetryDecision struct {
 	RetryAttempt int
 }
 
+var generatedTusRetryFlowExtraEventPrefixes = []string{}
 var generatedTusRetryFlowExpectedEvents = []string{"should-retry:0:true", "retry-schedule:0", "should-retry:0:true", "retry-schedule:0"}
 var generatedTusRetryFlowMetadata = map[string]string{"filename": "hello.txt"}
 var generatedTusRetryFlowRetryDelays = []time.Duration{0 * time.Millisecond}
@@ -264,7 +265,7 @@ func TestGeneratedURLStorageRetryOffsetRecoveryFlow(t *testing.T) {
 	if upload.RemoteOffset != 11 {
 		t.Fatalf("expected upload offset 11, got %d", upload.RemoteOffset)
 	}
-	generatedTusAssertEvents(t, "retryPatchAfterOffsetRecovery", generatedTusRetryFlowEventPolicy, generatedTusRetryFlowExpectedEvents, events)
+	generatedTusAssertEvents(t, "retryPatchAfterOffsetRecovery", generatedTusRetryFlowEventPolicy, generatedTusRetryFlowExtraEventPrefixes, generatedTusRetryFlowExpectedEvents, events)
 }
 
 func generatedURLStorageRetryRequestHeaders(

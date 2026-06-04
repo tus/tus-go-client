@@ -28,6 +28,7 @@ const (
 	generatedTusCreationWithUploadPath              = "/uploads/creation-with-upload-contract"
 )
 
+var generatedTusCreationWithUploadExtraEventPrefixes = []string{"progress:"}
 var generatedTusCreationWithUploadExpectedEvents = []string{"progress:0:11", "progress:11:11", "upload-url-available", "success", "source-close"}
 var generatedTusCreationWithUploadMetadata = map[string]string{"filename": "hello.txt"}
 
@@ -152,7 +153,7 @@ func TestGeneratedURLStorageCreationWithUpload(t *testing.T) {
 		t.Fatal(err)
 	default:
 	}
-	generatedTusAssertEvents(t, "creationWithUpload", generatedTusCreationWithUploadEventPolicy, generatedTusCreationWithUploadExpectedEvents, events)
+	generatedTusAssertEvents(t, "creationWithUpload", generatedTusCreationWithUploadEventPolicy, generatedTusCreationWithUploadExtraEventPrefixes, generatedTusCreationWithUploadExpectedEvents, events)
 
 	storedUploads, err := storage.FindUploadsByFingerprint("contract-creation-with-upload-fingerprint")
 	if err != nil {

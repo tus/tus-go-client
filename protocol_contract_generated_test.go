@@ -85,7 +85,6 @@ type generatedTusClientUrlStorageIDPolicy struct {
 
 var generatedTusDefaultRequestHeaderValues = map[string]string{"Tus-Resumable": "1.0.0"}
 var generatedTusDefaultResponseHeaderValues = map[string]string{"Tus-Resumable": "1.0.0"}
-var generatedTusAllowedExtraEventPrefixes = []string{"progress:"}
 
 func generatedTusHeaderValue(defaultValues map[string]string, values map[string]string, name string) string {
 	if value, ok := values[name]; ok {
@@ -2382,6 +2381,7 @@ func generatedTusAssertEvents(
 	t generatedTusTestingT,
 	scenarioID string,
 	matching string,
+	allowedExtraPrefixes []string,
 	expected []string,
 	actual []string,
 ) {
@@ -2404,14 +2404,14 @@ func generatedTusAssertEvents(
 			expectedIndex += 1
 			continue
 		}
-		if generatedTusHasAllowedExtraEventPrefix(event, generatedTusAllowedExtraEventPrefixes) {
+		if generatedTusHasAllowedExtraEventPrefix(event, allowedExtraPrefixes) {
 			continue
 		}
 		t.Fatalf(
 			"%s emitted unexpected extra event %s; allowed prefixes %#v; expected %#v, got %#v",
 			scenarioID,
 			event,
-			generatedTusAllowedExtraEventPrefixes,
+			allowedExtraPrefixes,
 			expected,
 			actual,
 		)

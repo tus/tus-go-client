@@ -24,6 +24,7 @@ const (
 	generatedTusAbortUploadLength = "11"
 )
 
+var generatedTusAbortExtraEventPrefixes = []string{}
 var generatedTusAbortExpectedEvents = []string{"request-abort:0"}
 var generatedTusAbortMetadata = map[string]string{"filename": "hello.txt"}
 
@@ -113,7 +114,7 @@ func TestGeneratedAbortUploadContext(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for server to observe abort")
 	}
-	generatedTusAssertEvents(t, "abortUpload", generatedTusAbortEventPolicy, generatedTusAbortExpectedEvents, events)
+	generatedTusAssertEvents(t, "abortUpload", generatedTusAbortEventPolicy, generatedTusAbortExtraEventPrefixes, generatedTusAbortExpectedEvents, events)
 
 	storedUploads, err := storage.FindAllUploads()
 	if err != nil {
