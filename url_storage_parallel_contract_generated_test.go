@@ -20,7 +20,7 @@ const (
 	generatedTusParallelConcatExtension        = "concatenation"
 	generatedTusParallelContent                = "hello world"
 	generatedTusParallelEndpointPath           = "/uploads"
-	generatedTusParallelEventPolicy            = "exact-except-extra-progress"
+	generatedTusParallelEventPolicy            = "exact-except-allowed-extra-events"
 	generatedTusParallelFinalConcatPrefix      = "final;"
 	generatedTusParallelFinalPath              = "/uploads/parallel-final"
 	generatedTusParallelPatchGateTimeoutMs     = 2000

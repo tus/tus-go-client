@@ -21,7 +21,7 @@ const (
 	generatedTusDeferredLengthCreateDeferHeader = "Upload-Defer-Length"
 	generatedTusDeferredLengthCreateDeferValue  = "1"
 	generatedTusDeferredLengthEndpointPath      = "/uploads"
-	generatedTusDeferredLengthEventPolicy       = "exact-except-extra-progress"
+	generatedTusDeferredLengthEventPolicy       = "exact-except-allowed-extra-events"
 	generatedTusDeferredLengthMetadataHeader    = "Upload-Metadata"
 	generatedTusDeferredLengthPatchLength       = "11"
 	generatedTusDeferredLengthPatchLengthHeader = "Upload-Length"

@@ -19,7 +19,7 @@ import (
 const (
 	generatedTusEventHooksContent             = "hello world"
 	generatedTusEventHooksCreatedUploadPath   = "/uploads/generated-contract"
-	generatedTusEventHooksEventPolicy         = "exact-except-extra-progress"
+	generatedTusEventHooksEventPolicy         = "exact-except-allowed-extra-events"
 	generatedTusEventHooksFingerprint         = "contract-single-fingerprint"
 	generatedTusEventHooksPatchAcceptedOffset = "11"
 	generatedTusEventHooksPatchBody           = "hello world"

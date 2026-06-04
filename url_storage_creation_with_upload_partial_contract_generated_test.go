@@ -20,7 +20,7 @@ const (
 	generatedTusCreationPartialContentTypeHeader = "Content-Type"
 	generatedTusCreationPartialCreateBodySize    = 5
 	generatedTusCreationPartialEndpointPath      = "/uploads"
-	generatedTusCreationPartialEventPolicy       = "exact-except-extra-progress"
+	generatedTusCreationPartialEventPolicy       = "exact-except-allowed-extra-events"
 	generatedTusCreationPartialLength            = "11"
 	generatedTusCreationPartialLengthHeader      = "Upload-Length"
 	generatedTusCreationPartialMetadataHeader    = "Upload-Metadata"

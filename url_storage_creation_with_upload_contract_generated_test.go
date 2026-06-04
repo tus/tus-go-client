@@ -19,7 +19,7 @@ const (
 	generatedTusCreationWithUploadContentType       = "application/offset+octet-stream"
 	generatedTusCreationWithUploadContentTypeHeader = "Content-Type"
 	generatedTusCreationWithUploadEndpointPath      = "/uploads"
-	generatedTusCreationWithUploadEventPolicy       = "exact-except-extra-progress"
+	generatedTusCreationWithUploadEventPolicy       = "exact-except-allowed-extra-events"
 	generatedTusCreationWithUploadLength            = "11"
 	generatedTusCreationWithUploadLengthHeader      = "Upload-Length"
 	generatedTusCreationWithUploadMetadataHeader    = "Upload-Metadata"

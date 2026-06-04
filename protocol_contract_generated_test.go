@@ -2394,7 +2394,7 @@ func generatedTusAssertEvents(
 		t.Fatalf("expected %s events %#v, got %#v", scenarioID, expected, actual)
 	}
 
-	if matching != "exact-except-extra-progress" {
+	if matching != "exact-except-allowed-extra-events" {
 		t.Fatalf("unsupported generated event policy %s for %s", matching, scenarioID)
 	}
 
