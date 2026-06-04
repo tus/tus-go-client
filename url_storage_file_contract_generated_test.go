@@ -99,7 +99,8 @@ func TestGeneratedURLStorageFileFlow(t *testing.T) {
 		reply.Status(createResponse.StatusCode),
 		createResponse,
 		map[string]string{
-			"Location": createdUploadURL,
+			"Location":      createdUploadURL,
+			"Tus-Resumable": "1.0.0",
 		},
 	)
 	srvMock.AddMocks(
@@ -109,8 +110,9 @@ func TestGeneratedURLStorageFileFlow(t *testing.T) {
 				Method(createOperation.Method),
 			createOperation,
 			map[string]string{
-				"Upload-Metadata": encodedMetadata,
+				"Tus-Resumable":   "1.0.0",
 				"Upload-Length":   generatedTusFileFlowUploadLength,
+				"Upload-Metadata": encodedMetadata,
 			},
 		).Reply(createReply),
 	)
@@ -120,6 +122,7 @@ func TestGeneratedURLStorageFileFlow(t *testing.T) {
 		reply.Status(patchResponse.StatusCode),
 		patchResponse,
 		map[string]string{
+			"Tus-Resumable": "1.0.0",
 			"Upload-Offset": generatedTusFileFlowPatchAcceptedOffset,
 		},
 	)
@@ -131,6 +134,7 @@ func TestGeneratedURLStorageFileFlow(t *testing.T) {
 		patchOperation,
 		map[string]string{
 			"Content-Type":  patchOperation.Request.ContentType,
+			"Tus-Resumable": "1.0.0",
 			"Upload-Offset": generatedTusFileFlowPatchOffset,
 		},
 	)

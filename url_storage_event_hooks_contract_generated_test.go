@@ -65,7 +65,8 @@ func TestGeneratedURLStorageEventHooks(t *testing.T) {
 		reply.Status(createResponse.StatusCode),
 		createResponse,
 		map[string]string{
-			"Location": createdUploadURL,
+			"Location":      createdUploadURL,
+			"Tus-Resumable": "1.0.0",
 		},
 	)
 	srvMock.AddMocks(
@@ -75,8 +76,9 @@ func TestGeneratedURLStorageEventHooks(t *testing.T) {
 				Method(createOperation.Method),
 			createOperation,
 			map[string]string{
-				"Upload-Metadata": encodedMetadata,
+				"Tus-Resumable":   "1.0.0",
 				"Upload-Length":   generatedTusEventHooksUploadLength,
+				"Upload-Metadata": encodedMetadata,
 			},
 		).Reply(createReply),
 	)
@@ -86,6 +88,7 @@ func TestGeneratedURLStorageEventHooks(t *testing.T) {
 		reply.Status(patchResponse.StatusCode),
 		patchResponse,
 		map[string]string{
+			"Tus-Resumable": "1.0.0",
 			"Upload-Offset": generatedTusEventHooksPatchAcceptedOffset,
 		},
 	)
@@ -97,6 +100,7 @@ func TestGeneratedURLStorageEventHooks(t *testing.T) {
 		patchOperation,
 		map[string]string{
 			"Content-Type":  patchOperation.Request.ContentType,
+			"Tus-Resumable": "1.0.0",
 			"Upload-Offset": generatedTusEventHooksPatchOffset,
 		},
 	)
