@@ -67,6 +67,7 @@ func TestGeneratedURLStorageParallelUploadConcatFlow(t *testing.T) {
 		patchArrivals,
 		releasePatches,
 		requestErrs,
+		patchOperation.Method,
 	)
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(responseWriter http.ResponseWriter, request *http.Request) {
@@ -98,7 +99,7 @@ func TestGeneratedURLStorageParallelUploadConcatFlow(t *testing.T) {
 					"Upload-Metadata": encodedPartialMetadata,
 				},
 			))
-			createResponse := generatedResponseFor(createOperation, http.StatusCreated)
+			createResponse := generatedResponseFor(createOperation, 201)
 			generatedWriteTusParallelResponseHeaders(
 				responseWriter,
 				createResponse,
@@ -182,7 +183,7 @@ func TestGeneratedURLStorageParallelUploadConcatFlow(t *testing.T) {
 					"Upload-Offset": generatedTusParallelPartPatchOffsets[partIndex],
 				},
 			))
-			patchResponse := generatedResponseFor(patchOperation, http.StatusNoContent)
+			patchResponse := generatedResponseFor(patchOperation, 204)
 			generatedWriteTusParallelResponseHeaders(
 				responseWriter,
 				patchResponse,
@@ -308,6 +309,7 @@ func generatedTusReleaseParallelPatchesAfterAllStarted(
 	patchArrivals <-chan int,
 	releasePatches chan<- struct{},
 	requestErrs chan<- error,
+	patchMethod string,
 ) {
 	seen := map[int]bool{}
 	timer := time.NewTimer(time.Duration(generatedTusParallelPatchGateTimeoutMs) * time.Millisecond)
@@ -317,7 +319,7 @@ func generatedTusReleaseParallelPatchesAfterAllStarted(
 		case requestIndex := <-patchArrivals:
 			seen[requestIndex] = true
 		case <-timer.C:
-			requestErrs <- fmt.Errorf("expected all parallel PATCH requests to be in flight")
+			requestErrs <- fmt.Errorf("expected all parallel %s requests to be in flight", patchMethod)
 			close(releasePatches)
 			return
 		}

@@ -83,7 +83,7 @@ func TestGeneratedTerminationRetryFlow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	createResponse := generatedResponseFor(createOperation, http.StatusCreated)
+	createResponse := generatedResponseFor(createOperation, 201)
 	createReply := generatedTerminationRetryResponseHeaders(
 		reply.Status(createResponse.StatusCode),
 		createResponse,
@@ -106,7 +106,7 @@ func TestGeneratedTerminationRetryFlow(t *testing.T) {
 		).Reply(createReply),
 	)
 
-	patchResponse := generatedResponseFor(patchOperation, http.StatusNoContent)
+	patchResponse := generatedResponseFor(patchOperation, 204)
 	patchReply := generatedTerminationRetryResponseHeaders(
 		reply.Status(patchResponse.StatusCode),
 		patchResponse,
@@ -130,7 +130,7 @@ func TestGeneratedTerminationRetryFlow(t *testing.T) {
 		).Reply(patchReply),
 	)
 
-	finalTerminateResponse := generatedResponseFor(terminateOperation, http.StatusNoContent)
+	finalTerminateResponse := generatedResponseFor(terminateOperation, 204)
 	finalTerminateReply := generatedTerminationRetryResponseHeaders(
 		reply.Status(204),
 		finalTerminateResponse,

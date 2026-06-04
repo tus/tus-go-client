@@ -58,7 +58,7 @@ func TestGeneratedURLStorageCreateFlow(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	createResponse := generatedResponseFor(createOperation, http.StatusCreated)
+	createResponse := generatedResponseFor(createOperation, 201)
 	createReply := generatedURLStorageCreateResponseHeaders(
 		reply.Status(createResponse.StatusCode),
 		createResponse,
@@ -81,7 +81,7 @@ func TestGeneratedURLStorageCreateFlow(t *testing.T) {
 		).Reply(createReply),
 	)
 
-	patchResponse := generatedResponseFor(patchOperation, http.StatusNoContent)
+	patchResponse := generatedResponseFor(patchOperation, 204)
 	patchReply := generatedURLStorageCreateResponseHeaders(
 		reply.Status(patchResponse.StatusCode),
 		patchResponse,

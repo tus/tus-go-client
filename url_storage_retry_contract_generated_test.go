@@ -86,7 +86,7 @@ func TestGeneratedURLStorageRetryOffsetRecoveryFlow(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	createResponse := generatedResponseFor(createOperation, http.StatusCreated)
+	createResponse := generatedResponseFor(createOperation, 201)
 	createReply := generatedURLStorageRetryResponseHeaders(
 		reply.Status(createResponse.StatusCode),
 		createResponse,
@@ -109,7 +109,7 @@ func TestGeneratedURLStorageRetryOffsetRecoveryFlow(t *testing.T) {
 		).Repeat(1).Reply(createReply),
 	)
 
-	firstGetResponse := generatedResponseFor(getOperation, http.StatusOK)
+	firstGetResponse := generatedResponseFor(getOperation, 200)
 	firstGetReply := generatedURLStorageRetryResponseHeaders(
 		reply.Status(200),
 		firstGetResponse,
@@ -119,7 +119,7 @@ func TestGeneratedURLStorageRetryOffsetRecoveryFlow(t *testing.T) {
 			"Upload-Offset": generatedTusRetryFlowFirstRecoveredOffset,
 		},
 	)
-	secondGetResponse := generatedResponseFor(getOperation, http.StatusOK)
+	secondGetResponse := generatedResponseFor(getOperation, 200)
 	secondGetReply := generatedURLStorageRetryResponseHeaders(
 		reply.Status(200),
 		secondGetResponse,
@@ -129,7 +129,7 @@ func TestGeneratedURLStorageRetryOffsetRecoveryFlow(t *testing.T) {
 			"Upload-Offset": generatedTusRetryFlowSecondRecoveredOffset,
 		},
 	)
-	finalPatchResponse := generatedResponseFor(patchOperation, http.StatusNoContent)
+	finalPatchResponse := generatedResponseFor(patchOperation, 204)
 	finalPatchReply := generatedURLStorageRetryResponseHeaders(
 		reply.Status(204),
 		finalPatchResponse,
@@ -180,7 +180,7 @@ func TestGeneratedURLStorageRetryOffsetRecoveryFlow(t *testing.T) {
 			},
 		).Repeat(len(patchReplies)).ReplyFunction(func(r *http.Request, m reply.M, p params.P) (*reply.Response, error) {
 			if patchReplyIndex >= len(patchReplies) {
-				t.Fatalf("unexpected retry PATCH request %d", patchReplyIndex)
+				t.Fatalf("unexpected retry %s request %d", patchOperation.Method, patchReplyIndex)
 				return nil, nil
 			}
 			expected := patchReplies[patchReplyIndex]
@@ -189,7 +189,7 @@ func TestGeneratedURLStorageRetryOffsetRecoveryFlow(t *testing.T) {
 				return nil, err
 			}
 			if string(body) != expected.Body {
-				t.Fatalf("expected PATCH body %q, got %q", expected.Body, string(body))
+				t.Fatalf("expected %s body %q, got %q", patchOperation.Method, expected.Body, string(body))
 			}
 			patchReplyIndex += 1
 			return expected.Reply.Build(r, m, p)
@@ -207,7 +207,7 @@ func TestGeneratedURLStorageRetryOffsetRecoveryFlow(t *testing.T) {
 			map[string]string{},
 		).Repeat(len(getReplies)).ReplyFunction(func(r *http.Request, m reply.M, p params.P) (*reply.Response, error) {
 			if getReplyIndex >= len(getReplies) {
-				t.Fatalf("unexpected retry HEAD request %d", getReplyIndex)
+				t.Fatalf("unexpected retry %s request %d", getOperation.Method, getReplyIndex)
 				return nil, nil
 			}
 			expected := getReplies[getReplyIndex]
@@ -254,10 +254,10 @@ func TestGeneratedURLStorageRetryOffsetRecoveryFlow(t *testing.T) {
 		t.Fatalf("expected %d retry decisions, got %d", len(generatedTusRetryFlowShouldRetryEvents), retryDecisionIndex)
 	}
 	if patchReplyIndex != len(patchReplies) {
-		t.Fatalf("expected %d PATCH requests, got %d", len(patchReplies), patchReplyIndex)
+		t.Fatalf("expected %d %s requests, got %d", len(patchReplies), patchOperation.Method, patchReplyIndex)
 	}
 	if getReplyIndex != len(getReplies) {
-		t.Fatalf("expected %d HEAD requests, got %d", len(getReplies), getReplyIndex)
+		t.Fatalf("expected %d %s requests, got %d", len(getReplies), getOperation.Method, getReplyIndex)
 	}
 	if upload.Location != createdUploadURL {
 		t.Fatalf("expected upload URL %s, got %s", createdUploadURL, upload.Location)

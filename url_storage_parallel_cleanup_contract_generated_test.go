@@ -72,6 +72,7 @@ func TestGeneratedURLStorageParallelUploadCleanup(t *testing.T) {
 		patchArrivals,
 		releasePatches,
 		requestErrs,
+		patchOperation.Method,
 	)
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(responseWriter http.ResponseWriter, request *http.Request) {
@@ -109,7 +110,7 @@ func TestGeneratedURLStorageParallelUploadCleanup(t *testing.T) {
 				request,
 				generatedTusParallelCleanupHeaders,
 			))
-			createResponse := generatedResponseFor(createOperation, http.StatusCreated)
+			createResponse := generatedResponseFor(createOperation, 201)
 			generatedWriteTusParallelCleanupResponseHeaders(
 				responseWriter,
 				createResponse,
@@ -208,7 +209,7 @@ func TestGeneratedURLStorageParallelUploadCleanup(t *testing.T) {
 			if actual := request.Header.Get(generatedTusParallelCleanupOverrideHeader); actual != "" {
 				recordRequestErr(fmt.Errorf("expected no override header on cleanup termination request, got %s", actual))
 			}
-			responseWriter.WriteHeader(http.StatusNoContent)
+			responseWriter.WriteHeader(204)
 
 		default:
 			recordRequestErr(fmt.Errorf("unexpected request %s %s", request.Method, request.URL.Path))
@@ -315,6 +316,7 @@ func generatedTusReleaseParallelCleanupPatchesAfterAllStarted(
 	patchArrivals <-chan int,
 	releasePatches chan<- struct{},
 	requestErrs chan<- error,
+	patchMethod string,
 ) {
 	seen := map[int]bool{}
 	timer := time.NewTimer(time.Duration(generatedTusParallelCleanupPatchGateTimeoutMs) * time.Millisecond)
@@ -324,7 +326,7 @@ func generatedTusReleaseParallelCleanupPatchesAfterAllStarted(
 		case requestIndex := <-patchArrivals:
 			seen[requestIndex] = true
 		case <-timer.C:
-			requestErrs <- fmt.Errorf("expected all cleanup PATCH requests to be in flight")
+			requestErrs <- fmt.Errorf("expected all cleanup %s requests to be in flight", patchMethod)
 			close(releasePatches)
 			return
 		}

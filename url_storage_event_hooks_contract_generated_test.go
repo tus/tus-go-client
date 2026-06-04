@@ -61,7 +61,7 @@ func TestGeneratedURLStorageEventHooks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	createResponse := generatedResponseFor(createOperation, http.StatusCreated)
+	createResponse := generatedResponseFor(createOperation, 201)
 	createReply := generatedURLStorageEventHooksResponseHeaders(
 		reply.Status(createResponse.StatusCode),
 		createResponse,
@@ -84,7 +84,7 @@ func TestGeneratedURLStorageEventHooks(t *testing.T) {
 		).Reply(createReply),
 	)
 
-	patchResponse := generatedResponseFor(patchOperation, http.StatusNoContent)
+	patchResponse := generatedResponseFor(patchOperation, 204)
 	patchReply := generatedURLStorageEventHooksResponseHeaders(
 		reply.Status(patchResponse.StatusCode),
 		patchResponse,

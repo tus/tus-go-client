@@ -61,7 +61,7 @@ func TestGeneratedURLStorageResumeFlow(t *testing.T) {
 	}
 
 	getOperation := generatedProtocolOperation("getTusUploadOffset")
-	getResponse := generatedResponseFor(getOperation, http.StatusOK)
+	getResponse := generatedResponseFor(getOperation, 200)
 	getReply := generatedURLStorageResumeResponseHeaders(
 		reply.Status(getResponse.StatusCode),
 		getResponse,
@@ -82,7 +82,7 @@ func TestGeneratedURLStorageResumeFlow(t *testing.T) {
 	)
 
 	patchOperation := generatedProtocolOperation("patchTusUpload")
-	patchResponse := generatedResponseFor(patchOperation, http.StatusNoContent)
+	patchResponse := generatedResponseFor(patchOperation, 204)
 	patchReply := generatedURLStorageResumeResponseHeaders(
 		reply.Status(patchResponse.StatusCode),
 		patchResponse,
