@@ -55,8 +55,9 @@ func TestGeneratedURLStorageOverridePatchMethod(t *testing.T) {
 				responseWriter,
 				getResponse,
 				map[string]string{
-					generatedTusOverrideLengthHeader: generatedTusOverrideUploadLength,
-					generatedTusOverrideOffsetHeader: generatedTusOverrideOffset,
+					"Tus-Resumable": "1.0.0",
+					"Upload-Length": generatedTusOverrideUploadLength,
+					"Upload-Offset": generatedTusOverrideOffset,
 				},
 			)
 			responseWriter.WriteHeader(getResponse.StatusCode)
@@ -77,9 +78,10 @@ func TestGeneratedURLStorageOverridePatchMethod(t *testing.T) {
 				request,
 				patchOperation,
 				map[string]string{
-					generatedTusOverrideContentTypeHeader: generatedTusOverrideContentType,
-					generatedTusOverrideHeaderName:        generatedTusOverrideHeaderValue,
-					generatedTusOverrideOffsetHeader:      generatedTusOverrideOffset,
+					"Content-Type":           generatedTusOverrideContentType,
+					"Tus-Resumable":          "1.0.0",
+					"Upload-Offset":          generatedTusOverrideOffset,
+					"X-HTTP-Method-Override": generatedTusOverrideHeaderValue,
 				},
 			))
 			patchResponse := generatedResponseFor(patchOperation, 204)
@@ -87,7 +89,8 @@ func TestGeneratedURLStorageOverridePatchMethod(t *testing.T) {
 				responseWriter,
 				patchResponse,
 				map[string]string{
-					generatedTusOverrideOffsetHeader: generatedTusOverrideFinalOffset,
+					"Tus-Resumable": "1.0.0",
+					"Upload-Offset": generatedTusOverrideFinalOffset,
 				},
 			)
 			responseWriter.WriteHeader(patchResponse.StatusCode)

@@ -56,8 +56,12 @@ func TestGeneratedURLStorageCustomRequestHeaders(t *testing.T) {
 				request,
 				createOperation,
 				map[string]string{
-					generatedTusCustomHeadersLengthHeader:   generatedTusCustomHeadersLength,
-					generatedTusCustomHeadersMetadataHeader: encodedMetadata,
+					"Content-Type":    "application/x-tus-custom-body",
+					"Tus-Resumable":   "1.0.0",
+					"Upload-Length":   generatedTusCustomHeadersLength,
+					"Upload-Metadata": encodedMetadata,
+					"X-Tus-Contract":  "custom-header",
+					"X-Tus-Trace":     "trace-123",
 				},
 			))
 			recordRequestErr(generatedAssertTusCustomHeaderValues(request, generatedTusCustomHeaders))
@@ -66,7 +70,8 @@ func TestGeneratedURLStorageCustomRequestHeaders(t *testing.T) {
 				responseWriter,
 				createResponse,
 				map[string]string{
-					"Location": server.URL + generatedTusCustomHeadersPath,
+					"Location":      server.URL + generatedTusCustomHeadersPath,
+					"Tus-Resumable": "1.0.0",
 				},
 			)
 			responseWriter.WriteHeader(createResponse.StatusCode)
@@ -87,8 +92,11 @@ func TestGeneratedURLStorageCustomRequestHeaders(t *testing.T) {
 				request,
 				patchOperation,
 				map[string]string{
-					generatedTusCustomHeadersContentTypeHeader: generatedTusCustomHeadersContentType,
-					generatedTusCustomHeadersOffsetHeader:      generatedTusCustomHeadersOffset,
+					"Content-Type":   generatedTusCustomHeadersContentType,
+					"Tus-Resumable":  "1.0.0",
+					"Upload-Offset":  generatedTusCustomHeadersOffset,
+					"X-Tus-Contract": "custom-header",
+					"X-Tus-Trace":    "trace-123",
 				},
 			))
 			recordRequestErr(generatedAssertTusCustomHeaderValues(request, generatedTusCustomHeaders))
@@ -97,7 +105,8 @@ func TestGeneratedURLStorageCustomRequestHeaders(t *testing.T) {
 				responseWriter,
 				patchResponse,
 				map[string]string{
-					generatedTusCustomHeadersOffsetHeader: generatedTusCustomHeadersAcceptedOffset,
+					"Tus-Resumable": "1.0.0",
+					"Upload-Offset": generatedTusCustomHeadersAcceptedOffset,
 				},
 			)
 			responseWriter.WriteHeader(patchResponse.StatusCode)
