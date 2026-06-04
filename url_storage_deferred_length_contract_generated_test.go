@@ -64,8 +64,9 @@ func TestGeneratedURLStorageDeferredLengthUpload(t *testing.T) {
 				request,
 				createOperation,
 				map[string]string{
-					generatedTusDeferredLengthCreateDeferHeader: generatedTusDeferredLengthCreateDeferValue,
-					generatedTusDeferredLengthMetadataHeader:    encodedMetadata,
+					"Tus-Resumable":       "1.0.0",
+					"Upload-Defer-Length": generatedTusDeferredLengthCreateDeferValue,
+					"Upload-Metadata":     encodedMetadata,
 				},
 			))
 			createResponse := generatedResponseFor(createOperation, 201)
@@ -73,7 +74,8 @@ func TestGeneratedURLStorageDeferredLengthUpload(t *testing.T) {
 				responseWriter,
 				createResponse,
 				map[string]string{
-					"Location": server.URL + generatedTusDeferredLengthUploadPath,
+					"Location":      server.URL + generatedTusDeferredLengthUploadPath,
+					"Tus-Resumable": "1.0.0",
 				},
 			)
 			responseWriter.WriteHeader(createResponse.StatusCode)
@@ -94,9 +96,10 @@ func TestGeneratedURLStorageDeferredLengthUpload(t *testing.T) {
 				request,
 				patchOperation,
 				map[string]string{
-					generatedTusDeferredLengthContentTypeHeader: patchOperation.Request.ContentType,
-					generatedTusDeferredLengthPatchLengthHeader: generatedTusDeferredLengthPatchLength,
-					generatedTusDeferredLengthPatchOffsetHeader: generatedTusDeferredLengthPatchOffset,
+					"Content-Type":  patchOperation.Request.ContentType,
+					"Tus-Resumable": "1.0.0",
+					"Upload-Length": generatedTusDeferredLengthPatchLength,
+					"Upload-Offset": generatedTusDeferredLengthPatchOffset,
 				},
 			))
 			patchResponse := generatedResponseFor(patchOperation, 204)
@@ -104,7 +107,8 @@ func TestGeneratedURLStorageDeferredLengthUpload(t *testing.T) {
 				responseWriter,
 				patchResponse,
 				map[string]string{
-					generatedTusDeferredLengthPatchOffsetHeader: generatedTusDeferredLengthAcceptedOffset,
+					"Tus-Resumable": "1.0.0",
+					"Upload-Offset": generatedTusDeferredLengthAcceptedOffset,
 				},
 			)
 			responseWriter.WriteHeader(patchResponse.StatusCode)

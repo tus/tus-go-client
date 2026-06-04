@@ -82,8 +82,10 @@ func TestGeneratedURLStorageCreationWithUploadPartialChunk(t *testing.T) {
 				request,
 				createOperation,
 				map[string]string{
-					generatedTusCreationPartialLengthHeader:   generatedTusCreationPartialLength,
-					generatedTusCreationPartialMetadataHeader: encodedMetadata,
+					"Content-Type":    generatedTusCreationPartialContentType,
+					"Tus-Resumable":   "1.0.0",
+					"Upload-Length":   generatedTusCreationPartialLength,
+					"Upload-Metadata": encodedMetadata,
 				},
 			))
 			createResponse := generatedResponseFor(createOperation, 201)
@@ -91,8 +93,9 @@ func TestGeneratedURLStorageCreationWithUploadPartialChunk(t *testing.T) {
 				responseWriter,
 				createResponse,
 				map[string]string{
-					"Location":                              server.URL + generatedTusCreationPartialPath,
-					generatedTusCreationPartialOffsetHeader: generatedTusCreationPartialOffset,
+					"Location":      server.URL + generatedTusCreationPartialPath,
+					"Tus-Resumable": "1.0.0",
+					"Upload-Offset": generatedTusCreationPartialOffset,
 				},
 			)
 			responseWriter.WriteHeader(createResponse.StatusCode)
@@ -146,8 +149,9 @@ func TestGeneratedURLStorageCreationWithUploadPartialChunk(t *testing.T) {
 				request,
 				patchOperation,
 				map[string]string{
-					generatedTusCreationPartialContentTypeHeader: generatedTusCreationPartialContentType,
-					generatedTusCreationPartialOffsetHeader:      expectedOffset,
+					"Content-Type":  generatedTusCreationPartialContentType,
+					"Tus-Resumable": "1.0.0",
+					"Upload-Offset": expectedOffset,
 				},
 			))
 			patchResponse := generatedResponseFor(patchOperation, responseStatus)
@@ -155,7 +159,8 @@ func TestGeneratedURLStorageCreationWithUploadPartialChunk(t *testing.T) {
 				responseWriter,
 				patchResponse,
 				map[string]string{
-					generatedTusCreationPartialOffsetHeader: responseOffset,
+					"Tus-Resumable": "1.0.0",
+					"Upload-Offset": responseOffset,
 				},
 			)
 			responseWriter.WriteHeader(patchResponse.StatusCode)
