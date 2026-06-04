@@ -537,10 +537,10 @@ var generatedTusClientFeatures = []generatedTusClientFeature{
 	},
 	{
 		Conformance: generatedTusClientFeatureConformance{
-			ScenarioIDs: []string{"deferredLengthUpload"},
+			ScenarioIDs: []string{"deferredLengthUpload", "deferredLengthChunkedUpload"},
 			Status:      "covered-by-generated-scenario",
 		},
-		Description: "Create an upload without a known length and declare the length on final PATCH.",
+		Description: "Create an upload without a known length and declare the length on first PATCH.",
 		FeatureID:   "deferredLengthUpload",
 		Flow: []generatedTusClientFeatureFlowStep{
 			{
@@ -555,14 +555,14 @@ var generatedTusClientFeatures = []generatedTusClientFeature{
 				OperationID: "",
 				Primitive:   "defer-upload-length",
 				Condition:   "",
-				Summary:     "Track the source until the final chunk reveals the total size.",
+				Summary:     "Track the source so the first PATCH can declare the total size.",
 			},
 			{
 				Kind:        "operation",
 				OperationID: "patchTusUpload",
 				Primitive:   "",
 				Condition:   "",
-				Summary:     "Declare Upload-Length on the final chunk request.",
+				Summary:     "Declare Upload-Length on the first chunk request.",
 			},
 		},
 		OperationIDs: []string{"createTusUpload", "patchTusUpload"},
@@ -1016,7 +1016,7 @@ var generatedTusClientFeatures = []generatedTusClientFeature{
 	},
 	{
 		Conformance: generatedTusClientFeatureConformance{
-			ScenarioIDs: []string{"ietfDraft05CreationWithUpload", "ietfDraft03ResumeWithoutKnownLength"},
+			ScenarioIDs: []string{"ietfDraft05CreationWithUpload", "ietfDraft05ChunkedUploadComplete", "ietfDraft03ResumeWithoutKnownLength"},
 			Status:      "covered-by-generated-scenario",
 		},
 		Description: "Select between tus v1 and supported IETF draft client protocol modes.",

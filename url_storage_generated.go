@@ -47,10 +47,6 @@ const (
 	generatedTusDeferredLengthExtension         = "creation-defer-length"
 	generatedTusDefaultParallelUploads          = 1
 	generatedTusMinimumParallelUploads          = 2
-	generatedTusMethodOverrideHeaderName        = "X-HTTP-Method-Override"
-	generatedTusMethodOverrideHeaderValue       = "PATCH"
-	generatedTusMethodOverrideMethod            = "POST"
-	generatedTusMethodOverrideSourceMethod      = "PATCH"
 	generatedTusValidationParallelDeferred      = "tus: cannot use the `uploadLengthDeferred` option when parallelUploads is enabled"
 	generatedTusValidationParallelCreateData    = "tus: cannot use the `uploadDataDuringCreation` option when parallelUploads is enabled"
 	generatedTusParallelPartialMetadata         = "metadataForPartialUploads"
@@ -78,6 +74,25 @@ const (
 	generatedTusURLStorageCreationTime          = "sdk-current-date-string"
 )
 
+type generatedTusMethodOverride struct {
+	HeaderName   string
+	HeaderValue  string
+	InputFlag    string
+	Method       string
+	OperationID  string
+	SourceMethod string
+}
+
+var generatedTusMethodOverrides = []generatedTusMethodOverride{
+	{
+		HeaderName:    "X-HTTP-Method-Override",
+		HeaderValue:   "PATCH",
+		InputFlag:     "overridePatchMethod",
+		Method:        "POST",
+		OperationID:   "patchTusUpload",
+		SourceMethod:  "PATCH",
+	},
+}
 var generatedTusNodeFileFingerprintFields = []string{"prefix", "absolutePath", "size", "mtimeMs", "endpoint"}
 var generatedTusAbortSequence = []string{"mark-aborted", "abort-parallel-uploads", "abort-current-request", "clear-retry-timer", "terminate-upload-if-requested"}
 var generatedTusDefaultRetryDelays = []time.Duration{0 * time.Millisecond, 1000 * time.Millisecond, 3000 * time.Millisecond, 5000 * time.Millisecond}
@@ -825,16 +840,35 @@ func (transport generatedTusURLStorageRequestPolicyTransport) RoundTrip(
 	for key, value := range transport.Headers {
 		cloned.Header.Set(key, value)
 	}
-	if transport.OverridePatchMethod &&
-		cloned.Method == generatedTusMethodOverrideSourceMethod {
-		cloned.Method = generatedTusMethodOverrideMethod
+	for _, methodOverride := range generatedTusMethodOverrides {
+		enabled, err := transport.methodOverrideEnabled(methodOverride)
+		if err != nil {
+			return nil, err
+		}
+		if !enabled || cloned.Method != methodOverride.SourceMethod {
+			continue
+		}
+
+		cloned.Method = methodOverride.Method
 		cloned.Header.Set(
-			generatedTusMethodOverrideHeaderName,
-			generatedTusMethodOverrideHeaderValue,
+			methodOverride.HeaderName,
+			methodOverride.HeaderValue,
 		)
+		break
 	}
 
 	return transport.Base.RoundTrip(cloned)
+}
+
+func (transport generatedTusURLStorageRequestPolicyTransport) methodOverrideEnabled(
+	methodOverride generatedTusMethodOverride,
+) (bool, error) {
+	switch methodOverride.InputFlag {
+	case "overridePatchMethod":
+		return transport.OverridePatchMethod, nil
+	default:
+		return false, fmt.Errorf("tus: unsupported method override input flag %s", methodOverride.InputFlag)
+	}
 }
 
 func IsUploadAbortError(err error) bool {
