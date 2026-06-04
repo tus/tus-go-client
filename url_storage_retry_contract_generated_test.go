@@ -91,7 +91,8 @@ func TestGeneratedURLStorageRetryOffsetRecoveryFlow(t *testing.T) {
 		reply.Status(createResponse.StatusCode),
 		createResponse,
 		map[string]string{
-			"Location": createdUploadURL,
+			"Location":      createdUploadURL,
+			"Tus-Resumable": "1.0.0",
 		},
 	)
 	srvMock.AddMocks(
@@ -101,8 +102,9 @@ func TestGeneratedURLStorageRetryOffsetRecoveryFlow(t *testing.T) {
 				Method(createOperation.Method),
 			createOperation,
 			map[string]string{
-				"Upload-Metadata": encodedMetadata,
+				"Tus-Resumable":   "1.0.0",
 				"Upload-Length":   generatedTusRetryFlowUploadLength,
+				"Upload-Metadata": encodedMetadata,
 			},
 		).Repeat(1).Reply(createReply),
 	)
@@ -112,6 +114,7 @@ func TestGeneratedURLStorageRetryOffsetRecoveryFlow(t *testing.T) {
 		reply.Status(200),
 		firstGetResponse,
 		map[string]string{
+			"Tus-Resumable": "1.0.0",
 			"Upload-Length": generatedTusRetryFlowFirstRecoveredLength,
 			"Upload-Offset": generatedTusRetryFlowFirstRecoveredOffset,
 		},
@@ -121,6 +124,7 @@ func TestGeneratedURLStorageRetryOffsetRecoveryFlow(t *testing.T) {
 		reply.Status(200),
 		secondGetResponse,
 		map[string]string{
+			"Tus-Resumable": "1.0.0",
 			"Upload-Length": generatedTusRetryFlowSecondRecoveredLength,
 			"Upload-Offset": generatedTusRetryFlowSecondRecoveredOffset,
 		},
@@ -130,6 +134,7 @@ func TestGeneratedURLStorageRetryOffsetRecoveryFlow(t *testing.T) {
 		reply.Status(204),
 		finalPatchResponse,
 		map[string]string{
+			"Tus-Resumable": "1.0.0",
 			"Upload-Offset": generatedTusRetryFlowFinalPatchAcceptedOffset,
 		},
 	)
@@ -162,7 +167,8 @@ func TestGeneratedURLStorageRetryOffsetRecoveryFlow(t *testing.T) {
 				Method(patchOperation.Method),
 			patchOperation,
 			map[string]string{
-				"Content-Type": patchOperation.Request.ContentType,
+				"Content-Type":  patchOperation.Request.ContentType,
+				"Tus-Resumable": "1.0.0",
 			},
 			map[string]func() string{
 				"Upload-Offset": func() string {

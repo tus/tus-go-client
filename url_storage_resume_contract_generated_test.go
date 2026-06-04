@@ -66,6 +66,7 @@ func TestGeneratedURLStorageResumeFlow(t *testing.T) {
 		reply.Status(getResponse.StatusCode),
 		getResponse,
 		map[string]string{
+			"Tus-Resumable": "1.0.0",
 			"Upload-Length": generatedTusResumeFlowUploadLength,
 			"Upload-Offset": generatedTusResumeFlowPatchOffset,
 		},
@@ -86,6 +87,7 @@ func TestGeneratedURLStorageResumeFlow(t *testing.T) {
 		reply.Status(patchResponse.StatusCode),
 		patchResponse,
 		map[string]string{
+			"Tus-Resumable": "1.0.0",
 			"Upload-Offset": generatedTusResumeFlowPatchAcceptedOffset,
 		},
 	)
@@ -97,6 +99,7 @@ func TestGeneratedURLStorageResumeFlow(t *testing.T) {
 		patchOperation,
 		map[string]string{
 			"Content-Type":  patchOperation.Request.ContentType,
+			"Tus-Resumable": "1.0.0",
 			"Upload-Offset": generatedTusResumeFlowPatchOffset,
 		},
 	)
