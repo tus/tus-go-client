@@ -19,6 +19,7 @@ import (
 )
 
 const (
+	generatedTusTerminateFlowChunkCompleteActionKind = "abort-upload"
 	generatedTusTerminateFlowContent             = "hello world"
 	generatedTusTerminateFlowEventPolicy         = "exact"
 	generatedTusTerminateFlowPatchAcceptedOffset = "5"
@@ -230,7 +231,7 @@ func generatedTusRunTerminateFlowChunkCompleteActions(
 
 	var response *http.Response
 	for _, action := range actions {
-		if action.Kind != "abort-upload" {
+		if action.Kind != generatedTusTerminateFlowChunkCompleteActionKind {
 			t.Fatalf("unsupported generated onChunkComplete action %s", action.Kind)
 		}
 		if !action.TerminateUpload {
