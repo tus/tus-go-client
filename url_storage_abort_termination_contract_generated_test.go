@@ -125,7 +125,11 @@ func TestGeneratedAbortTerminatesKnownUpload(t *testing.T) {
 			recordRequestErr(generatedAssertTusAbortTerminationRequestHeaders(
 				request,
 				terminateOperation,
-				map[string]string{},
+				map[string]string{
+					"Tus-Resumable":  "1.0.0",
+					"X-Tus-Contract": "abort-policy",
+					"X-Tus-Trace":    "abort-trace-123",
+				},
 			))
 			recordRequestErr(generatedAssertTusAbortTerminationCustomHeaders(
 				request,
@@ -138,7 +142,9 @@ func TestGeneratedAbortTerminatesKnownUpload(t *testing.T) {
 			generatedWriteTusAbortTerminationResponseHeaders(
 				responseWriter,
 				terminateResponse,
-				map[string]string{},
+				map[string]string{
+					"Tus-Resumable": "1.0.0",
+				},
 			)
 			responseWriter.WriteHeader(204)
 			close(terminationDone)
