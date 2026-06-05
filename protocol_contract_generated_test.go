@@ -1244,7 +1244,8 @@ const generatedTusManagedUploadJSON = `{
         "copy-to-owned-storage",
         "reference-original-source"
       ],
-      "stateBackend": "platform-key-value-store"
+      "stateBackend": "platform-key-value-store",
+      "transportProfileId": "java-http-url-connection"
     },
     {
       "networkConstraints": [
@@ -1281,7 +1282,8 @@ const generatedTusManagedUploadJSON = `{
         "copy-to-owned-storage",
         "reference-original-source"
       ],
-      "stateBackend": "filesystem"
+      "stateBackend": "filesystem",
+      "transportProfileId": "java-http-url-connection"
     },
     {
       "networkConstraints": [
