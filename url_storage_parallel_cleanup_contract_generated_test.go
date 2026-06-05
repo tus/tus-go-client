@@ -200,7 +200,11 @@ func TestGeneratedURLStorageParallelUploadCleanup(t *testing.T) {
 			recordRequestErr(generatedAssertTusParallelCleanupRequestHeaders(
 				request,
 				terminateOperation,
-				map[string]string{},
+				map[string]string{
+					"Tus-Resumable":  "1.0.0",
+					"X-Tus-Contract": "parallel-cleanup-policy",
+					"X-Tus-Trace":    "parallel-cleanup-trace-123",
+				},
 			))
 			recordRequestErr(generatedAssertTusParallelCleanupCustomHeaders(
 				request,
@@ -209,7 +213,15 @@ func TestGeneratedURLStorageParallelUploadCleanup(t *testing.T) {
 			if actual := request.Header.Get(generatedTusParallelCleanupOverrideHeader); actual != "" {
 				recordRequestErr(fmt.Errorf("expected no override header on cleanup termination request, got %s", actual))
 			}
-			responseWriter.WriteHeader(204)
+			terminateResponse := generatedResponseFor(terminateOperation, 204)
+			generatedWriteTusParallelCleanupResponseHeaders(
+				responseWriter,
+				terminateResponse,
+				map[string]string{
+					"Tus-Resumable": "1.0.0",
+				},
+			)
+			responseWriter.WriteHeader(terminateResponse.StatusCode)
 
 		default:
 			recordRequestErr(fmt.Errorf("unexpected request %s %s", request.Method, request.URL.Path))
