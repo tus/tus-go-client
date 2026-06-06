@@ -42,6 +42,10 @@ func (c *Client) TerminateUploadWithRetry(upload Upload, options TerminateUpload
 		if delay > 0 {
 			time.Sleep(delay)
 		}
-		retryAttempt += 1
+		nextRetryAttempt, retryAttemptErr := generatedTusNextRetryAttempt(retryAttempt)
+		if retryAttemptErr != nil {
+			return response, retryAttemptErr
+		}
+		retryAttempt = nextRetryAttempt
 	}
 }

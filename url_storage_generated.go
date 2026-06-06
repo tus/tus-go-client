@@ -36,6 +36,9 @@ const (
 	generatedTusAbortErrorMessage               = "Request was aborted"
 	generatedTusAbortRemoveStoredURLAfterTerm   = "after-successful-termination"
 	generatedTusAbortSuppressErrorAfterAbort    = true
+	generatedTusAbortTerminateRequiresRequest   = true
+	generatedTusAbortTerminateRequiresUploadURL = true
+	generatedTusAbortTerminateRemovesStoredURL  = true
 	generatedTusAbortTerminateUpload            = "when-requested-and-upload-url-known"
 	generatedTusAbortTerminateUploadContext     = "detached-from-aborted-request"
 	generatedTusCreationWithUploadBodySource    = "first-upload-chunk"
@@ -53,17 +56,29 @@ const (
 	generatedTusParallelPartialNestedUploads    = "disabled"
 	generatedTusParallelPartialURLStorage       = "parent-managed"
 	generatedTusParallelCleanupOnPartError      = "terminate-created-partials-when-abort-termination-enabled"
+	generatedTusParallelCleanupCreatedPartials  = true
+	generatedTusParallelCleanupRequiresAbort    = true
 	generatedTusParallelCleanupReturnedError    = "original-error-unless-cleanup-fails"
 	generatedTusParallelExecutionCancelOnError  = true
 	generatedTusParallelExecutionResultOrder    = "part-index"
 	generatedTusParallelExecutionSourceRead     = "before-worker-start"
 	generatedTusParallelExecutionWorkerStrategy = "one-worker-per-part"
 	generatedTusParallelUploadSplit             = "contiguous-floor-size-last-remainder"
+	generatedTusRetryAttemptIncrementPolicy    = "after-retry-scheduled"
+	generatedTusRetryAttemptResetPolicy        = "when-offset-advanced-since-last-retry"
 	generatedTusRetryClientErrorStatus          = 400
 	generatedTusRetryStatusCategoryDivisor      = 100
+	generatedTusSuccessCloseSourceAfterHook     = true
+	generatedTusSuccessCloseSourceRequiresSrc   = true
 	generatedTusSuccessCloseSource              = "after-hook-when-source-open"
+	generatedTusSuccessEmitAfterUploadComplete  = true
 	generatedTusSuccessEmit                     = "after-upload-complete"
+	generatedTusSuccessRemoveStoredBeforeHook   = true
+	generatedTusSuccessRemoveStoredRequiresOpt  = true
 	generatedTusSuccessRemoveStoredURL          = "before-hook-when-option-enabled"
+	generatedTusURLStorageRemoveOnSuccessEnable = true
+	generatedTusURLStorageRemoveOnSuccess       = "when-option-enabled"
+	generatedTusURLStorageRemoveRequiresOpt     = true
 	generatedTusUploadURLAvailableCreate        = "after-url-known-before-storage"
 	generatedTusUploadURLAvailableParallel      = "not-emitted"
 	generatedTusUploadURLAvailableResume        = "after-url-known-before-storage"
@@ -693,11 +708,14 @@ func (c *Client) uploadURLStorageSource(
 			return err
 		}
 		if _, err := stream.Write(chunk); err != nil {
-			effectiveRetryAttempt := generatedTusRetryAttempt(
+			effectiveRetryAttempt, retryAttemptErr := generatedTusEffectiveRetryAttempt(
 				stream.Upload.RemoteOffset,
 				offsetBeforeRetry,
 				retryAttempt,
 			)
+			if retryAttemptErr != nil {
+				return retryAttemptErr
+			}
 			if !generatedTusShouldScheduleRetry(
 				options.OnShouldRetry,
 				err,
@@ -711,7 +729,10 @@ func (c *Client) uploadURLStorageSource(
 			if delay > 0 {
 				time.Sleep(delay)
 			}
-			retryAttempt = effectiveRetryAttempt + 1
+			retryAttempt, retryAttemptErr = generatedTusNextRetryAttempt(effectiveRetryAttempt)
+			if retryAttemptErr != nil {
+				return retryAttemptErr
+			}
 			offsetBeforeRetry = stream.Upload.RemoteOffset
 			if _, err := stream.Sync(); err != nil {
 				return err
@@ -1038,11 +1059,14 @@ func (c *Client) generatedTusCleanupParallelPartialUploads(
 	results []generatedTusParallelPartResult,
 	originalErr error,
 ) error {
-	if !options.TerminateUploadOnAbort {
-		return originalErr
-	}
-	if err := generatedTusAssertParallelCleanupPolicySupported(); err != nil {
+	shouldCleanup, err := generatedTusShouldCleanupParallelPartialUploads(
+		options.TerminateUploadOnAbort,
+	)
+	if err != nil {
 		return err
+	}
+	if !shouldCleanup {
+		return originalErr
 	}
 	cleanupClient, err := generatedTusClientWithAbortCleanupContext(c)
 	if err != nil {
@@ -1073,12 +1097,17 @@ func (c *Client) generatedTusHandleURLStorageUploadAbort(
 	if !IsUploadAbortError(err) {
 		return err
 	}
-	if err := generatedTusAssertAbortPolicySupported(); err != nil {
+	shouldTerminate, shouldTerminateErr := generatedTusShouldTerminateKnownUploadOnAbort(
+		options.TerminateUploadOnAbort,
+		upload,
+	)
+	if shouldTerminateErr != nil {
+		return shouldTerminateErr
+	}
+	if !shouldTerminate {
 		return err
 	}
-	if !options.TerminateUploadOnAbort || upload == nil || upload.Location == "" {
-		return err
-	}
+
 	cleanupClient, cleanupClientErr := generatedTusClientWithAbortCleanupContext(c)
 	if cleanupClientErr != nil {
 		return cleanupClientErr
@@ -1090,13 +1119,32 @@ func (c *Client) generatedTusHandleURLStorageUploadAbort(
 	}); terminateErr != nil {
 		return terminateErr
 	}
-	if storageKey != "" {
+	if generatedTusAbortTerminateRemovesStoredURL && storageKey != "" {
 		if err := options.Storage.RemoveUpload(storageKey); err != nil {
 			return err
 		}
 	}
 
 	return err
+}
+
+func generatedTusShouldTerminateKnownUploadOnAbort(
+	terminateUploadOnAbort bool,
+	upload *Upload,
+) (bool, error) {
+	if err := generatedTusAssertAbortPolicySupported(); err != nil {
+		return false, err
+	}
+	if generatedTusAbortTerminateRequiresRequest && !terminateUploadOnAbort {
+		return false, nil
+	}
+	if generatedTusAbortTerminateRequiresUploadURL && (upload == nil || upload.Location == "") {
+		return false, nil
+	}
+	if upload == nil || upload.Location == "" {
+		return false, nil
+	}
+	return true, nil
 }
 
 func generatedTusRetryDelays(retryDelays []time.Duration) []time.Duration {
@@ -1107,12 +1155,36 @@ func generatedTusRetryDelays(retryDelays []time.Duration) []time.Duration {
 	return retryDelays
 }
 
-func generatedTusRetryAttempt(offset int64, offsetBeforeRetry int64, retryAttempt int) int {
-	if offset > offsetBeforeRetry {
-		return 0
-	}
+func generatedTusEffectiveRetryAttempt(
+	offset int64,
+	offsetBeforeRetry int64,
+	retryAttempt int,
+) (int, error) {
+	switch generatedTusRetryAttemptResetPolicy {
+	case "when-offset-advanced-since-last-retry":
+		if offset > offsetBeforeRetry {
+			return 0, nil
+		}
 
-	return retryAttempt
+		return retryAttempt, nil
+	default:
+		return 0, fmt.Errorf(
+			"tus: unsupported retry attempt reset policy %s",
+			generatedTusRetryAttemptResetPolicy,
+		)
+	}
+}
+
+func generatedTusNextRetryAttempt(retryAttempt int) (int, error) {
+	switch generatedTusRetryAttemptIncrementPolicy {
+	case "after-retry-scheduled":
+		return retryAttempt + 1, nil
+	default:
+		return 0, fmt.Errorf(
+			"tus: unsupported retry attempt increment policy %s",
+			generatedTusRetryAttemptIncrementPolicy,
+		)
+	}
 }
 
 func generatedTusShouldScheduleRetry(
@@ -1227,10 +1299,13 @@ func generatedTusEmitChunkCompleteAfterChunkAccepted(
 }
 
 func generatedTusEmitSuccess(input generatedTusSuccessInput) error {
-	if err := generatedTusAssertEventHookPolicySupported(); err != nil {
-		return err
+	shouldRemoveStoredUpload, shouldRemoveStoredUploadErr := generatedTusShouldRemoveStoredUploadOnSuccess(
+		input.RemoveFingerprintOnSuccess,
+	)
+	if shouldRemoveStoredUploadErr != nil {
+		return shouldRemoveStoredUploadErr
 	}
-	if input.RemoveFingerprintOnSuccess && input.StorageKey != "" {
+	if shouldRemoveStoredUpload && input.StorageKey != "" {
 		if err := input.Storage.RemoveUpload(input.StorageKey); err != nil {
 			return err
 		}
@@ -1244,12 +1319,52 @@ func generatedTusEmitSuccess(input generatedTusSuccessInput) error {
 		}
 	}
 
-	closer, ok := input.Source.(io.Closer)
-	if ok {
-		return closer.Close()
+	shouldCloseSource, shouldCloseSourceErr := generatedTusShouldCloseSourceOnSuccess(input.Source)
+	if shouldCloseSourceErr != nil {
+		return shouldCloseSourceErr
+	}
+	if shouldCloseSource {
+		closer, ok := input.Source.(io.Closer)
+		if ok {
+			return closer.Close()
+		}
 	}
 
 	return nil
+}
+
+func generatedTusShouldCloseSourceOnSuccess(source io.ReadSeeker) (bool, error) {
+	if err := generatedTusAssertEventHookPolicySupported(); err != nil {
+		return false, err
+	}
+	if !generatedTusSuccessCloseSourceAfterHook {
+		return false, nil
+	}
+	if generatedTusSuccessCloseSourceRequiresSrc {
+		return source != nil, nil
+	}
+	return true, nil
+}
+
+func generatedTusShouldRemoveStoredUploadOnSuccess(
+	removeFingerprintOnSuccess bool,
+) (bool, error) {
+	if err := generatedTusAssertEventHookPolicySupported(); err != nil {
+		return false, err
+	}
+	if err := generatedTusAssertURLStorageCleanupPolicySupported(); err != nil {
+		return false, err
+	}
+	if !generatedTusSuccessRemoveStoredBeforeHook {
+		return false, nil
+	}
+	if !generatedTusURLStorageRemoveOnSuccessEnable {
+		return false, nil
+	}
+	if generatedTusSuccessRemoveStoredRequiresOpt || generatedTusURLStorageRemoveRequiresOpt {
+		return removeFingerprintOnSuccess, nil
+	}
+	return true, nil
 }
 
 func generatedTusInt64Pointer(value int64) *int64 {
@@ -1335,6 +1450,17 @@ func generatedTusAssertEventHookPolicySupported() error {
 		return fmt.Errorf(
 			"tus: unsupported success storage cleanup policy %s",
 			generatedTusSuccessRemoveStoredURL,
+		)
+	}
+
+	return nil
+}
+
+func generatedTusAssertURLStorageCleanupPolicySupported() error {
+	if generatedTusURLStorageRemoveOnSuccess != "when-option-enabled" {
+		return fmt.Errorf(
+			"tus: unsupported URL storage success cleanup policy %s",
+			generatedTusURLStorageRemoveOnSuccess,
 		)
 	}
 
@@ -1449,6 +1575,21 @@ func generatedTusAssertParallelCleanupPolicySupported() error {
 	}
 
 	return nil
+}
+
+func generatedTusShouldCleanupParallelPartialUploads(
+	terminateUploadOnAbort bool,
+) (bool, error) {
+	if err := generatedTusAssertParallelCleanupPolicySupported(); err != nil {
+		return false, err
+	}
+	if !generatedTusParallelCleanupCreatedPartials {
+		return false, nil
+	}
+	if generatedTusParallelCleanupRequiresAbort {
+		return terminateUploadOnAbort, nil
+	}
+	return true, nil
 }
 
 func generatedTusAssertAbortPolicySupported() error {

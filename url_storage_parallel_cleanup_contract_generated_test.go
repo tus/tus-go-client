@@ -23,6 +23,7 @@ const (
 	generatedTusParallelCleanupContentType        = "application/offset+octet-stream"
 	generatedTusParallelCleanupContentTypeHeader  = "Content-Type"
 	generatedTusParallelCleanupEndpointPath       = "/uploads"
+	generatedTusParallelCleanupAbortedPatchEvent  = "request-abort:3"
 	generatedTusParallelCleanupEventPolicy        = "exact"
 	generatedTusParallelCleanupFailurePartIndex   = 0
 	generatedTusParallelCleanupFailureStatus      = 500
@@ -38,12 +39,32 @@ var generatedTusParallelCleanupExtraEventPrefixes = []string{}
 var generatedTusParallelCleanupExpectedEvents = []string{"request-abort:3"}
 var generatedTusParallelCleanupHeaders = map[string]string{"X-Tus-Contract": "parallel-cleanup-policy", "X-Tus-Trace": "parallel-cleanup-trace-123"}
 var generatedTusParallelCleanupMetadataForPartialUploads = map[string]string{"test": "world"}
-var generatedTusParallelCleanupPartPatchBodies = []string{"hello", " world"}
-var generatedTusParallelCleanupPartPatchOffsets = []string{"0", "0"}
-var generatedTusParallelCleanupPartUploadLengths = []string{"5", "6"}
-var generatedTusParallelCleanupPartUploadPaths = []string{"/uploads/parallel-cleanup-part-1", "/uploads/parallel-cleanup-part-2"}
 var generatedTusParallelCleanupPatchGateRequestIndexes = []int{2, 3}
-var generatedTusParallelCleanupTerminatePaths = []string{"/uploads/parallel-cleanup-part-1", "/uploads/parallel-cleanup-part-2"}
+
+type generatedTusParallelCleanupPartFixture struct {
+	UploadLength  string
+	UploadPath    string
+	PatchBody     string
+	PatchOffset   string
+	TerminatePath string
+}
+
+var generatedTusParallelCleanupParts = []generatedTusParallelCleanupPartFixture{
+	{
+		UploadLength: "5",
+		UploadPath:   "/uploads/parallel-cleanup-part-1",
+		PatchBody:    "hello",
+		PatchOffset:  "0",
+		TerminatePath: "/uploads/parallel-cleanup-part-1",
+	},
+	{
+		UploadLength: "6",
+		UploadPath:   "/uploads/parallel-cleanup-part-2",
+		PatchBody:    " world",
+		PatchOffset:  "0",
+		TerminatePath: "/uploads/parallel-cleanup-part-2",
+	},
+}
 
 func TestGeneratedURLStorageParallelUploadCleanup(t *testing.T) {
 	createOperation := generatedProtocolOperation("createTusUpload")
@@ -100,7 +121,7 @@ func TestGeneratedURLStorageParallelUploadCleanup(t *testing.T) {
 				map[string]string{
 					"Tus-Resumable":   "1.0.0",
 					"Upload-Concat":   "partial",
-					"Upload-Length":   generatedTusParallelCleanupPartUploadLengths[partIndex],
+					"Upload-Length":   generatedTusParallelCleanupParts[partIndex].UploadLength,
 					"Upload-Metadata": encodedPartialMetadata,
 					"X-Tus-Contract":  "parallel-cleanup-policy",
 					"X-Tus-Trace":     "parallel-cleanup-trace-123",
@@ -115,7 +136,7 @@ func TestGeneratedURLStorageParallelUploadCleanup(t *testing.T) {
 				responseWriter,
 				createResponse,
 				map[string]string{
-					"Location":      server.URL + generatedTusParallelCleanupPartUploadPaths[partIndex],
+					"Location":      server.URL + generatedTusParallelCleanupParts[partIndex].UploadPath,
 					"Tus-Resumable": "1.0.0",
 				},
 			)
@@ -145,10 +166,10 @@ func TestGeneratedURLStorageParallelUploadCleanup(t *testing.T) {
 			requestMu.Unlock()
 			body, err := io.ReadAll(request.Body)
 			recordRequestErr(err)
-			if string(body) != generatedTusParallelCleanupPartPatchBodies[partIndex] {
+			if string(body) != generatedTusParallelCleanupParts[partIndex].PatchBody {
 				recordRequestErr(fmt.Errorf(
 					"expected cleanup patch body %q, got %q",
-					generatedTusParallelCleanupPartPatchBodies[partIndex],
+					generatedTusParallelCleanupParts[partIndex].PatchBody,
 					string(body),
 				))
 			}
@@ -158,7 +179,7 @@ func TestGeneratedURLStorageParallelUploadCleanup(t *testing.T) {
 				map[string]string{
 					"Content-Type":           generatedTusParallelCleanupContentType,
 					"Tus-Resumable":          "1.0.0",
-					"Upload-Offset":          generatedTusParallelCleanupPartPatchOffsets[partIndex],
+					"Upload-Offset":          generatedTusParallelCleanupParts[partIndex].PatchOffset,
 					"X-HTTP-Method-Override": generatedTusParallelCleanupOverrideValue,
 					"X-Tus-Contract":         "parallel-cleanup-policy",
 					"X-Tus-Trace":            "parallel-cleanup-trace-123",
@@ -178,7 +199,7 @@ func TestGeneratedURLStorageParallelUploadCleanup(t *testing.T) {
 			select {
 			case <-request.Context().Done():
 				requestMu.Lock()
-				events = append(events, generatedTusParallelCleanupExpectedEvents[0])
+				events = append(events, generatedTusParallelCleanupAbortedPatchEvent)
 				requestMu.Unlock()
 				return
 			case <-time.After(2 * time.Second):
@@ -249,8 +270,8 @@ func TestGeneratedURLStorageParallelUploadCleanup(t *testing.T) {
 		Headers:                   generatedTusParallelCleanupHeaders,
 		MetadataForPartialUploads: generatedTusParallelCleanupMetadataForPartialUploads,
 		OverridePatchMethod:       true,
-		ParallelUploads:           generatedTusParallelCleanupUploadCount,
 		TerminateUploadOnAbort:    true,
+		ParallelUploads:           generatedTusParallelCleanupUploadCount,
 	})
 	if err == nil {
 		t.Fatal("expected parallel cleanup upload to fail")
@@ -295,8 +316,8 @@ func TestGeneratedURLStorageParallelUploadCleanup(t *testing.T) {
 }
 
 func generatedTusParallelCleanupPartIndexForPath(path string) int {
-	for index, candidate := range generatedTusParallelCleanupPartUploadPaths {
-		if path == candidate {
+	for index, part := range generatedTusParallelCleanupParts {
+		if path == part.UploadPath {
 			return index
 		}
 	}
@@ -305,8 +326,8 @@ func generatedTusParallelCleanupPartIndexForPath(path string) int {
 }
 
 func generatedTusParallelCleanupPartIndexForTerminatePath(path string) int {
-	for index, candidate := range generatedTusParallelCleanupTerminatePaths {
-		if path == candidate {
+	for index, part := range generatedTusParallelCleanupParts {
+		if path == part.TerminatePath {
 			return index
 		}
 	}
@@ -315,8 +336,8 @@ func generatedTusParallelCleanupPartIndexForTerminatePath(path string) int {
 }
 
 func generatedTusParallelCleanupPartIndexForUploadLength(uploadLength string) int {
-	for index, candidate := range generatedTusParallelCleanupPartUploadLengths {
-		if uploadLength == candidate {
+	for index, part := range generatedTusParallelCleanupParts {
+		if uploadLength == part.UploadLength {
 			return index
 		}
 	}

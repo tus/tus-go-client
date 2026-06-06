@@ -33,12 +33,32 @@ var generatedTusParallelExpectedEvents = []string{"progress:5:11", "chunk-comple
 var generatedTusParallelFinalAbsentHeaders = []string{"Upload-Length"}
 var generatedTusParallelMetadata = map[string]string{"foo": "hello"}
 var generatedTusParallelMetadataForPartialUploads = map[string]string{"test": "world"}
-var generatedTusParallelPartPatchAcceptedOffsets = []string{"5", "6"}
-var generatedTusParallelPartPatchBodies = []string{"hello", " world"}
-var generatedTusParallelPartPatchOffsets = []string{"0", "0"}
-var generatedTusParallelPartUploadLengths = []string{"5", "6"}
-var generatedTusParallelPartUploadPaths = []string{"/uploads/parallel-part-1", "/uploads/parallel-part-2"}
 var generatedTusParallelPatchGateRequestIndexes = []int{2, 3}
+
+type generatedTusParallelPartFixture struct {
+	UploadLength         string
+	UploadPath           string
+	PatchBody            string
+	PatchOffset          string
+	PatchAcceptedOffset string
+}
+
+var generatedTusParallelParts = []generatedTusParallelPartFixture{
+	{
+		UploadLength: "5",
+		UploadPath:   "/uploads/parallel-part-1",
+		PatchBody:    "hello",
+		PatchOffset:  "0",
+		PatchAcceptedOffset: "5",
+	},
+	{
+		UploadLength: "6",
+		UploadPath:   "/uploads/parallel-part-2",
+		PatchBody:    " world",
+		PatchOffset:  "0",
+		PatchAcceptedOffset: "6",
+	},
+}
 
 func TestGeneratedURLStorageParallelUploadConcatFlow(t *testing.T) {
 	createOperation := generatedProtocolOperation("createTusUpload")
@@ -95,7 +115,7 @@ func TestGeneratedURLStorageParallelUploadConcatFlow(t *testing.T) {
 				map[string]string{
 					"Tus-Resumable":   "1.0.0",
 					"Upload-Concat":   "partial",
-					"Upload-Length":   generatedTusParallelPartUploadLengths[partIndex],
+					"Upload-Length":   generatedTusParallelParts[partIndex].UploadLength,
 					"Upload-Metadata": encodedPartialMetadata,
 				},
 			))
@@ -104,7 +124,7 @@ func TestGeneratedURLStorageParallelUploadConcatFlow(t *testing.T) {
 				responseWriter,
 				createResponse,
 				map[string]string{
-					"Location":      server.URL + generatedTusParallelPartUploadPaths[partIndex],
+					"Location":      server.URL + generatedTusParallelParts[partIndex].UploadPath,
 					"Tus-Resumable": "1.0.0",
 				},
 			)
@@ -167,10 +187,10 @@ func TestGeneratedURLStorageParallelUploadConcatFlow(t *testing.T) {
 			requestMu.Unlock()
 			body, err := io.ReadAll(request.Body)
 			recordRequestErr(err)
-			if string(body) != generatedTusParallelPartPatchBodies[partIndex] {
+			if string(body) != generatedTusParallelParts[partIndex].PatchBody {
 				recordRequestErr(fmt.Errorf(
 					"expected parallel patch body %q, got %q",
-					generatedTusParallelPartPatchBodies[partIndex],
+					generatedTusParallelParts[partIndex].PatchBody,
 					string(body),
 				))
 			}
@@ -180,7 +200,7 @@ func TestGeneratedURLStorageParallelUploadConcatFlow(t *testing.T) {
 				map[string]string{
 					"Content-Type":  "application/offset+octet-stream",
 					"Tus-Resumable": "1.0.0",
-					"Upload-Offset": generatedTusParallelPartPatchOffsets[partIndex],
+					"Upload-Offset": generatedTusParallelParts[partIndex].PatchOffset,
 				},
 			))
 			patchResponse := generatedResponseFor(patchOperation, 204)
@@ -189,7 +209,7 @@ func TestGeneratedURLStorageParallelUploadConcatFlow(t *testing.T) {
 				patchResponse,
 				map[string]string{
 					"Tus-Resumable": "1.0.0",
-					"Upload-Offset": generatedTusParallelPartPatchAcceptedOffsets[partIndex],
+					"Upload-Offset": generatedTusParallelParts[partIndex].PatchAcceptedOffset,
 				},
 			)
 			responseWriter.WriteHeader(patchResponse.StatusCode)
@@ -249,11 +269,11 @@ func TestGeneratedURLStorageParallelUploadConcatFlow(t *testing.T) {
 	actualCreateIndex := createIndex
 	actualPatchIndex := patchIndex
 	requestMu.Unlock()
-	if actualCreateIndex != len(generatedTusParallelPartUploadPaths)+1 {
-		t.Fatalf("expected %d create requests, got %d", len(generatedTusParallelPartUploadPaths)+1, actualCreateIndex)
+	if actualCreateIndex != len(generatedTusParallelParts)+1 {
+		t.Fatalf("expected %d create requests, got %d", len(generatedTusParallelParts)+1, actualCreateIndex)
 	}
-	if actualPatchIndex != len(generatedTusParallelPartUploadPaths) {
-		t.Fatalf("expected %d patch requests, got %d", len(generatedTusParallelPartUploadPaths), actualPatchIndex)
+	if actualPatchIndex != len(generatedTusParallelParts) {
+		t.Fatalf("expected %d patch requests, got %d", len(generatedTusParallelParts), actualPatchIndex)
 	}
 	select {
 	case err := <-requestErrs:
@@ -276,9 +296,9 @@ func TestGeneratedURLStorageParallelUploadConcatFlow(t *testing.T) {
 }
 
 func generatedTusParallelFinalConcatHeader(serverURL string) string {
-	locations := make([]string, 0, len(generatedTusParallelPartUploadPaths))
-	for _, path := range generatedTusParallelPartUploadPaths {
-		locations = append(locations, serverURL+path)
+	locations := make([]string, 0, len(generatedTusParallelParts))
+	for _, part := range generatedTusParallelParts {
+		locations = append(locations, serverURL+part.UploadPath)
 	}
 
 	return generatedTusParallelFinalConcatPrefix +
@@ -286,8 +306,8 @@ func generatedTusParallelFinalConcatHeader(serverURL string) string {
 }
 
 func generatedTusParallelPartIndexForPath(path string) int {
-	for index, candidate := range generatedTusParallelPartUploadPaths {
-		if path == candidate {
+	for index, part := range generatedTusParallelParts {
+		if path == part.UploadPath {
 			return index
 		}
 	}
@@ -296,8 +316,8 @@ func generatedTusParallelPartIndexForPath(path string) int {
 }
 
 func generatedTusParallelPartIndexForUploadLength(uploadLength string) int {
-	for index, candidate := range generatedTusParallelPartUploadLengths {
-		if uploadLength == candidate {
+	for index, part := range generatedTusParallelParts {
+		if uploadLength == part.UploadLength {
 			return index
 		}
 	}

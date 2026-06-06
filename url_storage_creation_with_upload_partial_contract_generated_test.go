@@ -26,19 +26,37 @@ const (
 	generatedTusCreationPartialMetadataHeader    = "Upload-Metadata"
 	generatedTusCreationPartialOffset            = "5"
 	generatedTusCreationPartialOffsetHeader      = "Upload-Offset"
-	generatedTusCreationPartialFirstPatchBody    = 5
-	generatedTusCreationPartialFirstPatchOffset  = "5"
-	generatedTusCreationPartialFirstPatchResult  = "10"
-	generatedTusCreationPartialSecondPatchBody   = 1
-	generatedTusCreationPartialSecondPatchOffset = "10"
 	generatedTusCreationPartialPath              = "/uploads/creation-with-upload-partial-contract"
-	generatedTusCreationPartialFinalOffset       = "11"
 	generatedTusCreationPartialChunkSize         = 5
 )
+
+type generatedTusCreationPartialPatchAttempt struct {
+	BodySize  int
+	BodyStart int
+	Offset    string
+	Result    string
+	Status    int
+}
 
 var generatedTusCreationPartialExtraEventPrefixes = []string{"progress:"}
 var generatedTusCreationPartialExpectedEvents = []string{"progress:0:11", "progress:5:11", "upload-url-available", "chunk-complete:5:5:11", "progress:5:11", "progress:10:11", "chunk-complete:5:10:11", "progress:10:11", "progress:11:11", "chunk-complete:1:11:11", "success", "source-close"}
 var generatedTusCreationPartialMetadata = map[string]string{"filename": "hello.txt"}
+var generatedTusCreationPartialPatchAttempts = []generatedTusCreationPartialPatchAttempt{
+	{
+		BodySize:  5,
+		BodyStart: 5,
+		Offset:    "5",
+		Result:    "10",
+		Status:    204,
+	},
+	{
+		BodySize:  1,
+		BodyStart: 10,
+		Offset:    "10",
+		Result:    "11",
+		Status:    204,
+	},
+}
 
 func TestGeneratedURLStorageCreationWithUploadPartialChunk(t *testing.T) {
 	createOperation := generatedProtocolOperation("createTusUpload")
@@ -105,30 +123,20 @@ func TestGeneratedURLStorageCreationWithUploadPartialChunk(t *testing.T) {
 			request.Method == patchOperation.Method:
 			requestCount += 1
 			patchRequestCount += 1
-			expectedBodyStart := generatedTusCreationPartialCreateBodySize
-			expectedBodySize := generatedTusCreationPartialFirstPatchBody
-			expectedOffset := generatedTusCreationPartialFirstPatchOffset
-			responseOffset := generatedTusCreationPartialFirstPatchResult
-			responseStatus := 204
-			if patchRequestCount == 2 {
-				expectedBodyStart += generatedTusCreationPartialFirstPatchBody
-				expectedBodySize = generatedTusCreationPartialSecondPatchBody
-				expectedOffset = generatedTusCreationPartialSecondPatchOffset
-				responseOffset = generatedTusCreationPartialFinalOffset
-				responseStatus = 204
-			} else if patchRequestCount > 2 {
+			if patchRequestCount > len(generatedTusCreationPartialPatchAttempts) {
 				recordRequestErr(fmt.Errorf("unexpected continuation request %d", patchRequestCount))
 				responseWriter.WriteHeader(http.StatusNotFound)
 				return
 			}
+			attempt := generatedTusCreationPartialPatchAttempts[patchRequestCount-1]
 			body, err := io.ReadAll(request.Body)
 			recordRequestErr(err)
-			expectedBodyEnd := expectedBodyStart + expectedBodySize
-			expectedBody := generatedTusCreationPartialContent[expectedBodyStart:expectedBodyEnd]
-			if len(expectedBody) != expectedBodySize {
+			expectedBodyEnd := attempt.BodyStart + attempt.BodySize
+			expectedBody := generatedTusCreationPartialContent[attempt.BodyStart:expectedBodyEnd]
+			if len(expectedBody) != attempt.BodySize {
 				recordRequestErr(fmt.Errorf(
 					"expected configured patch body size %d, got %d",
-					expectedBodySize,
+					attempt.BodySize,
 					len(expectedBody),
 				))
 			}
@@ -152,16 +160,16 @@ func TestGeneratedURLStorageCreationWithUploadPartialChunk(t *testing.T) {
 				map[string]string{
 					"Content-Type":  generatedTusCreationPartialContentType,
 					"Tus-Resumable": "1.0.0",
-					"Upload-Offset": expectedOffset,
+					"Upload-Offset": attempt.Offset,
 				},
 			))
-			patchResponse := generatedResponseFor(patchOperation, responseStatus)
+			patchResponse := generatedResponseFor(patchOperation, attempt.Status)
 			generatedWriteTusCreationPartialResponseHeaders(
 				responseWriter,
 				patchResponse,
 				map[string]string{
 					"Tus-Resumable": "1.0.0",
-					"Upload-Offset": responseOffset,
+					"Upload-Offset": attempt.Result,
 				},
 			)
 			responseWriter.WriteHeader(patchResponse.StatusCode)

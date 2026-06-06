@@ -161,7 +161,13 @@ func TestGeneratedURLStorageFileFlow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if generatedTusFileFlowRemoveFingerprintOnSuccess {
+	shouldRemoveStoredUpload, shouldRemoveStoredUploadErr := generatedTusShouldRemoveStoredUploadOnSuccess(
+		generatedTusFileFlowRemoveFingerprintOnSuccess,
+	)
+	if shouldRemoveStoredUploadErr != nil {
+		t.Fatal(shouldRemoveStoredUploadErr)
+	}
+	if shouldRemoveStoredUpload {
 		if len(storedUploads) != 0 {
 			t.Fatalf("expected successful file flow to remove stored upload, got %#v", storedUploads)
 		}

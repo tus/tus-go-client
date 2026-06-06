@@ -19,23 +19,25 @@ import (
 )
 
 const (
-	generatedTusRetryFlowContent                  = "hello world"
-	generatedTusRetryFlowEventPolicy              = "exact"
-	generatedTusRetryFlowFinalPatchAcceptedOffset = "11"
-	generatedTusRetryFlowFinalPatchBody           = " world"
-	generatedTusRetryFlowFinalPatchOffset         = "5"
-	generatedTusRetryFlowFingerprint              = "retryPatchAfterOffsetRecovery-fingerprint"
-	generatedTusRetryFlowFirstPatchBody           = "hello world"
-	generatedTusRetryFlowFirstPatchOffset         = "0"
-	generatedTusRetryFlowFirstRecoveredLength     = "11"
-	generatedTusRetryFlowFirstRecoveredOffset     = "5"
-	generatedTusRetryFlowSecondPatchBody          = " world"
-	generatedTusRetryFlowSecondPatchOffset        = "5"
-	generatedTusRetryFlowSecondRecoveredLength    = "11"
-	generatedTusRetryFlowSecondRecoveredOffset    = "5"
-	generatedTusRetryFlowUploadLength             = "11"
-	generatedTusRetryFlowUploadPath               = "/uploads/retry-contract"
+	generatedTusRetryFlowContent      = "hello world"
+	generatedTusRetryFlowEventPolicy  = "exact"
+	generatedTusRetryFlowFingerprint  = "retryPatchAfterOffsetRecovery-fingerprint"
+	generatedTusRetryFlowUploadLength = "11"
+	generatedTusRetryFlowUploadPath   = "/uploads/retry-contract"
 )
+
+type generatedTusRetryOffsetRecoveryAttempt struct {
+	RecoveredLength string
+	RecoveredOffset string
+	Status          int
+}
+
+type generatedTusRetryPatchAttempt struct {
+	AcceptedOffset string
+	Body           string
+	Offset         string
+	Status         int
+}
 
 type generatedTusRetryDecision struct {
 	Decision     bool
@@ -45,6 +47,38 @@ type generatedTusRetryDecision struct {
 var generatedTusRetryFlowExtraEventPrefixes = []string{}
 var generatedTusRetryFlowExpectedEvents = []string{"should-retry:0:true", "retry-schedule:0", "should-retry:0:true", "retry-schedule:0"}
 var generatedTusRetryFlowMetadata = map[string]string{"filename": "hello.txt"}
+var generatedTusRetryFlowOffsetRecoveryAttempts = []generatedTusRetryOffsetRecoveryAttempt{
+	{
+		RecoveredLength: "11",
+		RecoveredOffset: "5",
+		Status:          200,
+	},
+	{
+		RecoveredLength: "11",
+		RecoveredOffset: "5",
+		Status:          200,
+	},
+}
+var generatedTusRetryFlowPatchAttempts = []generatedTusRetryPatchAttempt{
+	{
+		AcceptedOffset: "",
+		Body:           "hello world",
+		Offset:         "0",
+		Status:         500,
+	},
+	{
+		AcceptedOffset: "",
+		Body:           " world",
+		Offset:         "5",
+		Status:         500,
+	},
+	{
+		AcceptedOffset: "11",
+		Body:           " world",
+		Offset:         "5",
+		Status:         204,
+	},
+}
 var generatedTusRetryFlowRetryDelays = []time.Duration{0 * time.Millisecond}
 var generatedTusRetryFlowShouldRetryEvents = []generatedTusRetryDecision{
 	{
@@ -109,55 +143,47 @@ func TestGeneratedURLStorageRetryOffsetRecoveryFlow(t *testing.T) {
 		).Repeat(1).Reply(createReply),
 	)
 
-	firstGetResponse := generatedResponseFor(getOperation, 200)
-	firstGetReply := generatedURLStorageRetryResponseHeaders(
-		reply.Status(200),
-		firstGetResponse,
-		map[string]string{
-			"Tus-Resumable": "1.0.0",
-			"Upload-Length": generatedTusRetryFlowFirstRecoveredLength,
-			"Upload-Offset": generatedTusRetryFlowFirstRecoveredOffset,
-		},
-	)
-	secondGetResponse := generatedResponseFor(getOperation, 200)
-	secondGetReply := generatedURLStorageRetryResponseHeaders(
-		reply.Status(200),
-		secondGetResponse,
-		map[string]string{
-			"Tus-Resumable": "1.0.0",
-			"Upload-Length": generatedTusRetryFlowSecondRecoveredLength,
-			"Upload-Offset": generatedTusRetryFlowSecondRecoveredOffset,
-		},
-	)
-	finalPatchResponse := generatedResponseFor(patchOperation, 204)
-	finalPatchReply := generatedURLStorageRetryResponseHeaders(
-		reply.Status(204),
-		finalPatchResponse,
-		map[string]string{
-			"Tus-Resumable": "1.0.0",
-			"Upload-Offset": generatedTusRetryFlowFinalPatchAcceptedOffset,
-		},
-	)
-	patchReplies := []struct {
+	getReplies := make([]*reply.StdReply, 0, len(generatedTusRetryFlowOffsetRecoveryAttempts))
+	for _, attempt := range generatedTusRetryFlowOffsetRecoveryAttempts {
+		getResponse := generatedResponseFor(getOperation, attempt.Status)
+		getReply := generatedURLStorageRetryResponseHeaders(
+			reply.Status(attempt.Status),
+			getResponse,
+			map[string]string{
+				"Tus-Resumable": "1.0.0",
+				"Upload-Length": attempt.RecoveredLength,
+				"Upload-Offset": attempt.RecoveredOffset,
+			},
+		)
+		getReplies = append(getReplies, getReply)
+	}
+	patchReplies := make([]struct {
 		Body   string
 		Offset string
 		Reply  *reply.StdReply
-	}{
-		{
-			Body:   generatedTusRetryFlowFirstPatchBody,
-			Offset: generatedTusRetryFlowFirstPatchOffset,
-			Reply:  reply.Status(500),
-		},
-		{
-			Body:   generatedTusRetryFlowSecondPatchBody,
-			Offset: generatedTusRetryFlowSecondPatchOffset,
-			Reply:  reply.Status(500),
-		},
-		{
-			Body:   generatedTusRetryFlowFinalPatchBody,
-			Offset: generatedTusRetryFlowFinalPatchOffset,
-			Reply:  finalPatchReply,
-		},
+}, 0, len(generatedTusRetryFlowPatchAttempts))
+	for _, attempt := range generatedTusRetryFlowPatchAttempts {
+		patchReply := reply.Status(attempt.Status)
+		if attempt.AcceptedOffset != "" {
+			patchResponse := generatedResponseFor(patchOperation, attempt.Status)
+			patchReply = generatedURLStorageRetryResponseHeaders(
+				reply.Status(attempt.Status),
+				patchResponse,
+				map[string]string{
+					"Tus-Resumable": "1.0.0",
+					"Upload-Offset": attempt.AcceptedOffset,
+				},
+			)
+		}
+		patchReplies = append(patchReplies, struct {
+			Body   string
+			Offset string
+			Reply  *reply.StdReply
+		}{
+			Body:   attempt.Body,
+			Offset: attempt.Offset,
+			Reply:  patchReply,
+		})
 	}
 	patchReplyIndex := 0
 	srvMock.AddMocks(
@@ -196,7 +222,6 @@ func TestGeneratedURLStorageRetryOffsetRecoveryFlow(t *testing.T) {
 		}),
 	)
 
-	getReplies := []*reply.StdReply{firstGetReply, secondGetReply}
 	getReplyIndex := 0
 	srvMock.AddMocks(
 		generatedURLStorageRetryRequestHeaders(

@@ -22,6 +22,7 @@ const (
 	generatedTusTerminateFlowChunkCompleteActionKind = "abort-upload"
 	generatedTusTerminateFlowContent             = "hello world"
 	generatedTusTerminateFlowEventPolicy         = "exact"
+	generatedTusTerminateFlowFinalStatus         = 204
 	generatedTusTerminateFlowPatchAcceptedOffset = "5"
 	generatedTusTerminateFlowPatchBody           = "hello"
 	generatedTusTerminateFlowPatchOffset         = "0"
@@ -39,6 +40,10 @@ type generatedTusChunkCompleteAction struct {
 	TerminateUpload bool
 }
 
+type generatedTusTerminateAttempt struct {
+	Status int
+}
+
 var generatedTusTerminateFlowExtraEventPrefixes = []string{}
 var generatedTusTerminateFlowExpectedEvents = []string{"should-retry:0:true", "retry-schedule:0"}
 var generatedTusTerminateFlowMetadata = map[string]string{"filename": "hello.txt"}
@@ -49,6 +54,14 @@ var generatedTusTerminateFlowOnChunkCompleteActions = []generatedTusChunkComplet
 	},
 }
 var generatedTusTerminateFlowRetryDelays = []time.Duration{0 * time.Millisecond, 0 * time.Millisecond}
+var generatedTusTerminateFlowTerminateAttempts = []generatedTusTerminateAttempt{
+	{
+		Status: 423,
+	},
+	{
+		Status: 204,
+	},
+}
 var generatedTusTerminateFlowShouldRetryEvents = []generatedTusTerminateRetryDecision{
 	{
 		Decision:     true,
@@ -131,15 +144,18 @@ func TestGeneratedTerminationRetryFlow(t *testing.T) {
 		).Reply(patchReply),
 	)
 
-	finalTerminateResponse := generatedResponseFor(terminateOperation, 204)
-	finalTerminateReply := generatedTerminationRetryResponseHeaders(
-		reply.Status(204),
-		finalTerminateResponse,
-		map[string]string{},
-	)
-	terminateReplies := []*reply.StdReply{
-		reply.Status(423),
-		finalTerminateReply,
+	if len(generatedTusTerminateFlowTerminateAttempts) == 0 {
+		t.Fatal("expected at least one generated termination attempt")
+	}
+	terminateReplies := make([]*reply.StdReply, 0, len(generatedTusTerminateFlowTerminateAttempts))
+	for _, terminateAttempt := range generatedTusTerminateFlowTerminateAttempts {
+		terminateResponse := generatedResponseFor(terminateOperation, terminateAttempt.Status)
+		terminateReply := generatedTerminationRetryResponseHeaders(
+			reply.Status(terminateAttempt.Status),
+			terminateResponse,
+			map[string]string{},
+		)
+		terminateReplies = append(terminateReplies, terminateReply)
 	}
 	terminateReplyIndex := 0
 	srvMock.AddMocks(
@@ -208,8 +224,8 @@ func TestGeneratedTerminationRetryFlow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if response == nil || response.StatusCode != 204 {
-		t.Fatalf("expected termination status 204, got %#v", response)
+	if response == nil || response.StatusCode != generatedTusTerminateFlowFinalStatus {
+		t.Fatalf("expected termination status %d, got %#v", generatedTusTerminateFlowFinalStatus, response)
 	}
 	if terminateReplyIndex != len(terminateReplies) {
 		t.Fatalf("expected %d termination requests, got %d", len(terminateReplies), terminateReplyIndex)

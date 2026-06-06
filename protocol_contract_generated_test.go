@@ -292,6 +292,21 @@ var generatedTusProtocolOperations = []generatedTusProtocolOperation{
 					},
 				},
 			},
+			{
+				StatusCode: 500,
+				BodyKind:   "empty",
+				HeaderVariants: []generatedTusHeaderVariant{
+					{
+						Fields: []generatedTusHeaderField{
+							{
+								DisplayName: "Tus-Resumable",
+								Name:        "tus-resumable",
+								Required:    true,
+							},
+						},
+					},
+				},
+			},
 		},
 	},
 	{
@@ -412,6 +427,21 @@ var generatedTusProtocolOperations = []generatedTusProtocolOperation{
 					},
 				},
 			},
+			{
+				StatusCode: 500,
+				BodyKind:   "empty",
+				HeaderVariants: []generatedTusHeaderVariant{
+					{
+						Fields: []generatedTusHeaderField{
+							{
+								DisplayName: "Tus-Resumable",
+								Name:        "tus-resumable",
+								Required:    true,
+							},
+						},
+					},
+				},
+			},
 		},
 	},
 	{
@@ -437,6 +467,21 @@ var generatedTusProtocolOperations = []generatedTusProtocolOperation{
 		Responses: []generatedTusResponseContract{
 			{
 				StatusCode: 204,
+				BodyKind:   "empty",
+				HeaderVariants: []generatedTusHeaderVariant{
+					{
+						Fields: []generatedTusHeaderField{
+							{
+								DisplayName: "Tus-Resumable",
+								Name:        "tus-resumable",
+								Required:    true,
+							},
+						},
+					},
+				},
+			},
+			{
+				StatusCode: 423,
 				BodyKind:   "empty",
 				HeaderVariants: []generatedTusHeaderVariant{
 					{
