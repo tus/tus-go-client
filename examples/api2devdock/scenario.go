@@ -17,6 +17,14 @@ type TerminationPlan struct {
 	VerificationMethod         string
 }
 
+type ResumePlan struct {
+	ExpectedPreviousUploadCount          int
+	ExpectedRemainingPreviousUploadCount int
+	Fingerprint                          string
+	RemoveFingerprintOnSuccess           bool
+	StopAfterAcceptedBytes               int
+}
+
 func Fail(format string, args ...interface{}) {
 	panic(fmt.Sprintf(format, args...))
 }
@@ -65,6 +73,15 @@ func StringValue(value interface{}, label string) (string, error) {
 	}
 
 	return text, nil
+}
+
+func BoolValue(value interface{}, label string) (bool, error) {
+	boolean, ok := value.(bool)
+	if !ok {
+		return false, fmt.Errorf("%s must be a boolean", label)
+	}
+
+	return boolean, nil
 }
 
 func IntValue(value interface{}, label string) (int, error) {
@@ -345,6 +362,57 @@ func Termination(scenario map[string]interface{}) (TerminationPlan, error) {
 		MinimumDeleteRequestCount:  minimumDeleteRequestCount,
 		StopAfterAcceptedBytes:     stopAfterAcceptedBytes,
 		VerificationMethod:         verificationMethod,
+	}, nil
+}
+
+func Resume(scenario map[string]interface{}) (ResumePlan, error) {
+	upload, err := ObjectValue(scenario["upload"], "upload")
+	if err != nil {
+		return ResumePlan{}, err
+	}
+	resume, err := ObjectValue(upload["resume"], "upload.resume")
+	if err != nil {
+		return ResumePlan{}, err
+	}
+	expectedPreviousUploadCount, err := IntValue(
+		resume["expectedPreviousUploadCount"],
+		"upload.resume.expectedPreviousUploadCount",
+	)
+	if err != nil {
+		return ResumePlan{}, err
+	}
+	expectedRemainingPreviousUploadCount, err := IntValue(
+		resume["expectedRemainingPreviousUploadCount"],
+		"upload.resume.expectedRemainingPreviousUploadCount",
+	)
+	if err != nil {
+		return ResumePlan{}, err
+	}
+	fingerprint, err := StringValue(resume["fingerprint"], "upload.resume.fingerprint")
+	if err != nil {
+		return ResumePlan{}, err
+	}
+	removeFingerprintOnSuccess, err := BoolValue(
+		resume["removeFingerprintOnSuccess"],
+		"upload.resume.removeFingerprintOnSuccess",
+	)
+	if err != nil {
+		return ResumePlan{}, err
+	}
+	stopAfterAcceptedBytes, err := IntValue(
+		resume["stopAfterAcceptedBytes"],
+		"upload.resume.stopAfterAcceptedBytes",
+	)
+	if err != nil {
+		return ResumePlan{}, err
+	}
+
+	return ResumePlan{
+		ExpectedPreviousUploadCount:          expectedPreviousUploadCount,
+		ExpectedRemainingPreviousUploadCount: expectedRemainingPreviousUploadCount,
+		Fingerprint:                          fingerprint,
+		RemoveFingerprintOnSuccess:           removeFingerprintOnSuccess,
+		StopAfterAcceptedBytes:               stopAfterAcceptedBytes,
 	}, nil
 }
 
