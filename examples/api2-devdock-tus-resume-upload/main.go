@@ -69,7 +69,6 @@ func uploadFirstChunkAndAbort(
 	abortCtx, cancelAbort := context.WithCancel(ctx)
 	defer cancelAbort()
 
-	var firstUploadURL string
 	options.Context = abortCtx
 	options.EventHooks = tusgo.UploadEventHooks{
 		OnChunkComplete: func(_ int64, bytesAccepted int64, _ *int64) error {
@@ -80,21 +79,6 @@ func uploadFirstChunkAndAbort(
 			cancelAbort()
 			return nil
 		},
-		OnUploadURLAvailable: func() error {
-			storedUploads, err := storage.FindUploadsByFingerprint(resume.Fingerprint)
-			if err != nil {
-				return err
-			}
-			if len(storedUploads) == 0 {
-				return fmt.Errorf("resume scenario did not store the first upload URL")
-			}
-			uploadURL, ok := storedUploads[0]["uploadUrl"].(string)
-			if !ok || uploadURL == "" {
-				return fmt.Errorf("resume scenario stored upload is missing uploadUrl")
-			}
-			firstUploadURL = uploadURL
-			return nil
-		},
 	}
 
 	client := tusgo.NewClient(http.DefaultClient, endpointURL)
@@ -102,11 +86,19 @@ func uploadFirstChunkAndAbort(
 	if !errors.Is(err, context.Canceled) {
 		return 0, "", fmt.Errorf("expected context cancellation, got upload=%#v err=%v", upload, err)
 	}
-	if firstUploadURL == "" {
-		return 0, "", fmt.Errorf("resume scenario did not capture the first upload URL")
-	}
 	if upload == nil {
 		return 0, "", fmt.Errorf("resume scenario did not return the aborted upload")
+	}
+	storedUploads, err := storage.FindUploadsByFingerprint(resume.Fingerprint)
+	if err != nil {
+		return 0, "", err
+	}
+	if len(storedUploads) == 0 {
+		return 0, "", fmt.Errorf("resume scenario did not store the first upload URL")
+	}
+	firstUploadURL, ok := storedUploads[0]["uploadUrl"].(string)
+	if !ok || firstUploadURL == "" {
+		return 0, "", fmt.Errorf("resume scenario stored upload is missing uploadUrl")
 	}
 
 	return int(upload.RemoteOffset), firstUploadURL, nil
