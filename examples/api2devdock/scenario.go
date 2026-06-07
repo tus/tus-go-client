@@ -46,6 +46,13 @@ type RetryOffsetRecoveryPlan struct {
 	RecoveryResponse             RetryOffsetRecoveryResponsePlan
 }
 
+type RequestLifecycleHooksPlan struct {
+	ExpectedAfterResponseMethods     []string
+	ExpectedAfterResponseStatusCodes []int
+	ExpectedBeforeRequestMethods     []string
+	IgnoredRequestMethods            []string
+}
+
 func Fail(format string, args ...interface{}) {
 	panic(fmt.Sprintf(format, args...))
 }
@@ -130,6 +137,24 @@ func StringArrayValue(value interface{}, label string) ([]string, error) {
 	}
 
 	return strings, nil
+}
+
+func IntArrayValue(value interface{}, label string) ([]int, error) {
+	array, err := ArrayValue(value, label)
+	if err != nil {
+		return nil, err
+	}
+
+	ints := make([]int, 0, len(array))
+	for index, item := range array {
+		number, err := IntValue(item, fmt.Sprintf("%s[%d]", label, index))
+		if err != nil {
+			return nil, err
+		}
+		ints = append(ints, number)
+	}
+
+	return ints, nil
 }
 
 func ScalarString(value interface{}) string {
@@ -576,6 +601,55 @@ func RetryOffsetRecovery(scenario map[string]interface{}) (RetryOffsetRecoveryPl
 			Method:       recoveryResponseMethod,
 			OffsetHeader: recoveryResponseOffsetHeader,
 		},
+	}, nil
+}
+
+func RequestLifecycleHooks(scenario map[string]interface{}) (RequestLifecycleHooksPlan, error) {
+	upload, err := ObjectValue(scenario["upload"], "upload")
+	if err != nil {
+		return RequestLifecycleHooksPlan{}, err
+	}
+	requestLifecycleHooks, err := ObjectValue(
+		upload["requestLifecycleHooks"],
+		"upload.requestLifecycleHooks",
+	)
+	if err != nil {
+		return RequestLifecycleHooksPlan{}, err
+	}
+	expectedAfterResponseMethods, err := StringArrayValue(
+		requestLifecycleHooks["expectedAfterResponseMethods"],
+		"upload.requestLifecycleHooks.expectedAfterResponseMethods",
+	)
+	if err != nil {
+		return RequestLifecycleHooksPlan{}, err
+	}
+	expectedAfterResponseStatusCodes, err := IntArrayValue(
+		requestLifecycleHooks["expectedAfterResponseStatusCodes"],
+		"upload.requestLifecycleHooks.expectedAfterResponseStatusCodes",
+	)
+	if err != nil {
+		return RequestLifecycleHooksPlan{}, err
+	}
+	expectedBeforeRequestMethods, err := StringArrayValue(
+		requestLifecycleHooks["expectedBeforeRequestMethods"],
+		"upload.requestLifecycleHooks.expectedBeforeRequestMethods",
+	)
+	if err != nil {
+		return RequestLifecycleHooksPlan{}, err
+	}
+	ignoredRequestMethods, err := StringArrayValue(
+		requestLifecycleHooks["ignoredRequestMethods"],
+		"upload.requestLifecycleHooks.ignoredRequestMethods",
+	)
+	if err != nil {
+		return RequestLifecycleHooksPlan{}, err
+	}
+
+	return RequestLifecycleHooksPlan{
+		ExpectedAfterResponseMethods:     expectedAfterResponseMethods,
+		ExpectedAfterResponseStatusCodes: expectedAfterResponseStatusCodes,
+		ExpectedBeforeRequestMethods:     expectedBeforeRequestMethods,
+		IgnoredRequestMethods:            ignoredRequestMethods,
 	}, nil
 }
 
