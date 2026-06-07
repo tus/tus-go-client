@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -51,6 +52,23 @@ type RequestLifecycleHooksPlan struct {
 	ExpectedAfterResponseStatusCodes []int
 	ExpectedBeforeRequestMethods     []string
 	IgnoredRequestMethods            []string
+}
+
+type UploadCallbackEventKinds struct {
+	ChunkComplete      string
+	Progress           string
+	SourceClose        string
+	Success            string
+	UploadURLAvailable string
+}
+
+type UploadCallbacksPlan struct {
+	AllowedExtraEventKeyPrefixes []string
+	EventKeyAlternativeGroups    [][]string
+	EventKinds                   UploadCallbackEventKinds
+	EventKeyPartSeparator        string
+	EventKeys                    []string
+	EventPolicyMatching          string
 }
 
 func Fail(format string, args ...interface{}) {
@@ -137,6 +155,24 @@ func StringArrayValue(value interface{}, label string) ([]string, error) {
 	}
 
 	return strings, nil
+}
+
+func StringArrayArrayValue(value interface{}, label string) ([][]string, error) {
+	array, err := ArrayValue(value, label)
+	if err != nil {
+		return nil, err
+	}
+
+	arrays := make([][]string, 0, len(array))
+	for index, item := range array {
+		strings, err := StringArrayValue(item, fmt.Sprintf("%s[%d]", label, index))
+		if err != nil {
+			return nil, err
+		}
+		arrays = append(arrays, strings)
+	}
+
+	return arrays, nil
 }
 
 func IntArrayValue(value interface{}, label string) ([]int, error) {
@@ -651,6 +687,193 @@ func RequestLifecycleHooks(scenario map[string]interface{}) (RequestLifecycleHoo
 		ExpectedBeforeRequestMethods:     expectedBeforeRequestMethods,
 		IgnoredRequestMethods:            ignoredRequestMethods,
 	}, nil
+}
+
+func UploadCallbacks(scenario map[string]interface{}) (UploadCallbacksPlan, error) {
+	upload, err := ObjectValue(scenario["upload"], "upload")
+	if err != nil {
+		return UploadCallbacksPlan{}, err
+	}
+	uploadCallbacks, err := ObjectValue(upload["uploadCallbacks"], "upload.uploadCallbacks")
+	if err != nil {
+		return UploadCallbacksPlan{}, err
+	}
+	eventKinds, err := ObjectValue(
+		uploadCallbacks["eventKinds"],
+		"upload.uploadCallbacks.eventKinds",
+	)
+	if err != nil {
+		return UploadCallbacksPlan{}, err
+	}
+
+	allowedExtraEventKeyPrefixes, err := StringArrayValue(
+		uploadCallbacks["allowedExtraEventKeyPrefixes"],
+		"upload.uploadCallbacks.allowedExtraEventKeyPrefixes",
+	)
+	if err != nil {
+		return UploadCallbacksPlan{}, err
+	}
+	eventKeyAlternativeGroups, err := StringArrayArrayValue(
+		uploadCallbacks["eventKeyAlternativeGroups"],
+		"upload.uploadCallbacks.eventKeyAlternativeGroups",
+	)
+	if err != nil {
+		return UploadCallbacksPlan{}, err
+	}
+	chunkComplete, err := StringValue(
+		eventKinds["chunkComplete"],
+		"upload.uploadCallbacks.eventKinds.chunkComplete",
+	)
+	if err != nil {
+		return UploadCallbacksPlan{}, err
+	}
+	progress, err := StringValue(eventKinds["progress"], "upload.uploadCallbacks.eventKinds.progress")
+	if err != nil {
+		return UploadCallbacksPlan{}, err
+	}
+	sourceClose, err := StringValue(
+		eventKinds["sourceClose"],
+		"upload.uploadCallbacks.eventKinds.sourceClose",
+	)
+	if err != nil {
+		return UploadCallbacksPlan{}, err
+	}
+	success, err := StringValue(eventKinds["success"], "upload.uploadCallbacks.eventKinds.success")
+	if err != nil {
+		return UploadCallbacksPlan{}, err
+	}
+	uploadURLAvailable, err := StringValue(
+		eventKinds["uploadUrlAvailable"],
+		"upload.uploadCallbacks.eventKinds.uploadUrlAvailable",
+	)
+	if err != nil {
+		return UploadCallbacksPlan{}, err
+	}
+	eventKeyPartSeparator, err := StringValue(
+		uploadCallbacks["eventKeyPartSeparator"],
+		"upload.uploadCallbacks.eventKeyPartSeparator",
+	)
+	if err != nil {
+		return UploadCallbacksPlan{}, err
+	}
+	eventKeys, err := StringArrayValue(
+		uploadCallbacks["eventKeys"],
+		"upload.uploadCallbacks.eventKeys",
+	)
+	if err != nil {
+		return UploadCallbacksPlan{}, err
+	}
+	eventPolicyMatching, err := StringValue(
+		uploadCallbacks["eventPolicyMatching"],
+		"upload.uploadCallbacks.eventPolicyMatching",
+	)
+	if err != nil {
+		return UploadCallbacksPlan{}, err
+	}
+
+	return UploadCallbacksPlan{
+		AllowedExtraEventKeyPrefixes: allowedExtraEventKeyPrefixes,
+		EventKeyAlternativeGroups:    eventKeyAlternativeGroups,
+		EventKinds: UploadCallbackEventKinds{
+			ChunkComplete:      chunkComplete,
+			Progress:           progress,
+			SourceClose:        sourceClose,
+			Success:            success,
+			UploadURLAvailable: uploadURLAvailable,
+		},
+		EventKeyPartSeparator: eventKeyPartSeparator,
+		EventKeys:             eventKeys,
+		EventPolicyMatching:   eventPolicyMatching,
+	}, nil
+}
+
+func UploadCallbackEventKey(plan UploadCallbacksPlan, parts ...string) string {
+	return strings.Join(parts, plan.EventKeyPartSeparator)
+}
+
+func UploadCallbackEventKeyNumber(value int64) string {
+	return strconv.FormatInt(value, 10)
+}
+
+func UploadCallbackEventKeyTotal(value *int64) string {
+	if value == nil {
+		return "null"
+	}
+
+	return UploadCallbackEventKeyNumber(*value)
+}
+
+func MatchUploadCallbackEventKeys(plan UploadCallbacksPlan, actual []string) ([]string, error) {
+	allowedExtraPrefixes := []string{}
+	switch plan.EventPolicyMatching {
+	case "exact":
+	case "exact-except-allowed-extra-events":
+		allowedExtraPrefixes = plan.AllowedExtraEventKeyPrefixes
+	default:
+		return nil, fmt.Errorf("unsupported upload callback event policy %q", plan.EventPolicyMatching)
+	}
+
+	expectedIndex := 0
+	matched := []string{}
+	for _, event := range actual {
+		if expectedIndex < len(plan.EventKeys) &&
+			uploadCallbackEventMatchesExpected(plan, expectedIndex, event) {
+			matched = append(matched, plan.EventKeys[expectedIndex])
+			expectedIndex += 1
+			continue
+		}
+		if hasAllowedUploadCallbackExtraEventPrefix(event, allowedExtraPrefixes) {
+			continue
+		}
+
+		return nil, fmt.Errorf(
+			"upload callback events emitted unexpected extra event %q; allowed prefixes %v; expected %v, got %v",
+			event,
+			allowedExtraPrefixes,
+			plan.EventKeys,
+			actual,
+		)
+	}
+	if expectedIndex == len(plan.EventKeys) {
+		return matched, nil
+	}
+
+	return nil, fmt.Errorf(
+		"upload callback events did not emit every expected non-extra event; expected %v, got %v",
+		plan.EventKeys,
+		actual,
+	)
+}
+
+func uploadCallbackEventMatchesExpected(
+	plan UploadCallbacksPlan,
+	expectedIndex int,
+	actual string,
+) bool {
+	if actual == plan.EventKeys[expectedIndex] {
+		return true
+	}
+	if expectedIndex >= len(plan.EventKeyAlternativeGroups) {
+		return false
+	}
+
+	for _, alternative := range plan.EventKeyAlternativeGroups[expectedIndex] {
+		if actual == alternative {
+			return true
+		}
+	}
+
+	return false
+}
+
+func hasAllowedUploadCallbackExtraEventPrefix(event string, allowedExtraPrefixes []string) bool {
+	for _, prefix := range allowedExtraPrefixes {
+		if strings.HasPrefix(event, prefix) {
+			return true
+		}
+	}
+
+	return false
 }
 
 func ScenarioID(scenario map[string]interface{}) (string, error) {
