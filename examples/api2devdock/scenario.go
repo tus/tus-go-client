@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"time"
 )
 
 type TerminationPlan struct {
@@ -23,6 +24,26 @@ type ResumePlan struct {
 	Fingerprint                          string
 	RemoveFingerprintOnSuccess           bool
 	StopAfterAcceptedBytes               int
+}
+
+type RetryOffsetRecoveryResponsePlan struct {
+	Method       string
+	OffsetHeader string
+}
+
+type RetryOffsetRecoveryFailurePlan struct {
+	Message    string
+	Method     string
+	Occurrence int
+}
+
+type RetryOffsetRecoveryPlan struct {
+	ExpectedFailureCount         int
+	ExpectedRecoveredOffset      int
+	ExpectedRecoveryRequestCount int
+	ExpectedRequestMethods       []string
+	FailAfterResponse            RetryOffsetRecoveryFailurePlan
+	RecoveryResponse             RetryOffsetRecoveryResponsePlan
 }
 
 func Fail(format string, args ...interface{}) {
@@ -91,6 +112,24 @@ func IntValue(value interface{}, label string) (int, error) {
 	}
 
 	return int(number), nil
+}
+
+func StringArrayValue(value interface{}, label string) ([]string, error) {
+	array, err := ArrayValue(value, label)
+	if err != nil {
+		return nil, err
+	}
+
+	strings := make([]string, 0, len(array))
+	for index, item := range array {
+		text, err := StringValue(item, fmt.Sprintf("%s[%d]", label, index))
+		if err != nil {
+			return nil, err
+		}
+		strings = append(strings, text)
+	}
+
+	return strings, nil
 }
 
 func ScalarString(value interface{}) string {
@@ -413,6 +452,130 @@ func Resume(scenario map[string]interface{}) (ResumePlan, error) {
 		Fingerprint:                          fingerprint,
 		RemoveFingerprintOnSuccess:           removeFingerprintOnSuccess,
 		StopAfterAcceptedBytes:               stopAfterAcceptedBytes,
+	}, nil
+}
+
+func RetryDelays(scenario map[string]interface{}) ([]time.Duration, error) {
+	upload, err := ObjectValue(scenario["upload"], "upload")
+	if err != nil {
+		return nil, err
+	}
+	retries, err := IntValue(upload["retries"], "upload.retries")
+	if err != nil {
+		return nil, err
+	}
+	if retries < 0 {
+		return nil, fmt.Errorf("upload.retries must not be negative")
+	}
+
+	return make([]time.Duration, retries), nil
+}
+
+func RetryOffsetRecovery(scenario map[string]interface{}) (RetryOffsetRecoveryPlan, error) {
+	upload, err := ObjectValue(scenario["upload"], "upload")
+	if err != nil {
+		return RetryOffsetRecoveryPlan{}, err
+	}
+	retryOffsetRecovery, err := ObjectValue(
+		upload["retryOffsetRecovery"],
+		"upload.retryOffsetRecovery",
+	)
+	if err != nil {
+		return RetryOffsetRecoveryPlan{}, err
+	}
+	failAfterResponse, err := ObjectValue(
+		retryOffsetRecovery["failAfterResponse"],
+		"upload.retryOffsetRecovery.failAfterResponse",
+	)
+	if err != nil {
+		return RetryOffsetRecoveryPlan{}, err
+	}
+	recoveryResponse, err := ObjectValue(
+		retryOffsetRecovery["recoveryResponse"],
+		"upload.retryOffsetRecovery.recoveryResponse",
+	)
+	if err != nil {
+		return RetryOffsetRecoveryPlan{}, err
+	}
+
+	expectedFailureCount, err := IntValue(
+		retryOffsetRecovery["expectedFailureCount"],
+		"upload.retryOffsetRecovery.expectedFailureCount",
+	)
+	if err != nil {
+		return RetryOffsetRecoveryPlan{}, err
+	}
+	expectedRecoveredOffset, err := IntValue(
+		retryOffsetRecovery["expectedRecoveredOffset"],
+		"upload.retryOffsetRecovery.expectedRecoveredOffset",
+	)
+	if err != nil {
+		return RetryOffsetRecoveryPlan{}, err
+	}
+	expectedRecoveryRequestCount, err := IntValue(
+		retryOffsetRecovery["expectedRecoveryRequestCount"],
+		"upload.retryOffsetRecovery.expectedRecoveryRequestCount",
+	)
+	if err != nil {
+		return RetryOffsetRecoveryPlan{}, err
+	}
+	expectedRequestMethods, err := StringArrayValue(
+		retryOffsetRecovery["expectedRequestMethods"],
+		"upload.retryOffsetRecovery.expectedRequestMethods",
+	)
+	if err != nil {
+		return RetryOffsetRecoveryPlan{}, err
+	}
+	failAfterResponseMessage, err := StringValue(
+		failAfterResponse["message"],
+		"upload.retryOffsetRecovery.failAfterResponse.message",
+	)
+	if err != nil {
+		return RetryOffsetRecoveryPlan{}, err
+	}
+	failAfterResponseMethod, err := StringValue(
+		failAfterResponse["method"],
+		"upload.retryOffsetRecovery.failAfterResponse.method",
+	)
+	if err != nil {
+		return RetryOffsetRecoveryPlan{}, err
+	}
+	failAfterResponseOccurrence, err := IntValue(
+		failAfterResponse["occurrence"],
+		"upload.retryOffsetRecovery.failAfterResponse.occurrence",
+	)
+	if err != nil {
+		return RetryOffsetRecoveryPlan{}, err
+	}
+	recoveryResponseMethod, err := StringValue(
+		recoveryResponse["method"],
+		"upload.retryOffsetRecovery.recoveryResponse.method",
+	)
+	if err != nil {
+		return RetryOffsetRecoveryPlan{}, err
+	}
+	recoveryResponseOffsetHeader, err := StringValue(
+		recoveryResponse["offsetHeader"],
+		"upload.retryOffsetRecovery.recoveryResponse.offsetHeader",
+	)
+	if err != nil {
+		return RetryOffsetRecoveryPlan{}, err
+	}
+
+	return RetryOffsetRecoveryPlan{
+		ExpectedFailureCount:         expectedFailureCount,
+		ExpectedRecoveredOffset:      expectedRecoveredOffset,
+		ExpectedRecoveryRequestCount: expectedRecoveryRequestCount,
+		ExpectedRequestMethods:       expectedRequestMethods,
+		FailAfterResponse: RetryOffsetRecoveryFailurePlan{
+			Message:    failAfterResponseMessage,
+			Method:     failAfterResponseMethod,
+			Occurrence: failAfterResponseOccurrence,
+		},
+		RecoveryResponse: RetryOffsetRecoveryResponsePlan{
+			Method:       recoveryResponseMethod,
+			OffsetHeader: recoveryResponseOffsetHeader,
+		},
 	}, nil
 }
 
