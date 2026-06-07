@@ -121,6 +121,24 @@ func StringValue(value interface{}, label string) (string, error) {
 	return text, nil
 }
 
+func StringMapValue(value interface{}, label string) (map[string]string, error) {
+	rawObject, err := ObjectValue(value, label)
+	if err != nil {
+		return nil, err
+	}
+
+	object := map[string]string{}
+	for name, rawValue := range rawObject {
+		text, err := StringValue(rawValue, label+"."+name)
+		if err != nil {
+			return nil, err
+		}
+		object[name] = text
+	}
+
+	return object, nil
+}
+
 func BoolValue(value interface{}, label string) (bool, error) {
 	boolean, ok := value.(bool)
 	if !ok {
@@ -361,21 +379,30 @@ func UploadHeaders(scenario map[string]interface{}) (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	rawHeaders, err := ObjectValue(upload["headers"], "upload.headers")
+
+	return StringMapValue(upload["headers"], "upload.headers")
+}
+
+func UploadBodyHeadersByMethod(scenario map[string]interface{}) (map[string]map[string]string, error) {
+	upload, err := ObjectValue(scenario["upload"], "upload")
+	if err != nil {
+		return nil, err
+	}
+	rawByMethod, err := ObjectValue(upload["bodyHeadersByMethod"], "upload.bodyHeadersByMethod")
 	if err != nil {
 		return nil, err
 	}
 
-	headers := map[string]string{}
-	for name, value := range rawHeaders {
-		text, err := StringValue(value, "upload.headers."+name)
+	byMethod := map[string]map[string]string{}
+	for method, rawHeaders := range rawByMethod {
+		headers, err := StringMapValue(rawHeaders, "upload.bodyHeadersByMethod."+method)
 		if err != nil {
 			return nil, err
 		}
-		headers[name] = text
+		byMethod[method] = headers
 	}
 
-	return headers, nil
+	return byMethod, nil
 }
 
 func UploadAddRequestID(scenario map[string]interface{}) (bool, error) {
