@@ -356,6 +356,28 @@ func UploadMetadata(
 	return metadata, nil
 }
 
+func UploadHeaders(scenario map[string]interface{}) (map[string]string, error) {
+	upload, err := ObjectValue(scenario["upload"], "upload")
+	if err != nil {
+		return nil, err
+	}
+	rawHeaders, err := ObjectValue(upload["headers"], "upload.headers")
+	if err != nil {
+		return nil, err
+	}
+
+	headers := map[string]string{}
+	for name, value := range rawHeaders {
+		text, err := StringValue(value, "upload.headers."+name)
+		if err != nil {
+			return nil, err
+		}
+		headers[name] = text
+	}
+
+	return headers, nil
+}
+
 func TusURL(
 	scenario map[string]interface{},
 	createResponse map[string]interface{},
