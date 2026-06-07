@@ -423,6 +423,15 @@ func UploadRequestIDHeaderName(scenario map[string]interface{}) (string, error) 
 	return StringValue(upload["requestIdHeaderName"], "upload.requestIdHeaderName")
 }
 
+func UploadLengthDeferred(scenario map[string]interface{}) (bool, error) {
+	upload, err := ObjectValue(scenario["upload"], "upload")
+	if err != nil {
+		return false, err
+	}
+
+	return BoolValue(upload["uploadLengthDeferred"], "upload.uploadLengthDeferred")
+}
+
 func TusURL(
 	scenario map[string]interface{},
 	createResponse map[string]interface{},
