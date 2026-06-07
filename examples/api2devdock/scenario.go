@@ -378,6 +378,24 @@ func UploadHeaders(scenario map[string]interface{}) (map[string]string, error) {
 	return headers, nil
 }
 
+func UploadAddRequestID(scenario map[string]interface{}) (bool, error) {
+	upload, err := ObjectValue(scenario["upload"], "upload")
+	if err != nil {
+		return false, err
+	}
+
+	return BoolValue(upload["addRequestId"], "upload.addRequestId")
+}
+
+func UploadRequestIDHeaderName(scenario map[string]interface{}) (string, error) {
+	upload, err := ObjectValue(scenario["upload"], "upload")
+	if err != nil {
+		return "", err
+	}
+
+	return StringValue(upload["requestIdHeaderName"], "upload.requestIdHeaderName")
+}
+
 func TusURL(
 	scenario map[string]interface{},
 	createResponse map[string]interface{},

@@ -7,6 +7,7 @@ package tusgo
 import (
 	"bytes"
 	"context"
+	cryptoRand "crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -68,6 +69,7 @@ const (
 	generatedTusRetryAttemptResetPolicy        = "when-offset-advanced-since-last-retry"
 	generatedTusRetryClientErrorStatus          = 400
 	generatedTusRetryStatusCategoryDivisor      = 100
+	generatedTusRequestIDHeaderName            = "X-Request-ID"
 	generatedTusSuccessCloseSourceAfterHook     = true
 	generatedTusSuccessCloseSourceRequiresSrc   = true
 	generatedTusSuccessCloseSource              = "after-hook-when-source-open"
@@ -147,6 +149,7 @@ type URLStorageUploadOptions struct {
 	Source                     io.ReadSeeker
 	Fingerprint                string
 	Size                       int64
+	AddRequestID               bool
 	Headers                    map[string]string
 	Metadata                   map[string]string
 	MetadataForPartialUploads  map[string]string
@@ -166,6 +169,7 @@ type URLStorageFileUploadOptions struct {
 	Context                    context.Context
 	Storage                    URLStorage
 	Path                       string
+	AddRequestID               bool
 	Headers                    map[string]string
 	Metadata                   map[string]string
 	MetadataForPartialUploads  map[string]string
@@ -185,6 +189,7 @@ type FileBackedURLStorageUploadOptions struct {
 	Context                    context.Context
 	URLStoragePath             string
 	Path                       string
+	AddRequestID               bool
 	Headers                    map[string]string
 	Metadata                   map[string]string
 	MetadataForPartialUploads  map[string]string
@@ -396,6 +401,7 @@ func (c *Client) UploadFileWithFileBackedURLStorage(options FileBackedURLStorage
 		Context:                    options.Context,
 		Storage:                    NewFileURLStorage(options.URLStoragePath),
 		Path:                       options.Path,
+		AddRequestID:               options.AddRequestID,
 		Headers:                    options.Headers,
 		Metadata:                   options.Metadata,
 		MetadataForPartialUploads:  options.MetadataForPartialUploads,
@@ -442,6 +448,7 @@ func (c *Client) UploadFileWithURLStorage(options URLStorageFileUploadOptions) (
 		Source:                     file,
 		Fingerprint:                fingerprint,
 		Size:                       info.Size(),
+		AddRequestID:               options.AddRequestID,
 		Headers:                    options.Headers,
 		Metadata:                   options.Metadata,
 		MetadataForPartialUploads:  options.MetadataForPartialUploads,
@@ -813,7 +820,7 @@ func generatedTusClientWithURLStorageRequestPolicy(
 	client *Client,
 	options URLStorageUploadOptions,
 ) *Client {
-	if len(options.Headers) == 0 && !options.OverridePatchMethod {
+	if len(options.Headers) == 0 && !options.OverridePatchMethod && !options.AddRequestID {
 		return client
 	}
 
@@ -828,6 +835,7 @@ func generatedTusClientWithURLStorageRequestPolicy(
 		baseTransport = http.DefaultTransport
 	}
 	resultHTTPClient.Transport = generatedTusURLStorageRequestPolicyTransport{
+		AddRequestID:        options.AddRequestID,
 		Base:                baseTransport,
 		Headers:             cloneStringMap(options.Headers),
 		OverridePatchMethod: options.OverridePatchMethod,
@@ -849,6 +857,7 @@ func generatedTusClientWithAbortCleanupContext(client *Client) (*Client, error) 
 }
 
 type generatedTusURLStorageRequestPolicyTransport struct {
+	AddRequestID        bool
 	Base                http.RoundTripper
 	Headers             map[string]string
 	OverridePatchMethod bool
@@ -858,9 +867,6 @@ func (transport generatedTusURLStorageRequestPolicyTransport) RoundTrip(
 	request *http.Request,
 ) (*http.Response, error) {
 	cloned := request.Clone(request.Context())
-	for key, value := range transport.Headers {
-		cloned.Header.Set(key, value)
-	}
 	for _, methodOverride := range generatedTusMethodOverrides {
 		enabled, err := transport.methodOverrideEnabled(methodOverride)
 		if err != nil {
@@ -877,8 +883,32 @@ func (transport generatedTusURLStorageRequestPolicyTransport) RoundTrip(
 		)
 		break
 	}
+	for key, value := range transport.Headers {
+		cloned.Header.Set(key, value)
+	}
+	if transport.AddRequestID {
+		requestID, err := generatedTusRequestID()
+		if err != nil {
+			return nil, err
+		}
+		cloned.Header.Set(
+			generatedTusRequestIDHeaderName,
+			requestID,
+		)
+	}
 
 	return transport.Base.RoundTrip(cloned)
+}
+
+func generatedTusRequestID() (string, error) {
+	var bytes [16]byte
+	if _, err := cryptoRand.Read(bytes[:]); err != nil {
+		return "", err
+	}
+	bytes[6] = (bytes[6] & 0x0f) | 0x40
+	bytes[8] = (bytes[8] & 0x3f) | 0x80
+
+	return fmt.Sprintf("%x-%x-%x-%x-%x", bytes[0:4], bytes[4:6], bytes[6:8], bytes[8:10], bytes[10:]), nil
 }
 
 func (transport generatedTusURLStorageRequestPolicyTransport) methodOverrideEnabled(
