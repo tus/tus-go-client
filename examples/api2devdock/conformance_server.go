@@ -32,7 +32,6 @@ type TusConformancePlanServer struct {
 	errs           []error
 	gates          []tusConformanceRequestGate
 	mu             sync.Mutex
-	nextRequest    int
 	observed       []*TusConformanceObservedRequest
 	observedCount  int
 	requests       []interface{}
@@ -219,13 +218,6 @@ func (conformanceServer *TusConformancePlanServer) ServeHTTP(
 	responseWriter http.ResponseWriter,
 	request *http.Request,
 ) {
-	requestIndex, requestPlan, err := conformanceServer.nextRequestPlan()
-	if err != nil {
-		conformanceServer.recordErr(err)
-		responseWriter.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
 	body, err := io.ReadAll(request.Body)
 	if err != nil {
 		conformanceServer.recordErr(err)
@@ -233,17 +225,10 @@ func (conformanceServer *TusConformancePlanServer) ServeHTTP(
 		return
 	}
 
-	observed, err := conformanceServer.observedRequest(requestIndex, requestPlan, request, body)
+	requestIndex, requestPlan, err := conformanceServer.observeMatchingRequest(request, body)
 	if err != nil {
 		conformanceServer.recordErr(err)
 		responseWriter.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-	conformanceServer.observeRequest(requestIndex, observed)
-
-	if err := conformanceServer.validateRequest(requestIndex, requestPlan, observed); err != nil {
-		conformanceServer.recordErr(err)
-		responseWriter.WriteHeader(http.StatusBadRequest)
 		return
 	}
 	if err := conformanceServer.waitForRequestGate(requestIndex); err != nil {
@@ -257,7 +242,10 @@ func (conformanceServer *TusConformancePlanServer) ServeHTTP(
 	}
 }
 
-func (conformanceServer *TusConformancePlanServer) nextRequestPlan() (
+func (conformanceServer *TusConformancePlanServer) observeMatchingRequest(
+	request *http.Request,
+	body []byte,
+) (
 	int,
 	map[string]interface{},
 	error,
@@ -265,20 +253,40 @@ func (conformanceServer *TusConformancePlanServer) nextRequestPlan() (
 	conformanceServer.mu.Lock()
 	defer conformanceServer.mu.Unlock()
 
-	requestIndex := conformanceServer.nextRequest
-	conformanceServer.nextRequest += 1
-	if requestIndex >= len(conformanceServer.requests) {
-		return 0, nil, fmt.Errorf("unexpected request %d", requestIndex)
-	}
-	requestPlan, err := ObjectValue(
-		conformanceServer.requests[requestIndex],
-		fmt.Sprintf("conformanceScenario.requests[%d]", requestIndex),
-	)
-	if err != nil {
-		return 0, nil, err
+	mismatches := []string{}
+	for requestIndex, rawRequestPlan := range conformanceServer.requests {
+		if conformanceServer.observed[requestIndex] != nil {
+			continue
+		}
+		requestPlan, err := ObjectValue(
+			rawRequestPlan,
+			fmt.Sprintf("conformanceScenario.requests[%d]", requestIndex),
+		)
+		if err != nil {
+			return 0, nil, err
+		}
+		observed, err := conformanceServer.observedRequest(requestIndex, requestPlan, request, body)
+		if err != nil {
+			mismatches = append(mismatches, fmt.Sprintf("request %d: %v", requestIndex, err))
+			continue
+		}
+		if err := conformanceServer.validateRequest(requestIndex, requestPlan, observed); err != nil {
+			mismatches = append(mismatches, fmt.Sprintf("request %d: %v", requestIndex, err))
+			continue
+		}
+		conformanceServer.observed[requestIndex] = &observed
+		conformanceServer.observedCount += 1
+
+		return requestIndex, requestPlan, nil
 	}
 
-	return requestIndex, requestPlan, nil
+	return 0, nil, fmt.Errorf(
+		"unexpected request %s %s after %d observed request(s): %s",
+		request.Method,
+		conformanceServer.endpointOrigin.ResolveReference(request.URL).String(),
+		conformanceServer.observedCount,
+		strings.Join(mismatches, "; "),
+	)
 }
 
 func (conformanceServer *TusConformancePlanServer) observedRequest(
@@ -404,31 +412,6 @@ func (conformanceServer *TusConformancePlanServer) validateRequest(
 	}
 
 	return nil
-}
-
-func (conformanceServer *TusConformancePlanServer) observeRequest(
-	requestIndex int,
-	request TusConformanceObservedRequest,
-) {
-	conformanceServer.mu.Lock()
-	defer conformanceServer.mu.Unlock()
-
-	if requestIndex < 0 || requestIndex >= len(conformanceServer.observed) {
-		conformanceServer.errs = append(
-			conformanceServer.errs,
-			fmt.Errorf("request observation index %d is out of range", requestIndex),
-		)
-		return
-	}
-	if conformanceServer.observed[requestIndex] != nil {
-		conformanceServer.errs = append(
-			conformanceServer.errs,
-			fmt.Errorf("request %d was observed more than once", requestIndex),
-		)
-		return
-	}
-	conformanceServer.observed[requestIndex] = &request
-	conformanceServer.observedCount += 1
 }
 
 func (conformanceServer *TusConformancePlanServer) recordErr(err error) {
