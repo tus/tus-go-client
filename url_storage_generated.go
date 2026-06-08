@@ -15,6 +15,7 @@ import (
 	"math"
 	"math/rand"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -65,6 +66,7 @@ const (
 	generatedTusParallelExecutionSourceRead     = "before-worker-start"
 	generatedTusParallelExecutionWorkerStrategy = "one-worker-per-part"
 	generatedTusParallelUploadSplit             = "contiguous-floor-size-last-remainder"
+	generatedTusLocationResolutionStrategy      = "relative-to-creation-request-url"
 	generatedTusRetryAttemptIncrementPolicy    = "after-retry-scheduled"
 	generatedTusRetryAttemptResetPolicy        = "when-offset-advanced-since-last-retry"
 	generatedTusRetryClientErrorStatus          = 400
@@ -615,6 +617,9 @@ func (c *Client) uploadParallelWithURLStorage(
 			err,
 		)
 	}
+	if err := uploadClient.generatedTusResolveCreatedUploadLocation(finalUpload); err != nil {
+		return finalUpload, err
+	}
 	if err := generatedTusEmitUploadURLAvailable(options.EventHooks, "parallelFinalUpload"); err != nil {
 		return finalUpload, err
 	}
@@ -658,6 +663,10 @@ func (c *Client) uploadParallelPartWithURLStorage(
 	result.LastResponse = response
 	result.Upload = partialUpload
 	if err != nil {
+		result.Err = err
+		return result
+	}
+	if err := c.generatedTusResolveCreatedUploadLocation(&partialUpload); err != nil {
 		result.Err = err
 		return result
 	}
@@ -909,6 +918,26 @@ func generatedTusRequestID() (string, error) {
 	bytes[8] = (bytes[8] & 0x3f) | 0x80
 
 	return fmt.Sprintf("%x-%x-%x-%x-%x", bytes[0:4], bytes[4:6], bytes[6:8], bytes[8:10], bytes[10:]), nil
+}
+
+func (c *Client) generatedTusResolveCreatedUploadLocation(upload *Upload) error {
+	if upload == nil || upload.Location == "" {
+		return nil
+	}
+	switch generatedTusLocationResolutionStrategy {
+	case "relative-to-creation-request-url":
+		locationURL, err := url.Parse(upload.Location)
+		if err != nil {
+			return err
+		}
+		upload.Location = c.BaseURL.ResolveReference(locationURL).String()
+		return nil
+	default:
+		return fmt.Errorf(
+			"tus: unsupported location resolution policy %s",
+			generatedTusLocationResolutionStrategy,
+		)
+	}
 }
 
 func (transport generatedTusURLStorageRequestPolicyTransport) methodOverrideEnabled(
@@ -1749,6 +1778,9 @@ func (c *Client) createUploadForURLStorage(
 	if err != nil {
 		return upload, "", response, err
 	}
+	if err := c.generatedTusResolveCreatedUploadLocation(upload); err != nil {
+		return upload, "", response, err
+	}
 	if options.UploadLengthDeferred {
 		upload.RemoteSize = options.Size
 	}
@@ -1802,6 +1834,9 @@ func (c *Client) createUploadWithDataForURLStorage(
 	}
 	upload.RemoteSize = options.Size
 	upload.RemoteOffset = uploadedBytes
+	if err := c.generatedTusResolveCreatedUploadLocation(upload); err != nil {
+		return upload, "", response, err
+	}
 	if err := generatedTusEmitProgressAfterChunkAccepted(
 		options.EventHooks,
 		uploadedBytes,
