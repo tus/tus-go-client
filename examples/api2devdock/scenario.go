@@ -52,6 +52,11 @@ type RetryOffsetRecoveryPlan struct {
 	RecoveryResponse             RetryOffsetRecoveryResponsePlan
 }
 
+type TusConformanceRetryDecision struct {
+	Decision     bool
+	RetryAttempt int
+}
+
 type RequestLifecycleHooksPlan struct {
 	ExpectedAfterResponseMethods     []string
 	ExpectedAfterResponseStatusCodes []int
@@ -1105,6 +1110,42 @@ func TusConformanceInputSourceBytes(
 	}
 
 	return []byte(content), nil
+}
+
+func TusConformanceRetryDecisions(
+	conformanceScenario map[string]interface{},
+) ([]TusConformanceRetryDecision, error) {
+	rawDecisions, ok := conformanceScenario["retryDecisions"]
+	if !ok || rawDecisions == nil {
+		return []TusConformanceRetryDecision{}, nil
+	}
+	decisions, err := ArrayValue(rawDecisions, "conformanceScenario.retryDecisions")
+	if err != nil {
+		return nil, err
+	}
+
+	parsedDecisions := make([]TusConformanceRetryDecision, 0, len(decisions))
+	for index, rawDecision := range decisions {
+		label := fmt.Sprintf("conformanceScenario.retryDecisions[%d]", index)
+		decision, err := ObjectValue(rawDecision, label)
+		if err != nil {
+			return nil, err
+		}
+		decisionValue, err := BoolValue(decision["decision"], label+".decision")
+		if err != nil {
+			return nil, err
+		}
+		retryAttempt, err := IntValue(decision["retryAttempt"], label+".retryAttempt")
+		if err != nil {
+			return nil, err
+		}
+		parsedDecisions = append(parsedDecisions, TusConformanceRetryDecision{
+			Decision:     decisionValue,
+			RetryAttempt: retryAttempt,
+		})
+	}
+
+	return parsedDecisions, nil
 }
 
 func TusConformanceRuntimeAbortTerminateUpload(
