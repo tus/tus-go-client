@@ -1054,6 +1054,18 @@ func TusConformanceInputBoolOption(
 	return BoolValue(value, "conformanceScenario.inputOptionEntries."+key)
 }
 
+func TusConformanceInputIntOption(
+	conformanceScenario map[string]interface{},
+	key string,
+) (int, error) {
+	options, err := TusConformanceInputOptions(conformanceScenario)
+	if err != nil {
+		return 0, err
+	}
+
+	return IntValue(options[key], "conformanceScenario.inputOptionEntries."+key)
+}
+
 func TusConformanceInputStringMapOption(
 	conformanceScenario map[string]interface{},
 	key string,
