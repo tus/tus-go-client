@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	tusgo "github.com/bdragon300/tusgo"
@@ -160,6 +161,46 @@ func resumeStoredUpload(
 	return len(previousUploads), len(remainingUploads), upload.Location, nil
 }
 
+func urlStorageUploadsContainKeyPrefix(
+	storedUploads []tusgo.URLStorageUpload,
+	expectedPrefix string,
+) bool {
+	for _, storedUpload := range storedUploads {
+		storageKey, ok := storedUpload["urlStorageKey"].(string)
+		if !ok {
+			continue
+		}
+		if strings.HasPrefix(storageKey, expectedPrefix) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func storedUploadKeyPrefixMatched(
+	scenario map[string]interface{},
+	storage tusgo.URLStorage,
+) (bool, error) {
+	backend, err := api2devdock.URLStorageBackend(scenario)
+	if err != nil || backend == nil {
+		return false, err
+	}
+	resume, err := api2devdock.Resume(scenario)
+	if err != nil {
+		return false, err
+	}
+	storedUploads, err := storage.FindUploadsByFingerprint(resume.Fingerprint)
+	if err != nil {
+		return false, err
+	}
+
+	return urlStorageUploadsContainKeyPrefix(
+		storedUploads,
+		backend.ExpectedStoredUploadKeyPrefix,
+	), nil
+}
+
 func uploadWithStoredResume(
 	ctx context.Context,
 	scenario map[string]interface{},
@@ -186,6 +227,10 @@ func uploadWithStoredResume(
 	if err != nil {
 		return nil, err
 	}
+	uploadKeyPrefixMatched, err := storedUploadKeyPrefixMatched(scenario, storage)
+	if err != nil {
+		return nil, err
+	}
 	previousUploadCount, remainingPreviousUploadCount, uploadURL, err := resumeStoredUpload(
 		ctx,
 		scenario,
@@ -196,14 +241,29 @@ func uploadWithStoredResume(
 	if err != nil {
 		return nil, err
 	}
+	storedUploads, err := storage.FindAllUploads()
+	if err != nil {
+		return nil, err
+	}
 
-	return map[string]interface{}{
+	result := map[string]interface{}{
 		"firstAcceptedBytes":           firstAcceptedBytes,
 		"firstUploadUrl":               firstUploadURL,
 		"previousUploadCount":          previousUploadCount,
 		"remainingPreviousUploadCount": remainingPreviousUploadCount,
 		"uploadUrl":                    uploadURL,
-	}, nil
+	}
+	backend, err := api2devdock.URLStorageBackend(scenario)
+	if err != nil {
+		return nil, err
+	}
+	if backend != nil {
+		result["storageFileEntryCount"] = len(storedUploads)
+		result["storedUploadKeyPrefixMatched"] = uploadKeyPrefixMatched
+		result["urlStorageBackend"] = backend.Kind
+	}
+
+	return result, nil
 }
 
 func main() {

@@ -27,6 +27,11 @@ type ResumePlan struct {
 	StopAfterAcceptedBytes               int
 }
 
+type URLStorageBackendPlan struct {
+	ExpectedStoredUploadKeyPrefix string
+	Kind                          string
+}
+
 type RetryOffsetRecoveryResponsePlan struct {
 	Method       string
 	OffsetHeader string
@@ -589,6 +594,37 @@ func Resume(scenario map[string]interface{}) (ResumePlan, error) {
 		Fingerprint:                          fingerprint,
 		RemoveFingerprintOnSuccess:           removeFingerprintOnSuccess,
 		StopAfterAcceptedBytes:               stopAfterAcceptedBytes,
+	}, nil
+}
+
+func URLStorageBackend(scenario map[string]interface{}) (*URLStorageBackendPlan, error) {
+	upload, err := ObjectValue(scenario["upload"], "upload")
+	if err != nil {
+		return nil, err
+	}
+	rawBackend, ok := upload["urlStorageBackend"]
+	if !ok {
+		return nil, nil
+	}
+	backend, err := ObjectValue(rawBackend, "upload.urlStorageBackend")
+	if err != nil {
+		return nil, err
+	}
+	expectedStoredUploadKeyPrefix, err := StringValue(
+		backend["expectedStoredUploadKeyPrefix"],
+		"upload.urlStorageBackend.expectedStoredUploadKeyPrefix",
+	)
+	if err != nil {
+		return nil, err
+	}
+	kind, err := StringValue(backend["kind"], "upload.urlStorageBackend.kind")
+	if err != nil {
+		return nil, err
+	}
+
+	return &URLStorageBackendPlan{
+		ExpectedStoredUploadKeyPrefix: expectedStoredUploadKeyPrefix,
+		Kind:                          kind,
 	}, nil
 }
 
