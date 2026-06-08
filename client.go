@@ -237,6 +237,9 @@ func (c *Client) CreateUploadWithData(u *Upload, data []byte, remoteSize int64, 
 	s.ChunkSize = int64(len(data)) // Data must be uploaded in one request
 	s.uploadMethod = http.MethodPost
 	headers := map[string]string{"Upload-Length": strconv.Itoa(int(remoteSize)), "Upload-Offset": ""}
+	if headerName, value, ok := protocolUploadCompleteHeader(c.ProtocolVersion, true); ok {
+		headers[headerName] = value
+	}
 	if partial {
 		headers["Upload-Concat"] = "partial"
 	}
@@ -430,11 +433,16 @@ func (c *Client) UpdateCapabilities() (response *http.Response, err error) {
 
 func (c *Client) tusRequest(ctx context.Context, req *http.Request) (response *http.Response, err error) {
 	if req.Method != http.MethodOptions {
-		for headerName := range defaultProtocolRequestHeaders {
+		requestHeaders, ok := protocolRequestHeaders(c.ProtocolVersion)
+		if !ok {
+			err = ErrProtocol.WithText(fmt.Sprintf("unsupported protocol version %q", c.ProtocolVersion))
+			return
+		}
+		for headerName, value := range requestHeaders {
 			if req.Header.Get(headerName) != "" {
 				continue
 			}
-			req.Header.Set(headerName, c.ProtocolVersion)
+			req.Header.Set(headerName, value)
 		}
 	}
 	if ctx != nil {
