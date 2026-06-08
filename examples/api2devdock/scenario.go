@@ -76,6 +76,11 @@ type UploadCallbacksPlan struct {
 	EventPolicyMatching          string
 }
 
+type TusConformanceServerCapabilitiesPlan struct {
+	ExtensionNames   []string
+	ProtocolVersions []string
+}
+
 func Fail(format string, args ...interface{}) {
 	panic(fmt.Sprintf(format, args...))
 }
@@ -986,6 +991,236 @@ func hasAllowedUploadCallbackExtraEventPrefix(event string, allowedExtraPrefixes
 	}
 
 	return false
+}
+
+func TusConformanceScenario(scenario map[string]interface{}) (map[string]interface{}, error) {
+	return ObjectValue(scenario["conformanceScenario"], "conformanceScenario")
+}
+
+func TusConformanceInputOptions(
+	conformanceScenario map[string]interface{},
+) (map[string]interface{}, error) {
+	rawEntries, err := ArrayValue(
+		conformanceScenario["inputOptionEntries"],
+		"conformanceScenario.inputOptionEntries",
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	options := map[string]interface{}{}
+	for index, rawEntry := range rawEntries {
+		label := fmt.Sprintf("conformanceScenario.inputOptionEntries[%d]", index)
+		entry, err := ObjectValue(rawEntry, label)
+		if err != nil {
+			return nil, err
+		}
+		key, err := StringValue(entry["key"], label+".key")
+		if err != nil {
+			return nil, err
+		}
+		options[key] = entry["value"]
+	}
+
+	return options, nil
+}
+
+func TusConformanceInputStringOption(
+	conformanceScenario map[string]interface{},
+	key string,
+) (string, error) {
+	options, err := TusConformanceInputOptions(conformanceScenario)
+	if err != nil {
+		return "", err
+	}
+
+	return StringValue(options[key], "conformanceScenario.inputOptionEntries."+key)
+}
+
+func TusConformanceInputBoolOption(
+	conformanceScenario map[string]interface{},
+	key string,
+	defaultValue bool,
+) (bool, error) {
+	options, err := TusConformanceInputOptions(conformanceScenario)
+	if err != nil {
+		return false, err
+	}
+	value, ok := options[key]
+	if !ok {
+		return defaultValue, nil
+	}
+
+	return BoolValue(value, "conformanceScenario.inputOptionEntries."+key)
+}
+
+func TusConformanceInputStringMapOption(
+	conformanceScenario map[string]interface{},
+	key string,
+) (map[string]string, error) {
+	options, err := TusConformanceInputOptions(conformanceScenario)
+	if err != nil {
+		return nil, err
+	}
+	value, ok := options[key]
+	if !ok {
+		return map[string]string{}, nil
+	}
+
+	return StringMapValue(value, "conformanceScenario.inputOptionEntries."+key)
+}
+
+func TusConformanceInputSourceBytes(
+	conformanceScenario map[string]interface{},
+) ([]byte, error) {
+	source, err := ObjectValue(
+		conformanceScenario["inputSource"],
+		"conformanceScenario.inputSource",
+	)
+	if err != nil {
+		return nil, err
+	}
+	kind, err := StringValue(source["kind"], "conformanceScenario.inputSource.kind")
+	if err != nil {
+		return nil, err
+	}
+	if kind != "blob" {
+		return nil, fmt.Errorf("unsupported conformance input source kind %q", kind)
+	}
+	content, err := StringValue(source["content"], "conformanceScenario.inputSource.content")
+	if err != nil {
+		return nil, err
+	}
+
+	return []byte(content), nil
+}
+
+func TusConformanceRuntimeAbortTerminateUpload(
+	conformanceScenario map[string]interface{},
+) (bool, error) {
+	runtimeSetup, err := ObjectValue(
+		conformanceScenario["runtimeSetup"],
+		"conformanceScenario.runtimeSetup",
+	)
+	if err != nil {
+		return false, err
+	}
+	abort, err := ObjectValue(runtimeSetup["abort"], "conformanceScenario.runtimeSetup.abort")
+	if err != nil {
+		return false, err
+	}
+
+	return BoolValue(
+		abort["terminateUpload"],
+		"conformanceScenario.runtimeSetup.abort.terminateUpload",
+	)
+}
+
+func TusConformanceRuntimeFingerprint(
+	conformanceScenario map[string]interface{},
+) (string, error) {
+	runtimeSetup, err := ObjectValue(
+		conformanceScenario["runtimeSetup"],
+		"conformanceScenario.runtimeSetup",
+	)
+	if err != nil {
+		return "", err
+	}
+	fingerprint, err := ObjectValue(
+		runtimeSetup["fingerprint"],
+		"conformanceScenario.runtimeSetup.fingerprint",
+	)
+	if err != nil {
+		return "", err
+	}
+	install, err := BoolValue(
+		fingerprint["install"],
+		"conformanceScenario.runtimeSetup.fingerprint.install",
+	)
+	if err != nil {
+		return "", err
+	}
+	if !install {
+		return "", nil
+	}
+
+	return StringValue(
+		fingerprint["value"],
+		"conformanceScenario.runtimeSetup.fingerprint.value",
+	)
+}
+
+func TusConformanceServerCapabilities(
+	conformanceScenario map[string]interface{},
+) (TusConformanceServerCapabilitiesPlan, error) {
+	serverCapabilities, err := ObjectValue(
+		conformanceScenario["serverCapabilities"],
+		"conformanceScenario.serverCapabilities",
+	)
+	if err != nil {
+		return TusConformanceServerCapabilitiesPlan{}, err
+	}
+	extensionNames, err := StringArrayValue(
+		serverCapabilities["extensionNames"],
+		"conformanceScenario.serverCapabilities.extensionNames",
+	)
+	if err != nil {
+		return TusConformanceServerCapabilitiesPlan{}, err
+	}
+	protocolVersions, err := StringArrayValue(
+		serverCapabilities["protocolVersions"],
+		"conformanceScenario.serverCapabilities.protocolVersions",
+	)
+	if err != nil {
+		return TusConformanceServerCapabilitiesPlan{}, err
+	}
+
+	return TusConformanceServerCapabilitiesPlan{
+		ExtensionNames:   extensionNames,
+		ProtocolVersions: protocolVersions,
+	}, nil
+}
+
+func TusConformanceCancelRequestIndexes(
+	conformanceScenario map[string]interface{},
+) ([]int, error) {
+	execution, err := ObjectValue(
+		conformanceScenario["execution"],
+		"conformanceScenario.execution",
+	)
+	if err != nil {
+		return nil, err
+	}
+	actions, err := ArrayValue(
+		execution["onRequestStart"],
+		"conformanceScenario.execution.onRequestStart",
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	requestIndexes := []int{}
+	for index, rawAction := range actions {
+		label := fmt.Sprintf("conformanceScenario.execution.onRequestStart[%d]", index)
+		action, err := ObjectValue(rawAction, label)
+		if err != nil {
+			return nil, err
+		}
+		kind, err := StringValue(action["kind"], label+".kind")
+		if err != nil {
+			return nil, err
+		}
+		if kind != "cancel-upload" {
+			continue
+		}
+		requestIndex, err := IntValue(action["requestIndex"], label+".requestIndex")
+		if err != nil {
+			return nil, err
+		}
+		requestIndexes = append(requestIndexes, requestIndex)
+	}
+
+	return requestIndexes, nil
 }
 
 func ScenarioID(scenario map[string]interface{}) (string, error) {
