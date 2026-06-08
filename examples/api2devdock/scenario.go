@@ -1097,19 +1097,55 @@ func TusConformanceInputSourceBytes(
 	if err != nil {
 		return nil, err
 	}
-	kind, err := StringValue(source["kind"], "conformanceScenario.inputSource.kind")
-	if err != nil {
-		return nil, err
-	}
-	if kind != "blob" {
-		return nil, fmt.Errorf("unsupported conformance input source kind %q", kind)
-	}
 	content, err := StringValue(source["content"], "conformanceScenario.inputSource.content")
 	if err != nil {
 		return nil, err
 	}
 
 	return []byte(content), nil
+}
+
+func TusConformanceInputSourceKind(conformanceScenario map[string]interface{}) (string, error) {
+	source, err := ObjectValue(
+		conformanceScenario["inputSource"],
+		"conformanceScenario.inputSource",
+	)
+	if err != nil {
+		return "", err
+	}
+
+	return StringValue(source["kind"], "conformanceScenario.inputSource.kind")
+}
+
+func TusConformanceScenarioWantsEvent(
+	conformanceScenario map[string]interface{},
+	eventKind string,
+) (bool, error) {
+	rawEvents, ok := conformanceScenario["events"]
+	if !ok || rawEvents == nil {
+		return false, nil
+	}
+	events, err := ArrayValue(rawEvents, "conformanceScenario.events")
+	if err != nil {
+		return false, err
+	}
+
+	for index, rawEvent := range events {
+		label := fmt.Sprintf("conformanceScenario.events[%d]", index)
+		event, err := ObjectValue(rawEvent, label)
+		if err != nil {
+			return false, err
+		}
+		kind, err := StringValue(event["kind"], label+".kind")
+		if err != nil {
+			return false, err
+		}
+		if kind == eventKind {
+			return true, nil
+		}
+	}
+
+	return false, nil
 }
 
 func TusConformanceRetryDecisions(
