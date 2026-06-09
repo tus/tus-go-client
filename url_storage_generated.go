@@ -43,6 +43,13 @@ const (
 	generatedTusAbortTerminateRemovesStoredURL  = true
 	generatedTusAbortTerminateUpload            = "when-requested-and-upload-url-known"
 	generatedTusAbortTerminateUploadContext     = "detached-from-aborted-request"
+	generatedTusDetailedCauseStringTemplate     = "Error: {message}"
+	generatedTusDetailedCausedByTemplate        = ", caused by {cause}"
+	generatedTusDetailedEmptyResponseBody       = ""
+	generatedTusDetailedMissingValue            = "n/a"
+	generatedTusDetailedRequestContextTemplate  = ", originated from request (method: {method}, url: {url}, response code: {status}, response text: {body}, request id: {requestId})"
+	generatedTusCreateUploadRequestFailed       = "tus: failed to create upload"
+	generatedTusUnexpectedCreateResponse        = "tus: unexpected response while creating upload"
 	generatedTusCreationWithUploadBodySource    = "first-upload-chunk"
 	generatedTusCreationWithUploadCompletion    = "continue-with-patch-when-offset-less-than-size"
 	generatedTusCreationWithUploadExtension     = "creation-with-upload"
@@ -489,7 +496,10 @@ func (c *Client) UploadWithURLStorage(options URLStorageUploadOptions) (*Upload,
 	if err := generatedTusValidateURLStorageUploadOptions(options, parallelUploads); err != nil {
 		return nil, err
 	}
-	uploadClient = generatedTusClientWithURLStorageRequestPolicy(uploadClient, options)
+	uploadClient, detailedErrorRecorder := generatedTusClientWithURLStorageRequestPolicy(
+		uploadClient,
+		options,
+	)
 	if parallelUploads > 1 {
 		return c.uploadParallelWithURLStorage(options, uploadClient, parallelUploads)
 	}
@@ -500,7 +510,10 @@ func (c *Client) UploadWithURLStorage(options URLStorageUploadOptions) (*Upload,
 	}
 	var lastResponse *http.Response
 	if upload == nil {
-		upload, storageKey, lastResponse, err = uploadClient.createUploadForURLStorage(options)
+		upload, storageKey, lastResponse, err = uploadClient.createUploadForURLStorage(
+			options,
+			detailedErrorRecorder,
+		)
 		if err != nil {
 			return upload, err
 		}
@@ -828,11 +841,7 @@ func generatedTusClientWithUploadContext(client *Client, ctx context.Context) (*
 func generatedTusClientWithURLStorageRequestPolicy(
 	client *Client,
 	options URLStorageUploadOptions,
-) *Client {
-	if len(options.Headers) == 0 && !options.OverridePatchMethod && !options.AddRequestID {
-		return client
-	}
-
+) (*Client, *generatedTusDetailedErrorRecorder) {
 	result := *client
 	httpClient := http.DefaultClient
 	if client.client != nil {
@@ -843,15 +852,22 @@ func generatedTusClientWithURLStorageRequestPolicy(
 	if baseTransport == nil {
 		baseTransport = http.DefaultTransport
 	}
-	resultHTTPClient.Transport = generatedTusURLStorageRequestPolicyTransport{
-		AddRequestID:        options.AddRequestID,
-		Base:                baseTransport,
-		Headers:             cloneStringMap(options.Headers),
-		OverridePatchMethod: options.OverridePatchMethod,
+	detailedErrorRecorder := &generatedTusDetailedErrorRecorder{
+		Base: baseTransport,
+	}
+	if len(options.Headers) == 0 && !options.OverridePatchMethod && !options.AddRequestID {
+		resultHTTPClient.Transport = detailedErrorRecorder
+	} else {
+		resultHTTPClient.Transport = generatedTusURLStorageRequestPolicyTransport{
+			AddRequestID:        options.AddRequestID,
+			Base:                detailedErrorRecorder,
+			Headers:             cloneStringMap(options.Headers),
+			OverridePatchMethod: options.OverridePatchMethod,
+		}
 	}
 	result.client = &resultHTTPClient
 
-	return &result
+	return &result, detailedErrorRecorder
 }
 
 func generatedTusClientWithAbortCleanupContext(client *Client) (*Client, error) {
@@ -870,6 +886,219 @@ type generatedTusURLStorageRequestPolicyTransport struct {
 	Base                http.RoundTripper
 	Headers             map[string]string
 	OverridePatchMethod bool
+}
+
+// DetailedError preserves the request/response context for a failed TUS request.
+type DetailedError struct {
+	CausingError        error
+	Err                 error
+	Message             string
+	OriginalRequest     *http.Request
+	OriginalResponse    *http.Response
+	OriginalResponseBody string
+}
+
+func (err *DetailedError) Error() string {
+	return err.Message
+}
+
+func (err *DetailedError) Unwrap() error {
+	if err.Err != nil {
+		return err.Err
+	}
+
+	return err.CausingError
+}
+
+type generatedTusDetailedErrorRecorder struct {
+	Base         http.RoundTripper
+	Err          error
+	Request      *http.Request
+	Response     *http.Response
+	ResponseBody string
+	mu           sync.Mutex
+}
+
+func (recorder *generatedTusDetailedErrorRecorder) RoundTrip(
+	request *http.Request,
+) (*http.Response, error) {
+	response, err := recorder.Base.RoundTrip(request)
+	if err != nil {
+		recorder.record(request, nil, "", err)
+		return response, err
+	}
+	if response == nil || response.Body == nil {
+		recorder.record(request, response, "", nil)
+		return response, nil
+	}
+
+	bodyBytes, readErr := io.ReadAll(response.Body)
+	response.Body.Close()
+	if readErr != nil {
+		recorder.record(request, response, "", readErr)
+		return response, readErr
+	}
+
+	body := string(bodyBytes)
+	response.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+	storedResponse := *response
+	storedResponse.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+	recorder.record(request, &storedResponse, body, nil)
+
+	return response, nil
+}
+
+func (recorder *generatedTusDetailedErrorRecorder) record(
+	request *http.Request,
+	response *http.Response,
+	body string,
+	err error,
+) {
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+
+	recorder.Request = request.Clone(request.Context())
+	recorder.Response = response
+	recorder.ResponseBody = body
+	recorder.Err = err
+}
+
+func (recorder *generatedTusDetailedErrorRecorder) snapshot() generatedTusDetailedErrorSnapshot {
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+
+	return generatedTusDetailedErrorSnapshot{
+		Err:          recorder.Err,
+		Request:      recorder.Request,
+		Response:     recorder.Response,
+		ResponseBody: recorder.ResponseBody,
+	}
+}
+
+type generatedTusDetailedErrorSnapshot struct {
+	Err          error
+	Request      *http.Request
+	Response     *http.Response
+	ResponseBody string
+}
+
+func generatedTusFormatDetailedErrorMessage(
+	template string,
+	values map[string]string,
+) string {
+	message := template
+	for name, value := range values {
+		message = strings.ReplaceAll(message, "{"+name+"}", value)
+	}
+
+	return message
+}
+
+func generatedTusDetailedErrorCause(cause error) string {
+	return generatedTusFormatDetailedErrorMessage(
+		generatedTusDetailedCauseStringTemplate,
+		map[string]string{"message": cause.Error()},
+	)
+}
+
+func generatedTusDetailedErrorResponseBody(snapshot generatedTusDetailedErrorSnapshot) string {
+	if snapshot.Response == nil {
+		return generatedTusDetailedMissingValue
+	}
+	if snapshot.ResponseBody == "" {
+		return generatedTusDetailedEmptyResponseBody
+	}
+
+	return snapshot.ResponseBody
+}
+
+func generatedTusDetailedErrorResponseStatus(snapshot generatedTusDetailedErrorSnapshot) string {
+	if snapshot.Response == nil {
+		return generatedTusDetailedMissingValue
+	}
+
+	return strconv.Itoa(snapshot.Response.StatusCode)
+}
+
+func generatedTusDetailedErrorRequestID(snapshot generatedTusDetailedErrorSnapshot) string {
+	if snapshot.Request == nil {
+		return generatedTusDetailedMissingValue
+	}
+	requestID := snapshot.Request.Header.Get(generatedTusRequestIDHeaderName)
+	if requestID == "" {
+		return generatedTusDetailedMissingValue
+	}
+
+	return requestID
+}
+
+func generatedTusDetailedErrorRequestMethod(snapshot generatedTusDetailedErrorSnapshot) string {
+	if snapshot.Request == nil {
+		return generatedTusDetailedMissingValue
+	}
+
+	return snapshot.Request.Method
+}
+
+func generatedTusDetailedErrorRequestURL(snapshot generatedTusDetailedErrorSnapshot) string {
+	if snapshot.Request == nil || snapshot.Request.URL == nil {
+		return generatedTusDetailedMissingValue
+	}
+
+	return snapshot.Request.URL.String()
+}
+
+func generatedTusDetailedErrorMessage(
+	baseMessage string,
+	snapshot generatedTusDetailedErrorSnapshot,
+) string {
+	message := baseMessage
+	if snapshot.Err != nil {
+		message += generatedTusFormatDetailedErrorMessage(
+			generatedTusDetailedCausedByTemplate,
+			map[string]string{"cause": generatedTusDetailedErrorCause(snapshot.Err)},
+		)
+	}
+	message += generatedTusFormatDetailedErrorMessage(
+		generatedTusDetailedRequestContextTemplate,
+		map[string]string{
+			"body":      generatedTusDetailedErrorResponseBody(snapshot),
+			"method":    generatedTusDetailedErrorRequestMethod(snapshot),
+			"requestId": generatedTusDetailedErrorRequestID(snapshot),
+			"status":    generatedTusDetailedErrorResponseStatus(snapshot),
+			"url":       generatedTusDetailedErrorRequestURL(snapshot),
+		},
+	)
+
+	return message
+}
+
+func generatedTusCreateUploadDetailedError(
+	recorder *generatedTusDetailedErrorRecorder,
+	err error,
+) error {
+	if err == nil || recorder == nil {
+		return err
+	}
+
+	snapshot := recorder.snapshot()
+	if snapshot.Request == nil {
+		return err
+	}
+
+	baseMessage := generatedTusUnexpectedCreateResponse
+	if snapshot.Err != nil {
+		baseMessage = generatedTusCreateUploadRequestFailed
+	}
+
+	return &DetailedError{
+		CausingError:        snapshot.Err,
+		Err:                 err,
+		Message:             generatedTusDetailedErrorMessage(baseMessage, snapshot),
+		OriginalRequest:     snapshot.Request,
+		OriginalResponse:    snapshot.Response,
+		OriginalResponseBody: snapshot.ResponseBody,
+	}
 }
 
 func (transport generatedTusURLStorageRequestPolicyTransport) RoundTrip(
@@ -1761,9 +1990,10 @@ func (c *Client) resumeUploadFromURLStorage(
 
 func (c *Client) createUploadForURLStorage(
 	options URLStorageUploadOptions,
+	detailedErrorRecorder *generatedTusDetailedErrorRecorder,
 ) (*Upload, string, *http.Response, error) {
 	if options.UploadDataDuringCreation {
-		return c.createUploadWithDataForURLStorage(options)
+		return c.createUploadWithDataForURLStorage(options, detailedErrorRecorder)
 	}
 
 	upload := &Upload{}
@@ -1776,7 +2006,10 @@ func (c *Client) createUploadForURLStorage(
 	}
 	response, err := c.CreateUpload(upload, remoteSize, false, options.Metadata)
 	if err != nil {
-		return upload, "", response, err
+		return upload, "", response, generatedTusCreateUploadDetailedError(
+			detailedErrorRecorder,
+			err,
+		)
 	}
 	if err := c.generatedTusResolveCreatedUploadLocation(upload); err != nil {
 		return upload, "", response, err
@@ -1801,6 +2034,7 @@ func (c *Client) createUploadForURLStorage(
 
 func (c *Client) createUploadWithDataForURLStorage(
 	options URLStorageUploadOptions,
+	detailedErrorRecorder *generatedTusDetailedErrorRecorder,
 ) (*Upload, string, *http.Response, error) {
 	if err := generatedTusAssertCreationWithUploadPolicySupported(); err != nil {
 		return nil, "", nil, err
@@ -1830,7 +2064,10 @@ func (c *Client) createUploadWithDataForURLStorage(
 		options.Metadata,
 	)
 	if err != nil {
-		return upload, "", response, err
+		return upload, "", response, generatedTusCreateUploadDetailedError(
+			detailedErrorRecorder,
+			err,
+		)
 	}
 	upload.RemoteSize = options.Size
 	upload.RemoteOffset = uploadedBytes
