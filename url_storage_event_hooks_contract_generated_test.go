@@ -19,6 +19,7 @@ import (
 const (
 	generatedTusEventHooksContent             = "hello world"
 	generatedTusEventHooksCreatedUploadPath   = "/uploads/generated-contract"
+	generatedTusEventHooksEndpointPath        = "/uploads"
 	generatedTusEventHooksEventPolicy         = "exact-except-allowed-extra-events"
 	generatedTusEventHooksFingerprint         = "contract-single-fingerprint"
 	generatedTusEventHooksPatchAcceptedOffset = "11"
@@ -41,7 +42,7 @@ func TestGeneratedURLStorageEventHooks(t *testing.T) {
 		srvMock.AssertCalled(t)
 	}()
 
-	baseURL, err := url.Parse(srvMock.URL() + "/uploads")
+	baseURL, err := url.Parse(srvMock.URL() + generatedTusEventHooksEndpointPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +74,7 @@ func TestGeneratedURLStorageEventHooks(t *testing.T) {
 	srvMock.AddMocks(
 		generatedURLStorageEventHooksRequestHeaders(
 			mocha.Request().
-				URL(expect.URLPath("/uploads")).
+				URL(expect.URLPath(generatedTusEventHooksEndpointPath)).
 				Method(createOperation.Method),
 			createOperation,
 			map[string]string{

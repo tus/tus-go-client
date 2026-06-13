@@ -17,6 +17,7 @@ import (
 )
 
 const (
+	generatedTusResumeFlowEndpointPath        = "/uploads"
 	generatedTusResumeFlowContent             = "hello world"
 	generatedTusResumeFlowFingerprint         = "contract-resume-fingerprint"
 	generatedTusResumeFlowPatchAcceptedOffset = "11"
@@ -38,7 +39,7 @@ func TestGeneratedURLStorageResumeFlow(t *testing.T) {
 		srvMock.AssertCalled(t)
 	}()
 
-	baseURL, err := url.Parse(srvMock.URL() + "/uploads")
+	baseURL, err := url.Parse(srvMock.URL() + generatedTusResumeFlowEndpointPath)
 	if err != nil {
 		t.Fatal(err)
 	}

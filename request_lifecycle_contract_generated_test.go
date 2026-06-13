@@ -16,6 +16,7 @@ import (
 )
 
 const (
+	generatedTusRequestLifecycleEndpointPath = "/uploads"
 	generatedTusRequestLifecycleEventPolicy  = "exact"
 	generatedTusRequestLifecycleUploadLength = "11"
 	generatedTusRequestLifecycleUploadOffset = "11"
@@ -35,7 +36,7 @@ func TestGeneratedRequestLifecycleHooks(t *testing.T) {
 		srvMock.AssertCalled(t)
 	}()
 
-	baseURL, err := url.Parse(srvMock.URL() + "/uploads")
+	baseURL, err := url.Parse(srvMock.URL() + generatedTusRequestLifecycleEndpointPath)
 	if err != nil {
 		t.Fatal(err)
 	}

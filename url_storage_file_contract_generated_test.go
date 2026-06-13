@@ -20,6 +20,7 @@ import (
 const (
 	generatedTusFileFlowContent                    = "hello world"
 	generatedTusFileFlowCreatedUploadPath          = "/uploads/node-path-contract"
+	generatedTusFileFlowEndpointPath               = "/uploads"
 	generatedTusFileFlowFingerprintExpected        = "node-file-/tmp/tus-contract-file.bin-11-1700000000123-https://tus.io/uploads"
 	generatedTusFileFlowFingerprintFixtureEndpoint = "https://tus.io/uploads"
 	generatedTusFileFlowFingerprintFixtureMtimeMs  = 1700000000123
@@ -55,7 +56,7 @@ func TestGeneratedURLStorageFileFlow(t *testing.T) {
 		srvMock.AssertCalled(t)
 	}()
 
-	baseURL, err := url.Parse(srvMock.URL() + "/uploads")
+	baseURL, err := url.Parse(srvMock.URL() + generatedTusFileFlowEndpointPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +107,7 @@ func TestGeneratedURLStorageFileFlow(t *testing.T) {
 	srvMock.AddMocks(
 		generatedURLStorageFileRequestHeaders(
 			mocha.Request().
-				URL(expect.URLPath("/uploads")).
+				URL(expect.URLPath(generatedTusFileFlowEndpointPath)).
 				Method(createOperation.Method),
 			createOperation,
 			map[string]string{

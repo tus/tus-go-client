@@ -21,6 +21,7 @@ import (
 const (
 	generatedTusTerminateFlowChunkCompleteActionKind = "abort-upload"
 	generatedTusTerminateFlowContent                 = "hello world"
+	generatedTusTerminateFlowEndpointPath            = "/uploads"
 	generatedTusTerminateFlowEventPolicy             = "exact"
 	generatedTusTerminateFlowFinalStatus             = 204
 	generatedTusTerminateFlowPatchAcceptedOffset     = "5"
@@ -79,7 +80,7 @@ func TestGeneratedTerminationRetryFlow(t *testing.T) {
 		srvMock.AssertCalled(t)
 	}()
 
-	baseURL, err := url.Parse(srvMock.URL() + "/uploads")
+	baseURL, err := url.Parse(srvMock.URL() + generatedTusTerminateFlowEndpointPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +110,7 @@ func TestGeneratedTerminationRetryFlow(t *testing.T) {
 	srvMock.AddMocks(
 		generatedTerminationRetryRequestHeaders(
 			mocha.Request().
-				URL(expect.URLPath("/uploads")).
+				URL(expect.URLPath(generatedTusTerminateFlowEndpointPath)).
 				Method(createOperation.Method),
 			createOperation,
 			map[string]string{

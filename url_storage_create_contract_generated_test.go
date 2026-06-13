@@ -18,6 +18,7 @@ import (
 const (
 	generatedTusCreateFlowContent                    = "hello world"
 	generatedTusCreateFlowCreatedUploadPath          = "/uploads/generated-contract"
+	generatedTusCreateFlowEndpointPath               = "/uploads"
 	generatedTusCreateFlowFingerprint                = "contract-single-fingerprint"
 	generatedTusCreateFlowPatchAcceptedOffset        = "11"
 	generatedTusCreateFlowPatchBody                  = "hello world"
@@ -38,7 +39,7 @@ func TestGeneratedURLStorageCreateFlow(t *testing.T) {
 		srvMock.AssertCalled(t)
 	}()
 
-	baseURL, err := url.Parse(srvMock.URL() + "/uploads")
+	baseURL, err := url.Parse(srvMock.URL() + generatedTusCreateFlowEndpointPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +71,7 @@ func TestGeneratedURLStorageCreateFlow(t *testing.T) {
 	srvMock.AddMocks(
 		generatedURLStorageCreateRequestHeaders(
 			mocha.Request().
-				URL(expect.URLPath("/uploads")).
+				URL(expect.URLPath(generatedTusCreateFlowEndpointPath)).
 				Method(createOperation.Method),
 			createOperation,
 			map[string]string{

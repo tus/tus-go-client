@@ -20,6 +20,7 @@ import (
 
 const (
 	generatedTusRetryFlowContent      = "hello world"
+	generatedTusRetryFlowEndpointPath = "/uploads"
 	generatedTusRetryFlowEventPolicy  = "exact"
 	generatedTusRetryFlowFingerprint  = "retryPatchAfterOffsetRecovery-fingerprint"
 	generatedTusRetryFlowUploadLength = "11"
@@ -101,7 +102,7 @@ func TestGeneratedURLStorageRetryOffsetRecoveryFlow(t *testing.T) {
 		srvMock.AssertCalled(t)
 	}()
 
-	baseURL, err := url.Parse(srvMock.URL() + "/uploads")
+	baseURL, err := url.Parse(srvMock.URL() + generatedTusRetryFlowEndpointPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +133,7 @@ func TestGeneratedURLStorageRetryOffsetRecoveryFlow(t *testing.T) {
 	srvMock.AddMocks(
 		generatedURLStorageRetryRequestHeaders(
 			mocha.Request().
-				URL(expect.URLPath("/uploads")).
+				URL(expect.URLPath(generatedTusRetryFlowEndpointPath)).
 				Method(createOperation.Method),
 			createOperation,
 			map[string]string{
