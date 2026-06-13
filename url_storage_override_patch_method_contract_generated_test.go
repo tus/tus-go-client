@@ -18,6 +18,7 @@ const (
 	generatedTusOverrideContent           = "hello world"
 	generatedTusOverrideContentType       = "application/offset+octet-stream"
 	generatedTusOverrideContentTypeHeader = "Content-Type"
+	generatedTusOverrideExpectedRequests  = 2
 	generatedTusOverrideHeaderName        = "X-HTTP-Method-Override"
 	generatedTusOverrideHeaderValue       = "PATCH"
 	generatedTusOverrideMethod            = "POST"
@@ -139,8 +140,8 @@ func TestGeneratedURLStorageOverridePatchMethod(t *testing.T) {
 	if upload.RemoteOffset != 11 {
 		t.Fatalf("expected upload offset 11, got %d", upload.RemoteOffset)
 	}
-	if requestCount != 2 {
-		t.Fatalf("expected one offset request and one overridden patch request, got %d", requestCount)
+	if requestCount != generatedTusOverrideExpectedRequests {
+		t.Fatalf("expected %d override request(s), got %d", generatedTusOverrideExpectedRequests, requestCount)
 	}
 	select {
 	case err := <-requestErrs:

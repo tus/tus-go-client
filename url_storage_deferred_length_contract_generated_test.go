@@ -22,6 +22,8 @@ const (
 	generatedTusDeferredLengthCreateDeferValue  = "1"
 	generatedTusDeferredLengthEndpointPath      = "/uploads"
 	generatedTusDeferredLengthEventPolicy       = "exact-except-allowed-extra-events"
+	generatedTusDeferredLengthExpectedCreates   = 1
+	generatedTusDeferredLengthExpectedPatches   = 1
 	generatedTusDeferredLengthMetadataHeader    = "Upload-Metadata"
 	generatedTusDeferredLengthPatchLength       = "11"
 	generatedTusDeferredLengthPatchLengthHeader = "Upload-Length"
@@ -177,8 +179,14 @@ func TestGeneratedURLStorageDeferredLengthUpload(t *testing.T) {
 	if upload.Location != server.URL+generatedTusDeferredLengthUploadPath {
 		t.Fatalf("expected upload URL %s, got %s", server.URL+generatedTusDeferredLengthUploadPath, upload.Location)
 	}
-	if createCount != 1 || patchCount != 1 {
-		t.Fatalf("expected one create and one patch, got create=%d patch=%d", createCount, patchCount)
+	if createCount != generatedTusDeferredLengthExpectedCreates || patchCount != generatedTusDeferredLengthExpectedPatches {
+		t.Fatalf(
+			"expected create=%d patch=%d, got create=%d patch=%d",
+			generatedTusDeferredLengthExpectedCreates,
+			generatedTusDeferredLengthExpectedPatches,
+			createCount,
+			patchCount,
+		)
 	}
 	select {
 	case err := <-requestErrs:

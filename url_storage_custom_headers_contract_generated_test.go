@@ -19,6 +19,7 @@ const (
 	generatedTusCustomHeadersContentType       = "application/offset+octet-stream"
 	generatedTusCustomHeadersContentTypeHeader = "Content-Type"
 	generatedTusCustomHeadersEndpointPath      = "/uploads"
+	generatedTusCustomHeadersExpectedRequests  = 2
 	generatedTusCustomHeadersLength            = "11"
 	generatedTusCustomHeadersLengthHeader      = "Upload-Length"
 	generatedTusCustomHeadersMetadataHeader    = "Upload-Metadata"
@@ -150,8 +151,8 @@ func TestGeneratedURLStorageCustomRequestHeaders(t *testing.T) {
 	if upload.RemoteOffset != 11 {
 		t.Fatalf("expected upload offset 11, got %d", upload.RemoteOffset)
 	}
-	if requestCount != 2 {
-		t.Fatalf("expected custom-header create and patch requests, got %d", requestCount)
+	if requestCount != generatedTusCustomHeadersExpectedRequests {
+		t.Fatalf("expected %d custom-header request(s), got %d", generatedTusCustomHeadersExpectedRequests, requestCount)
 	}
 	select {
 	case err := <-requestErrs:

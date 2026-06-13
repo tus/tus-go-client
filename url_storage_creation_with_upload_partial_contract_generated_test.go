@@ -21,6 +21,7 @@ const (
 	generatedTusCreationPartialCreateBodySize    = 5
 	generatedTusCreationPartialEndpointPath      = "/uploads"
 	generatedTusCreationPartialEventPolicy       = "exact-except-allowed-extra-events"
+	generatedTusCreationPartialExpectedRequests  = 3
 	generatedTusCreationPartialLength            = "11"
 	generatedTusCreationPartialLengthHeader      = "Upload-Length"
 	generatedTusCreationPartialMetadataHeader    = "Upload-Metadata"
@@ -245,8 +246,8 @@ func TestGeneratedURLStorageCreationWithUploadPartialChunk(t *testing.T) {
 	if upload.RemoteOffset != int64(len(generatedTusCreationPartialContent)) {
 		t.Fatalf("expected upload offset %d, got %d", len(generatedTusCreationPartialContent), upload.RemoteOffset)
 	}
-	if requestCount != 3 {
-		t.Fatalf("expected one creation request and two continuation requests, got %d", requestCount)
+	if requestCount != generatedTusCreationPartialExpectedRequests {
+		t.Fatalf("expected %d partial creation request(s), got %d", generatedTusCreationPartialExpectedRequests, requestCount)
 	}
 	select {
 	case err := <-requestErrs:

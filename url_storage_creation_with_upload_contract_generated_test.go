@@ -20,6 +20,7 @@ const (
 	generatedTusCreationWithUploadContentTypeHeader = "Content-Type"
 	generatedTusCreationWithUploadEndpointPath      = "/uploads"
 	generatedTusCreationWithUploadEventPolicy       = "exact-except-allowed-extra-events"
+	generatedTusCreationWithUploadExpectedRequests  = 1
 	generatedTusCreationWithUploadLength            = "11"
 	generatedTusCreationWithUploadLengthHeader      = "Upload-Length"
 	generatedTusCreationWithUploadMetadataHeader    = "Upload-Metadata"
@@ -145,8 +146,8 @@ func TestGeneratedURLStorageCreationWithUpload(t *testing.T) {
 	if upload.RemoteOffset != int64(len(generatedTusCreationWithUploadContent)) {
 		t.Fatalf("expected upload offset %d, got %d", len(generatedTusCreationWithUploadContent), upload.RemoteOffset)
 	}
-	if requestCount != 1 {
-		t.Fatalf("expected exactly one creation-with-upload request, got %d", requestCount)
+	if requestCount != generatedTusCreationWithUploadExpectedRequests {
+		t.Fatalf("expected %d creation-with-upload request(s), got %d", generatedTusCreationWithUploadExpectedRequests, requestCount)
 	}
 	select {
 	case err := <-requestErrs:
