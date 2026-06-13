@@ -51,17 +51,17 @@ type generatedTusParallelCleanupPartFixture struct {
 
 var generatedTusParallelCleanupParts = []generatedTusParallelCleanupPartFixture{
 	{
-		UploadLength: "5",
-		UploadPath:   "/uploads/parallel-cleanup-part-1",
-		PatchBody:    "hello",
-		PatchOffset:  "0",
+		UploadLength:  "5",
+		UploadPath:    "/uploads/parallel-cleanup-part-1",
+		PatchBody:     "hello",
+		PatchOffset:   "0",
 		TerminatePath: "/uploads/parallel-cleanup-part-1",
 	},
 	{
-		UploadLength: "6",
-		UploadPath:   "/uploads/parallel-cleanup-part-2",
-		PatchBody:    " world",
-		PatchOffset:  "0",
+		UploadLength:  "6",
+		UploadPath:    "/uploads/parallel-cleanup-part-2",
+		PatchBody:     " world",
+		PatchOffset:   "0",
 		TerminatePath: "/uploads/parallel-cleanup-part-2",
 	},
 }

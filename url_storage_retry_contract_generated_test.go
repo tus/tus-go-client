@@ -161,7 +161,7 @@ func TestGeneratedURLStorageRetryOffsetRecoveryFlow(t *testing.T) {
 		Body   string
 		Offset string
 		Reply  *reply.StdReply
-}, 0, len(generatedTusRetryFlowPatchAttempts))
+	}, 0, len(generatedTusRetryFlowPatchAttempts))
 	for _, attempt := range generatedTusRetryFlowPatchAttempts {
 		patchReply := reply.Status(attempt.Status)
 		if attempt.AcceptedOffset != "" {

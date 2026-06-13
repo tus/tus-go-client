@@ -19,20 +19,20 @@ import (
 
 const (
 	generatedTusAbortTerminationCancelRequestIndex = 1
-	generatedTusAbortTerminationEventPolicy   = "exact"
-	generatedTusAbortTerminationContent           = "hello world"
-	generatedTusAbortTerminationContentType       = "application/offset+octet-stream"
-	generatedTusAbortTerminationContentTypeHeader = "Content-Type"
-	generatedTusAbortTerminationEndpointPath      = "/uploads"
-	generatedTusAbortTerminationFingerprint       = "contract-abort-terminate-fingerprint"
-	generatedTusAbortTerminationMethod            = "POST"
-	generatedTusAbortTerminationOverrideHeader    = "X-HTTP-Method-Override"
-	generatedTusAbortTerminationOverrideValue     = "PATCH"
-	generatedTusAbortTerminationPatchBody         = "hello world"
-	generatedTusAbortTerminationPatchOffset       = "0"
-	generatedTusAbortTerminationOffsetHeader      = "Upload-Offset"
-	generatedTusAbortTerminationUploadLength      = "11"
-	generatedTusAbortTerminationUploadPath        = "/uploads/abort-terminate-contract"
+	generatedTusAbortTerminationEventPolicy        = "exact"
+	generatedTusAbortTerminationContent            = "hello world"
+	generatedTusAbortTerminationContentType        = "application/offset+octet-stream"
+	generatedTusAbortTerminationContentTypeHeader  = "Content-Type"
+	generatedTusAbortTerminationEndpointPath       = "/uploads"
+	generatedTusAbortTerminationFingerprint        = "contract-abort-terminate-fingerprint"
+	generatedTusAbortTerminationMethod             = "POST"
+	generatedTusAbortTerminationOverrideHeader     = "X-HTTP-Method-Override"
+	generatedTusAbortTerminationOverrideValue      = "PATCH"
+	generatedTusAbortTerminationPatchBody          = "hello world"
+	generatedTusAbortTerminationPatchOffset        = "0"
+	generatedTusAbortTerminationOffsetHeader       = "Upload-Offset"
+	generatedTusAbortTerminationUploadLength       = "11"
+	generatedTusAbortTerminationUploadPath         = "/uploads/abort-terminate-contract"
 )
 
 var generatedTusAbortTerminationHeaders = map[string]string{"X-Tus-Contract": "abort-policy", "X-Tus-Trace": "abort-trace-123"}

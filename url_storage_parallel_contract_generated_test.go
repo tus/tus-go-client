@@ -36,26 +36,26 @@ var generatedTusParallelMetadataForPartialUploads = map[string]string{"test": "w
 var generatedTusParallelPatchGateRequestIndexes = []int{2, 3}
 
 type generatedTusParallelPartFixture struct {
-	UploadLength         string
-	UploadPath           string
-	PatchBody            string
-	PatchOffset          string
+	UploadLength        string
+	UploadPath          string
+	PatchBody           string
+	PatchOffset         string
 	PatchAcceptedOffset string
 }
 
 var generatedTusParallelParts = []generatedTusParallelPartFixture{
 	{
-		UploadLength: "5",
-		UploadPath:   "/uploads/parallel-part-1",
-		PatchBody:    "hello",
-		PatchOffset:  "0",
+		UploadLength:        "5",
+		UploadPath:          "/uploads/parallel-part-1",
+		PatchBody:           "hello",
+		PatchOffset:         "0",
 		PatchAcceptedOffset: "5",
 	},
 	{
-		UploadLength: "6",
-		UploadPath:   "/uploads/parallel-part-2",
-		PatchBody:    " world",
-		PatchOffset:  "0",
+		UploadLength:        "6",
+		UploadPath:          "/uploads/parallel-part-2",
+		PatchBody:           " world",
+		PatchOffset:         "0",
 		PatchAcceptedOffset: "6",
 	},
 }

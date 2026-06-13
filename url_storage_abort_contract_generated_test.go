@@ -18,10 +18,10 @@ import (
 
 const (
 	generatedTusAbortCancelRequestIndex = 0
-	generatedTusAbortEventPolicy   = "exact"
-	generatedTusAbortContent      = "hello world"
-	generatedTusAbortEndpointPath = "/uploads"
-	generatedTusAbortUploadLength = "11"
+	generatedTusAbortEventPolicy        = "exact"
+	generatedTusAbortContent            = "hello world"
+	generatedTusAbortEndpointPath       = "/uploads"
+	generatedTusAbortUploadLength       = "11"
 )
 
 var generatedTusAbortExtraEventPrefixes = []string{}

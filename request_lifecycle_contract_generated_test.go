@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	generatedTusRequestLifecycleEventPolicy   = "exact"
+	generatedTusRequestLifecycleEventPolicy  = "exact"
 	generatedTusRequestLifecycleUploadLength = "11"
 	generatedTusRequestLifecycleUploadOffset = "11"
 	generatedTusRequestLifecycleUploadPath   = "/uploads/request-hooks-contract"

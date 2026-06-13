@@ -11,7 +11,7 @@ const (
 	// DefaultClientProtocol is the generated client protocol mode used by default.
 	DefaultClientProtocol = "tus-v1"
 
-	ProtocolTusV1 = "tus-v1"
+	ProtocolTusV1       = "tus-v1"
 	ProtocolIetfDraft03 = "ietf-draft-03"
 	ProtocolIetfDraft05 = "ietf-draft-05"
 )
@@ -20,32 +20,32 @@ var defaultProtocolRequestHeaders = map[string]string{"Tus-Resumable": "1.0.0"}
 var defaultProtocolResponseHeaders = map[string]string{"Tus-Resumable": "1.0.0"}
 
 type clientProtocolCompatibilityVersion struct {
-	RequestHeaders                 map[string]string
-	ResponseHeaders                map[string]string
-	UploadBodyContentType          string
-	UploadCompleteHeaderName       string
-	UploadCompleteCompleteValue    string
-	UploadCompleteIncompleteValue  string
+	RequestHeaders                map[string]string
+	ResponseHeaders               map[string]string
+	UploadBodyContentType         string
+	UploadCompleteHeaderName      string
+	UploadCompleteCompleteValue   string
+	UploadCompleteIncompleteValue string
 }
 
 var clientProtocolCompatibilityVersions = map[string]clientProtocolCompatibilityVersion{
 	"tus-v1": {
-		RequestHeaders:          map[string]string{"Tus-Resumable": "1.0.0"},
-		ResponseHeaders:         map[string]string{"Tus-Resumable": "1.0.0"},
-		UploadBodyContentType:   "application/offset+octet-stream",
+		RequestHeaders:        map[string]string{"Tus-Resumable": "1.0.0"},
+		ResponseHeaders:       map[string]string{"Tus-Resumable": "1.0.0"},
+		UploadBodyContentType: "application/offset+octet-stream",
 	},
 	"ietf-draft-03": {
-		RequestHeaders:          map[string]string{"Upload-Draft-Interop-Version": "5"},
-		ResponseHeaders:         map[string]string{},
-		UploadBodyContentType:   "",
+		RequestHeaders:                map[string]string{"Upload-Draft-Interop-Version": "5"},
+		ResponseHeaders:               map[string]string{},
+		UploadBodyContentType:         "",
 		UploadCompleteHeaderName:      "Upload-Complete",
 		UploadCompleteCompleteValue:   "?1",
 		UploadCompleteIncompleteValue: "?0",
 	},
 	"ietf-draft-05": {
-		RequestHeaders:          map[string]string{"Upload-Draft-Interop-Version": "6"},
-		ResponseHeaders:         map[string]string{},
-		UploadBodyContentType:   "application/partial-upload",
+		RequestHeaders:                map[string]string{"Upload-Draft-Interop-Version": "6"},
+		ResponseHeaders:               map[string]string{},
+		UploadBodyContentType:         "application/partial-upload",
 		UploadCompleteHeaderName:      "Upload-Complete",
 		UploadCompleteCompleteValue:   "?1",
 		UploadCompleteIncompleteValue: "?0",

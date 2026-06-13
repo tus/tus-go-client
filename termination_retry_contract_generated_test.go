@@ -20,14 +20,14 @@ import (
 
 const (
 	generatedTusTerminateFlowChunkCompleteActionKind = "abort-upload"
-	generatedTusTerminateFlowContent             = "hello world"
-	generatedTusTerminateFlowEventPolicy         = "exact"
-	generatedTusTerminateFlowFinalStatus         = 204
-	generatedTusTerminateFlowPatchAcceptedOffset = "5"
-	generatedTusTerminateFlowPatchBody           = "hello"
-	generatedTusTerminateFlowPatchOffset         = "0"
-	generatedTusTerminateFlowUploadLength        = "11"
-	generatedTusTerminateFlowUploadPath          = "/uploads/terminate-contract"
+	generatedTusTerminateFlowContent                 = "hello world"
+	generatedTusTerminateFlowEventPolicy             = "exact"
+	generatedTusTerminateFlowFinalStatus             = 204
+	generatedTusTerminateFlowPatchAcceptedOffset     = "5"
+	generatedTusTerminateFlowPatchBody               = "hello"
+	generatedTusTerminateFlowPatchOffset             = "0"
+	generatedTusTerminateFlowUploadLength            = "11"
+	generatedTusTerminateFlowUploadPath              = "/uploads/terminate-contract"
 )
 
 type generatedTusTerminateRetryDecision struct {

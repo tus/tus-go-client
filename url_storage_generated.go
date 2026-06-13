@@ -74,11 +74,11 @@ const (
 	generatedTusParallelExecutionWorkerStrategy = "one-worker-per-part"
 	generatedTusParallelUploadSplit             = "contiguous-floor-size-last-remainder"
 	generatedTusLocationResolutionStrategy      = "relative-to-creation-request-url"
-	generatedTusRetryAttemptIncrementPolicy    = "after-retry-scheduled"
-	generatedTusRetryAttemptResetPolicy        = "when-offset-advanced-since-last-retry"
+	generatedTusRetryAttemptIncrementPolicy     = "after-retry-scheduled"
+	generatedTusRetryAttemptResetPolicy         = "when-offset-advanced-since-last-retry"
 	generatedTusRetryClientErrorStatus          = 400
 	generatedTusRetryStatusCategoryDivisor      = 100
-	generatedTusRequestIDHeaderName            = "X-Request-ID"
+	generatedTusRequestIDHeaderName             = "X-Request-ID"
 	generatedTusSuccessCloseSourceAfterHook     = true
 	generatedTusSuccessCloseSourceRequiresSrc   = true
 	generatedTusSuccessCloseSource              = "after-hook-when-source-open"
@@ -111,12 +111,12 @@ type generatedTusMethodOverride struct {
 
 var generatedTusMethodOverrides = []generatedTusMethodOverride{
 	{
-		HeaderName:    "X-HTTP-Method-Override",
-		HeaderValue:   "PATCH",
-		InputFlag:     "overridePatchMethod",
-		Method:        "POST",
-		OperationID:   "patchTusUpload",
-		SourceMethod:  "PATCH",
+		HeaderName:   "X-HTTP-Method-Override",
+		HeaderValue:  "PATCH",
+		InputFlag:    "overridePatchMethod",
+		Method:       "POST",
+		OperationID:  "patchTusUpload",
+		SourceMethod: "PATCH",
 	},
 }
 var generatedTusNodeFileFingerprintFields = []string{"prefix", "absolutePath", "size", "mtimeMs", "endpoint"}
@@ -890,11 +890,11 @@ type generatedTusURLStorageRequestPolicyTransport struct {
 
 // DetailedError preserves the request/response context for a failed TUS request.
 type DetailedError struct {
-	CausingError        error
-	Err                 error
-	Message             string
-	OriginalRequest     *http.Request
-	OriginalResponse    *http.Response
+	CausingError         error
+	Err                  error
+	Message              string
+	OriginalRequest      *http.Request
+	OriginalResponse     *http.Response
 	OriginalResponseBody string
 }
 
@@ -1092,11 +1092,11 @@ func generatedTusCreateUploadDetailedError(
 	}
 
 	return &DetailedError{
-		CausingError:        snapshot.Err,
-		Err:                 err,
-		Message:             generatedTusDetailedErrorMessage(baseMessage, snapshot),
-		OriginalRequest:     snapshot.Request,
-		OriginalResponse:    snapshot.Response,
+		CausingError:         snapshot.Err,
+		Err:                  err,
+		Message:              generatedTusDetailedErrorMessage(baseMessage, snapshot),
+		OriginalRequest:      snapshot.Request,
+		OriginalResponse:     snapshot.Response,
 		OriginalResponseBody: snapshot.ResponseBody,
 	}
 }

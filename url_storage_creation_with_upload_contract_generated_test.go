@@ -86,7 +86,7 @@ func TestGeneratedURLStorageCreationWithUpload(t *testing.T) {
 			responseWriter,
 			createResponse,
 			map[string]string{
-				"Location": server.URL + generatedTusCreationWithUploadPath,
+				"Location":      server.URL + generatedTusCreationWithUploadPath,
 				"Tus-Resumable": "1.0.0",
 				"Upload-Offset": generatedTusCreationWithUploadOffset,
 			},
