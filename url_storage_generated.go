@@ -1512,9 +1512,6 @@ func generatedTusEmitUploadURLAvailable(hooks UploadEventHooks, context string) 
 	if hooks.OnUploadURLAvailable == nil {
 		return nil
 	}
-	if err := generatedTusAssertUploadURLAvailableHookPolicySupported(); err != nil {
-		return err
-	}
 
 	switch context {
 	case "createUpload":
@@ -1544,9 +1541,6 @@ func generatedTusEmitProgressBeforeRequestBody(
 	if hooks.OnProgress == nil {
 		return nil
 	}
-	if err := generatedTusAssertEventHookPolicySupported(); err != nil {
-		return err
-	}
 
 	return hooks.OnProgress(currentOffset, generatedTusInt64Pointer(bytesTotal))
 }
@@ -1558,9 +1552,6 @@ func generatedTusEmitProgressAfterChunkAccepted(
 ) error {
 	if hooks.OnProgress == nil {
 		return nil
-	}
-	if err := generatedTusAssertEventHookPolicySupported(); err != nil {
-		return err
 	}
 
 	return hooks.OnProgress(uploadOffset, generatedTusInt64Pointer(bytesTotal))
@@ -1574,9 +1565,6 @@ func generatedTusEmitChunkCompleteAfterChunkAccepted(
 ) error {
 	if hooks.OnChunkComplete == nil {
 		return nil
-	}
-	if err := generatedTusAssertEventHookPolicySupported(); err != nil {
-		return err
 	}
 
 	return hooks.OnChunkComplete(
@@ -1622,9 +1610,6 @@ func generatedTusEmitSuccess(input generatedTusSuccessInput) error {
 }
 
 func generatedTusShouldCloseSourceOnSuccess(source io.ReadSeeker) (bool, error) {
-	if err := generatedTusAssertEventHookPolicySupported(); err != nil {
-		return false, err
-	}
 	if !generatedTusSuccessCloseSourceAfterHook {
 		return false, nil
 	}
@@ -1637,12 +1622,6 @@ func generatedTusShouldCloseSourceOnSuccess(source io.ReadSeeker) (bool, error) 
 func generatedTusShouldRemoveStoredUploadOnSuccess(
 	removeFingerprintOnSuccess bool,
 ) (bool, error) {
-	if err := generatedTusAssertEventHookPolicySupported(); err != nil {
-		return false, err
-	}
-	if err := generatedTusAssertURLStorageCleanupPolicySupported(); err != nil {
-		return false, err
-	}
 	if !generatedTusSuccessRemoveStoredBeforeHook {
 		return false, nil
 	}
@@ -1657,102 +1636,6 @@ func generatedTusShouldRemoveStoredUploadOnSuccess(
 
 func generatedTusInt64Pointer(value int64) *int64 {
 	return &value
-}
-
-func generatedTusAssertUploadURLAvailableHookPolicySupported() error {
-	if generatedTusUploadURLAvailableCreate != "after-url-known-before-storage" {
-		return fmt.Errorf(
-			"tus: unsupported create upload URL hook policy %s",
-			generatedTusUploadURLAvailableCreate,
-		)
-	}
-	if generatedTusUploadURLAvailableResume != "after-url-known-before-storage" {
-		return fmt.Errorf(
-			"tus: unsupported resume upload URL hook policy %s",
-			generatedTusUploadURLAvailableResume,
-		)
-	}
-	if generatedTusUploadURLAvailableParallel != "not-emitted" {
-		return fmt.Errorf(
-			"tus: unsupported parallel final upload URL hook policy %s",
-			generatedTusUploadURLAvailableParallel,
-		)
-	}
-
-	return nil
-}
-
-func generatedTusAssertEventHookPolicySupported() error {
-	if err := generatedTusAssertUploadURLAvailableHookPolicySupported(); err != nil {
-		return err
-	}
-	if generatedTusProgressAfterChunkAccepted != "accepted-offset" {
-		return fmt.Errorf(
-			"tus: unsupported chunk-accepted progress hook policy %s",
-			generatedTusProgressAfterChunkAccepted,
-		)
-	}
-	if generatedTusProgressAfterResumeComplete != "upload-length" {
-		return fmt.Errorf(
-			"tus: unsupported completed-resume progress hook policy %s",
-			generatedTusProgressAfterResumeComplete,
-		)
-	}
-	if generatedTusProgressBeforeRequestBody != "current-offset" {
-		return fmt.Errorf(
-			"tus: unsupported request-body progress hook policy %s",
-			generatedTusProgressBeforeRequestBody,
-		)
-	}
-	if generatedTusProgressDuringRequest != "start-offset-plus-transmitted-bytes" {
-		return fmt.Errorf(
-			"tus: unsupported request progress hook policy %s",
-			generatedTusProgressDuringRequest,
-		)
-	}
-	if generatedTusProgressParallelPart != "aggregated-part-progress" {
-		return fmt.Errorf(
-			"tus: unsupported parallel progress hook policy %s",
-			generatedTusProgressParallelPart,
-		)
-	}
-	if generatedTusChunkCompleteAfterChunkAccepted != "accepted-chunk-size-and-offset" {
-		return fmt.Errorf(
-			"tus: unsupported chunk-complete hook policy %s",
-			generatedTusChunkCompleteAfterChunkAccepted,
-		)
-	}
-	if generatedTusSuccessCloseSource != "after-hook-when-source-open" {
-		return fmt.Errorf(
-			"tus: unsupported success source-close policy %s",
-			generatedTusSuccessCloseSource,
-		)
-	}
-	if generatedTusSuccessEmit != "after-upload-complete" {
-		return fmt.Errorf(
-			"tus: unsupported success hook policy %s",
-			generatedTusSuccessEmit,
-		)
-	}
-	if generatedTusSuccessRemoveStoredURL != "before-hook-when-option-enabled" {
-		return fmt.Errorf(
-			"tus: unsupported success storage cleanup policy %s",
-			generatedTusSuccessRemoveStoredURL,
-		)
-	}
-
-	return nil
-}
-
-func generatedTusAssertURLStorageCleanupPolicySupported() error {
-	if generatedTusURLStorageRemoveOnSuccess != "when-option-enabled" {
-		return fmt.Errorf(
-			"tus: unsupported URL storage success cleanup policy %s",
-			generatedTusURLStorageRemoveOnSuccess,
-		)
-	}
-
-	return nil
 }
 
 func generatedTusAssertParallelUploadPolicySupported() error {
@@ -1892,24 +1775,6 @@ func generatedTusAssertAbortPolicySupported() error {
 		if !supportedActions[action] {
 			return fmt.Errorf("tus: unsupported abort sequence action %s", action)
 		}
-	}
-	if generatedTusAbortTerminateUpload != "when-requested-and-upload-url-known" {
-		return fmt.Errorf(
-			"tus: unsupported abort termination policy %s",
-			generatedTusAbortTerminateUpload,
-		)
-	}
-	if generatedTusAbortTerminateUploadContext != "detached-from-aborted-request" {
-		return fmt.Errorf(
-			"tus: unsupported abort termination context policy %s",
-			generatedTusAbortTerminateUploadContext,
-		)
-	}
-	if generatedTusAbortRemoveStoredURLAfterTerm != "after-successful-termination" {
-		return fmt.Errorf(
-			"tus: unsupported abort storage cleanup policy %s",
-			generatedTusAbortRemoveStoredURLAfterTerm,
-		)
 	}
 
 	return nil
