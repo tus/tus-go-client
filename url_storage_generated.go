@@ -26,23 +26,11 @@ import (
 )
 
 const (
-	generatedTusNodeFileFingerprintPath         = "absolute"
 	generatedTusNodeFileFingerprintPrefix       = "node-file"
 	generatedTusNodeFileFingerprintSeparator    = "-"
-	generatedTusChunkCompleteAfterChunkAccepted = "accepted-chunk-size-and-offset"
-	generatedTusProgressAfterChunkAccepted      = "accepted-offset"
-	generatedTusProgressAfterResumeComplete     = "upload-length"
-	generatedTusProgressBeforeRequestBody       = "current-offset"
-	generatedTusProgressDuringRequest           = "start-offset-plus-transmitted-bytes"
-	generatedTusProgressParallelPart            = "aggregated-part-progress"
-	generatedTusAbortErrorMessage               = "Request was aborted"
-	generatedTusAbortRemoveStoredURLAfterTerm   = "after-successful-termination"
-	generatedTusAbortSuppressErrorAfterAbort    = true
 	generatedTusAbortTerminateRequiresRequest   = true
 	generatedTusAbortTerminateRequiresUploadURL = true
 	generatedTusAbortTerminateRemovesStoredURL  = true
-	generatedTusAbortTerminateUpload            = "when-requested-and-upload-url-known"
-	generatedTusAbortTerminateUploadContext     = "detached-from-aborted-request"
 	generatedTusDetailedCauseStringTemplate     = "Error: {message}"
 	generatedTusDetailedCausedByTemplate        = ", caused by {cause}"
 	generatedTusDetailedEmptyResponseBody       = ""
@@ -50,54 +38,31 @@ const (
 	generatedTusDetailedRequestContextTemplate  = ", originated from request (method: {method}, url: {url}, response code: {status}, response text: {body}, request id: {requestId})"
 	generatedTusCreateUploadRequestFailed       = "tus: failed to create upload"
 	generatedTusUnexpectedCreateResponse        = "tus: unexpected response while creating upload"
-	generatedTusCreationWithUploadBodySource    = "first-upload-chunk"
-	generatedTusCreationWithUploadCompletion    = "continue-with-patch-when-offset-less-than-size"
 	generatedTusCreationWithUploadExtension     = "creation-with-upload"
-	generatedTusCreationWithUploadResponseOff   = "accepted-offset"
-	generatedTusDeferredLengthCreateSize        = "size-unknown"
-	generatedTusDeferredLengthDeclareLength     = "final-upload-request"
 	generatedTusDeferredLengthExtension         = "creation-defer-length"
 	generatedTusDefaultParallelUploads          = 1
 	generatedTusMinimumParallelUploads          = 2
 	generatedTusValidationParallelDeferred      = "tus: cannot use the `uploadLengthDeferred` option when parallelUploads is enabled"
 	generatedTusValidationParallelCreateData    = "tus: cannot use the `uploadDataDuringCreation` option when parallelUploads is enabled"
-	generatedTusParallelPartialMetadata         = "metadataForPartialUploads"
-	generatedTusParallelPartialNestedUploads    = "disabled"
-	generatedTusParallelPartialURLStorage       = "parent-managed"
-	generatedTusParallelCleanupOnPartError      = "terminate-created-partials-when-abort-termination-enabled"
 	generatedTusParallelCleanupCreatedPartials  = true
 	generatedTusParallelCleanupRequiresAbort    = true
-	generatedTusParallelCleanupReturnedError    = "original-error-unless-cleanup-fails"
 	generatedTusParallelExecutionCancelOnError  = true
-	generatedTusParallelExecutionResultOrder    = "part-index"
-	generatedTusParallelExecutionSourceRead     = "before-worker-start"
-	generatedTusParallelExecutionWorkerStrategy = "one-worker-per-part"
-	generatedTusParallelUploadSplit             = "contiguous-floor-size-last-remainder"
-	generatedTusLocationResolutionStrategy      = "relative-to-creation-request-url"
-	generatedTusRetryAttemptIncrementPolicy     = "after-retry-scheduled"
-	generatedTusRetryAttemptResetPolicy         = "when-offset-advanced-since-last-retry"
 	generatedTusRetryClientErrorStatus          = 400
 	generatedTusRetryStatusCategoryDivisor      = 100
 	generatedTusRequestIDHeaderName             = "X-Request-ID"
 	generatedTusSuccessCloseSourceAfterHook     = true
 	generatedTusSuccessCloseSourceRequiresSrc   = true
-	generatedTusSuccessCloseSource              = "after-hook-when-source-open"
 	generatedTusSuccessEmitAfterUploadComplete  = true
-	generatedTusSuccessEmit                     = "after-upload-complete"
 	generatedTusSuccessRemoveStoredBeforeHook   = true
 	generatedTusSuccessRemoveStoredRequiresOpt  = true
-	generatedTusSuccessRemoveStoredURL          = "before-hook-when-option-enabled"
 	generatedTusURLStorageRemoveOnSuccessEnable = true
-	generatedTusURLStorageRemoveOnSuccess       = "when-option-enabled"
 	generatedTusURLStorageRemoveRequiresOpt     = true
 	generatedTusUploadURLAvailableCreate        = "after-url-known-before-storage"
 	generatedTusUploadURLAvailableParallel      = "not-emitted"
 	generatedTusUploadURLAvailableResume        = "after-url-known-before-storage"
 	generatedTusURLStorageIDMultiplier          = 1000000000000
-	generatedTusURLStorageIDStrategy            = "rounded-random-number"
 	generatedTusURLStorageNamespace             = "tus"
 	generatedTusURLStorageSeparator             = "::"
-	generatedTusURLStorageCreationTime          = "sdk-current-date-string"
 )
 
 type generatedTusMethodOverride struct {
@@ -119,8 +84,6 @@ var generatedTusMethodOverrides = []generatedTusMethodOverride{
 		SourceMethod: "PATCH",
 	},
 }
-var generatedTusNodeFileFingerprintFields = []string{"prefix", "absolutePath", "size", "mtimeMs", "endpoint"}
-var generatedTusAbortSequence = []string{"mark-aborted", "abort-parallel-uploads", "abort-current-request", "clear-retry-timer", "terminate-upload-if-requested"}
 var generatedTusDefaultRetryDelays = []time.Duration{0 * time.Millisecond, 1000 * time.Millisecond, 3000 * time.Millisecond, 5000 * time.Millisecond}
 var generatedTusRetryableClientStatusCodes = []int{409, 423}
 
@@ -394,10 +357,6 @@ func URLStorageKey(fingerprint string, id int64) string {
 }
 
 func URLStorageID(randomValue float64) int64 {
-	if generatedTusURLStorageIDStrategy != "rounded-random-number" {
-		panic(fmt.Sprintf("tus: unsupported URL storage ID policy %s", generatedTusURLStorageIDStrategy))
-	}
-
 	return int64(math.Round(randomValue * generatedTusURLStorageIDMultiplier))
 }
 
@@ -485,10 +444,7 @@ func (c *Client) UploadWithURLStorage(options URLStorageUploadOptions) (*Upload,
 		return nil, errors.New("tus: unable to calculate fingerprint for this input file")
 	}
 
-	uploadClient, err := generatedTusClientWithUploadContext(c, options.Context)
-	if err != nil {
-		return nil, err
-	}
+	uploadClient := generatedTusClientWithUploadContext(c, options.Context)
 	parallelUploads, err := generatedTusParallelUploadCount(options.ParallelUploads)
 	if err != nil {
 		return nil, err
@@ -557,9 +513,6 @@ func (c *Client) uploadParallelWithURLStorage(
 	uploadClient *Client,
 	parallelUploads int,
 ) (*Upload, error) {
-	if err := generatedTusAssertParallelUploadPolicySupported(); err != nil {
-		return nil, err
-	}
 	partSizes, err := generatedTusParallelUploadPartSizes(options.Size, parallelUploads)
 	if err != nil {
 		return nil, err
@@ -737,14 +690,11 @@ func (c *Client) uploadURLStorageSource(
 			return err
 		}
 		if _, err := stream.Write(chunk); err != nil {
-			effectiveRetryAttempt, retryAttemptErr := generatedTusEffectiveRetryAttempt(
+			effectiveRetryAttempt := generatedTusEffectiveRetryAttempt(
 				stream.Upload.RemoteOffset,
 				offsetBeforeRetry,
 				retryAttempt,
 			)
-			if retryAttemptErr != nil {
-				return retryAttemptErr
-			}
 			if !generatedTusShouldScheduleRetry(
 				options.OnShouldRetry,
 				err,
@@ -758,10 +708,7 @@ func (c *Client) uploadURLStorageSource(
 			if delay > 0 {
 				time.Sleep(delay)
 			}
-			retryAttempt, retryAttemptErr = generatedTusNextRetryAttempt(effectiveRetryAttempt)
-			if retryAttemptErr != nil {
-				return retryAttemptErr
-			}
+			retryAttempt = generatedTusNextRetryAttempt(effectiveRetryAttempt)
 			offsetBeforeRetry = stream.Upload.RemoteOffset
 			if _, err := stream.Sync(); err != nil {
 				return err
@@ -827,15 +774,12 @@ func (us *UploadStream) lastResponseStatus() int {
 	return us.LastResponse.StatusCode
 }
 
-func generatedTusClientWithUploadContext(client *Client, ctx context.Context) (*Client, error) {
+func generatedTusClientWithUploadContext(client *Client, ctx context.Context) *Client {
 	if ctx == nil {
-		return client, nil
-	}
-	if err := generatedTusAssertAbortPolicySupported(); err != nil {
-		return nil, err
+		return client
 	}
 
-	return client.WithContext(ctx), nil
+	return client.WithContext(ctx)
 }
 
 func generatedTusClientWithURLStorageRequestPolicy(
@@ -870,15 +814,8 @@ func generatedTusClientWithURLStorageRequestPolicy(
 	return &result, detailedErrorRecorder
 }
 
-func generatedTusClientWithAbortCleanupContext(client *Client) (*Client, error) {
-	if generatedTusAbortTerminateUploadContext != "detached-from-aborted-request" {
-		return nil, fmt.Errorf(
-			"tus: unsupported abort termination context policy %s",
-			generatedTusAbortTerminateUploadContext,
-		)
-	}
-
-	return client.WithContext(context.Background()), nil
+func generatedTusClientWithAbortCleanupContext(client *Client) *Client {
+	return client.WithContext(context.Background())
 }
 
 type generatedTusURLStorageRequestPolicyTransport struct {
@@ -1153,20 +1090,12 @@ func (c *Client) generatedTusResolveCreatedUploadLocation(upload *Upload) error 
 	if upload == nil || upload.Location == "" {
 		return nil
 	}
-	switch generatedTusLocationResolutionStrategy {
-	case "relative-to-creation-request-url":
-		locationURL, err := url.Parse(upload.Location)
-		if err != nil {
-			return err
-		}
-		upload.Location = c.BaseURL.ResolveReference(locationURL).String()
-		return nil
-	default:
-		return fmt.Errorf(
-			"tus: unsupported location resolution policy %s",
-			generatedTusLocationResolutionStrategy,
-		)
+	locationURL, err := url.Parse(upload.Location)
+	if err != nil {
+		return err
 	}
+	upload.Location = c.BaseURL.ResolveReference(locationURL).String()
+	return nil
 }
 
 func (transport generatedTusURLStorageRequestPolicyTransport) methodOverrideEnabled(
@@ -1219,12 +1148,6 @@ func generatedTusValidateURLStorageUploadOptions(
 }
 
 func generatedTusCreationWithUploadChunkSize(options URLStorageUploadOptions) int64 {
-	if generatedTusCreationWithUploadBodySource != "first-upload-chunk" {
-		panic(fmt.Sprintf(
-			"tus: unsupported creation-with-upload body source %s",
-			generatedTusCreationWithUploadBodySource,
-		))
-	}
 	if options.ChunkSize > 0 && options.ChunkSize < options.Size {
 		return options.ChunkSize
 	}
@@ -1257,13 +1180,6 @@ func generatedTusParallelUploadPartInputs(
 	source io.ReadSeeker,
 	partSizes []int64,
 ) ([]generatedTusParallelPartInput, error) {
-	if generatedTusParallelExecutionSourceRead != "before-worker-start" {
-		return nil, fmt.Errorf(
-			"tus: unsupported parallel source read policy %s",
-			generatedTusParallelExecutionSourceRead,
-		)
-	}
-
 	partInputs := make([]generatedTusParallelPartInput, len(partSizes))
 	offset := int64(0)
 	for index, partSize := range partSizes {
@@ -1294,23 +1210,10 @@ func generatedTusParallelUploadContext(ctx context.Context) (context.Context, co
 }
 
 func generatedTusParallelPartialUploadMetadata(options URLStorageUploadOptions) map[string]string {
-	if generatedTusParallelPartialMetadata != "metadataForPartialUploads" {
-		panic(fmt.Sprintf(
-			"tus: unsupported parallel partial metadata policy %s",
-			generatedTusParallelPartialMetadata,
-		))
-	}
-
 	return cloneStringMap(options.MetadataForPartialUploads)
 }
 
 func generatedTusParallelUploadError(results []generatedTusParallelPartResult) error {
-	if generatedTusParallelExecutionResultOrder != "part-index" {
-		return fmt.Errorf(
-			"tus: unsupported parallel result order policy %s",
-			generatedTusParallelExecutionResultOrder,
-		)
-	}
 	for _, result := range results {
 		if result.Err == nil || IsUploadAbortError(result.Err) {
 			continue
@@ -1347,19 +1250,13 @@ func (c *Client) generatedTusCleanupParallelPartialUploads(
 	results []generatedTusParallelPartResult,
 	originalErr error,
 ) error {
-	shouldCleanup, err := generatedTusShouldCleanupParallelPartialUploads(
+	shouldCleanup := generatedTusShouldCleanupParallelPartialUploads(
 		options.TerminateUploadOnAbort,
 	)
-	if err != nil {
-		return err
-	}
 	if !shouldCleanup {
 		return originalErr
 	}
-	cleanupClient, err := generatedTusClientWithAbortCleanupContext(c)
-	if err != nil {
-		return err
-	}
+	cleanupClient := generatedTusClientWithAbortCleanupContext(c)
 
 	for _, result := range results {
 		if result.Upload.Location == "" {
@@ -1385,21 +1282,15 @@ func (c *Client) generatedTusHandleURLStorageUploadAbort(
 	if !IsUploadAbortError(err) {
 		return err
 	}
-	shouldTerminate, shouldTerminateErr := generatedTusShouldTerminateKnownUploadOnAbort(
+	shouldTerminate := generatedTusShouldTerminateKnownUploadOnAbort(
 		options.TerminateUploadOnAbort,
 		upload,
 	)
-	if shouldTerminateErr != nil {
-		return shouldTerminateErr
-	}
 	if !shouldTerminate {
 		return err
 	}
 
-	cleanupClient, cleanupClientErr := generatedTusClientWithAbortCleanupContext(c)
-	if cleanupClientErr != nil {
-		return cleanupClientErr
-	}
+	cleanupClient := generatedTusClientWithAbortCleanupContext(c)
 
 	if _, terminateErr := cleanupClient.TerminateUploadWithRetry(*upload, TerminateUploadOptions{
 		RetryDelays:   options.RetryDelays,
@@ -1419,20 +1310,17 @@ func (c *Client) generatedTusHandleURLStorageUploadAbort(
 func generatedTusShouldTerminateKnownUploadOnAbort(
 	terminateUploadOnAbort bool,
 	upload *Upload,
-) (bool, error) {
-	if err := generatedTusAssertAbortPolicySupported(); err != nil {
-		return false, err
-	}
+) bool {
 	if generatedTusAbortTerminateRequiresRequest && !terminateUploadOnAbort {
-		return false, nil
+		return false
 	}
 	if generatedTusAbortTerminateRequiresUploadURL && (upload == nil || upload.Location == "") {
-		return false, nil
+		return false
 	}
 	if upload == nil || upload.Location == "" {
-		return false, nil
+		return false
 	}
-	return true, nil
+	return true
 }
 
 func generatedTusRetryDelays(retryDelays []time.Duration) []time.Duration {
@@ -1447,32 +1335,16 @@ func generatedTusEffectiveRetryAttempt(
 	offset int64,
 	offsetBeforeRetry int64,
 	retryAttempt int,
-) (int, error) {
-	switch generatedTusRetryAttemptResetPolicy {
-	case "when-offset-advanced-since-last-retry":
-		if offset > offsetBeforeRetry {
-			return 0, nil
-		}
-
-		return retryAttempt, nil
-	default:
-		return 0, fmt.Errorf(
-			"tus: unsupported retry attempt reset policy %s",
-			generatedTusRetryAttemptResetPolicy,
-		)
+) int {
+	if offset > offsetBeforeRetry {
+		return 0
 	}
+
+	return retryAttempt
 }
 
-func generatedTusNextRetryAttempt(retryAttempt int) (int, error) {
-	switch generatedTusRetryAttemptIncrementPolicy {
-	case "after-retry-scheduled":
-		return retryAttempt + 1, nil
-	default:
-		return 0, fmt.Errorf(
-			"tus: unsupported retry attempt increment policy %s",
-			generatedTusRetryAttemptIncrementPolicy,
-		)
-	}
+func generatedTusNextRetryAttempt(retryAttempt int) int {
+	return retryAttempt + 1
 }
 
 func generatedTusShouldScheduleRetry(
@@ -1575,12 +1447,9 @@ func generatedTusEmitChunkCompleteAfterChunkAccepted(
 }
 
 func generatedTusEmitSuccess(input generatedTusSuccessInput) error {
-	shouldRemoveStoredUpload, shouldRemoveStoredUploadErr := generatedTusShouldRemoveStoredUploadOnSuccess(
+	shouldRemoveStoredUpload := generatedTusShouldRemoveStoredUploadOnSuccess(
 		input.RemoveFingerprintOnSuccess,
 	)
-	if shouldRemoveStoredUploadErr != nil {
-		return shouldRemoveStoredUploadErr
-	}
 	if shouldRemoveStoredUpload && input.StorageKey != "" {
 		if err := input.Storage.RemoveUpload(input.StorageKey); err != nil {
 			return err
@@ -1595,10 +1464,7 @@ func generatedTusEmitSuccess(input generatedTusSuccessInput) error {
 		}
 	}
 
-	shouldCloseSource, shouldCloseSourceErr := generatedTusShouldCloseSourceOnSuccess(input.Source)
-	if shouldCloseSourceErr != nil {
-		return shouldCloseSourceErr
-	}
+	shouldCloseSource := generatedTusShouldCloseSourceOnSuccess(input.Source)
 	if shouldCloseSource {
 		closer, ok := input.Source.(io.Closer)
 		if ok {
@@ -1609,204 +1475,60 @@ func generatedTusEmitSuccess(input generatedTusSuccessInput) error {
 	return nil
 }
 
-func generatedTusShouldCloseSourceOnSuccess(source io.ReadSeeker) (bool, error) {
+func generatedTusShouldCloseSourceOnSuccess(source io.ReadSeeker) bool {
 	if !generatedTusSuccessCloseSourceAfterHook {
-		return false, nil
+		return false
 	}
 	if generatedTusSuccessCloseSourceRequiresSrc {
-		return source != nil, nil
+		return source != nil
 	}
-	return true, nil
+	return true
 }
 
 func generatedTusShouldRemoveStoredUploadOnSuccess(
 	removeFingerprintOnSuccess bool,
-) (bool, error) {
+) bool {
 	if !generatedTusSuccessRemoveStoredBeforeHook {
-		return false, nil
+		return false
 	}
 	if !generatedTusURLStorageRemoveOnSuccessEnable {
-		return false, nil
+		return false
 	}
 	if generatedTusSuccessRemoveStoredRequiresOpt || generatedTusURLStorageRemoveRequiresOpt {
-		return removeFingerprintOnSuccess, nil
+		return removeFingerprintOnSuccess
 	}
-	return true, nil
+	return true
 }
 
 func generatedTusInt64Pointer(value int64) *int64 {
 	return &value
 }
 
-func generatedTusAssertParallelUploadPolicySupported() error {
-	if generatedTusParallelExecutionWorkerStrategy != "one-worker-per-part" {
-		return fmt.Errorf(
-			"tus: unsupported parallel worker strategy %s",
-			generatedTusParallelExecutionWorkerStrategy,
-		)
-	}
-	if generatedTusParallelExecutionResultOrder != "part-index" {
-		return fmt.Errorf(
-			"tus: unsupported parallel result order policy %s",
-			generatedTusParallelExecutionResultOrder,
-		)
-	}
-	if generatedTusParallelExecutionSourceRead != "before-worker-start" {
-		return fmt.Errorf(
-			"tus: unsupported parallel source read policy %s",
-			generatedTusParallelExecutionSourceRead,
-		)
-	}
-	if generatedTusParallelUploadSplit != "contiguous-floor-size-last-remainder" {
-		return fmt.Errorf(
-			"tus: unsupported parallel upload split policy %s",
-			generatedTusParallelUploadSplit,
-		)
-	}
-	if generatedTusParallelPartialMetadata != "metadataForPartialUploads" {
-		return fmt.Errorf(
-			"tus: unsupported parallel partial metadata policy %s",
-			generatedTusParallelPartialMetadata,
-		)
-	}
-	if generatedTusParallelPartialNestedUploads != "disabled" {
-		return fmt.Errorf(
-			"tus: unsupported nested parallel upload policy %s",
-			generatedTusParallelPartialNestedUploads,
-		)
-	}
-	if generatedTusParallelPartialURLStorage != "parent-managed" {
-		return fmt.Errorf(
-			"tus: unsupported parallel URL storage policy %s",
-			generatedTusParallelPartialURLStorage,
-		)
-	}
-	if generatedTusProgressParallelPart != "aggregated-part-progress" {
-		return fmt.Errorf(
-			"tus: unsupported parallel progress hook policy %s",
-			generatedTusProgressParallelPart,
-		)
-	}
-
-	return nil
-}
-
-func generatedTusAssertCreationWithUploadPolicySupported() error {
-	if generatedTusCreationWithUploadBodySource != "first-upload-chunk" {
-		return fmt.Errorf(
-			"tus: unsupported creation-with-upload body source %s",
-			generatedTusCreationWithUploadBodySource,
-		)
-	}
-	if generatedTusCreationWithUploadCompletion != "continue-with-patch-when-offset-less-than-size" {
-		return fmt.Errorf(
-			"tus: unsupported creation-with-upload completion policy %s",
-			generatedTusCreationWithUploadCompletion,
-		)
-	}
-	if generatedTusCreationWithUploadResponseOff != "accepted-offset" {
-		return fmt.Errorf(
-			"tus: unsupported creation-with-upload response offset policy %s",
-			generatedTusCreationWithUploadResponseOff,
-		)
-	}
-
-	return nil
-}
-
-func generatedTusAssertDeferredLengthPolicySupported() error {
-	if generatedTusDeferredLengthCreateSize != "size-unknown" {
-		return fmt.Errorf(
-			"tus: unsupported deferred length create size policy %s",
-			generatedTusDeferredLengthCreateSize,
-		)
-	}
-	if generatedTusDeferredLengthDeclareLength != "final-upload-request" {
-		return fmt.Errorf(
-			"tus: unsupported deferred length declaration policy %s",
-			generatedTusDeferredLengthDeclareLength,
-		)
-	}
-
-	return nil
-}
-
-func generatedTusAssertParallelCleanupPolicySupported() error {
-	if generatedTusParallelCleanupOnPartError != "terminate-created-partials-when-abort-termination-enabled" {
-		return fmt.Errorf(
-			"tus: unsupported parallel cleanup policy %s",
-			generatedTusParallelCleanupOnPartError,
-		)
-	}
-	if generatedTusParallelCleanupReturnedError != "original-error-unless-cleanup-fails" {
-		return fmt.Errorf(
-			"tus: unsupported parallel cleanup error policy %s",
-			generatedTusParallelCleanupReturnedError,
-		)
-	}
-
-	return nil
-}
-
 func generatedTusShouldCleanupParallelPartialUploads(
 	terminateUploadOnAbort bool,
-) (bool, error) {
-	if err := generatedTusAssertParallelCleanupPolicySupported(); err != nil {
-		return false, err
-	}
+) bool {
 	if !generatedTusParallelCleanupCreatedPartials {
-		return false, nil
+		return false
 	}
 	if generatedTusParallelCleanupRequiresAbort {
-		return terminateUploadOnAbort, nil
+		return terminateUploadOnAbort
 	}
-	return true, nil
-}
-
-func generatedTusAssertAbortPolicySupported() error {
-	supportedActions := map[string]bool{
-		"abort-current-request":         true,
-		"abort-parallel-uploads":        true,
-		"clear-retry-timer":             true,
-		"mark-aborted":                  true,
-		"terminate-upload-if-requested": true,
-	}
-	for _, action := range generatedTusAbortSequence {
-		if !supportedActions[action] {
-			return fmt.Errorf("tus: unsupported abort sequence action %s", action)
-		}
-	}
-
-	return nil
+	return true
 }
 
 func FileFingerprint(input FileFingerprintInput) string {
-	parts := make([]string, 0, len(generatedTusNodeFileFingerprintFields))
-	for _, field := range generatedTusNodeFileFingerprintFields {
-		switch field {
-		case "prefix":
-			parts = append(parts, generatedTusNodeFileFingerprintPrefix)
-		case "absolutePath":
-			parts = append(parts, input.AbsolutePath)
-		case "size":
-			parts = append(parts, strconv.FormatInt(input.Size, 10))
-		case "mtimeMs":
-			parts = append(parts, strconv.FormatInt(input.MtimeMs, 10))
-		case "endpoint":
-			parts = append(parts, input.Endpoint)
-		default:
-			panic(fmt.Sprintf("tus: unsupported Node file fingerprint field %s", field))
-		}
+	parts := []string{
+		generatedTusNodeFileFingerprintPrefix,
+		input.AbsolutePath,
+		strconv.FormatInt(input.Size, 10),
+		strconv.FormatInt(input.MtimeMs, 10),
+		input.Endpoint,
 	}
 
 	return strings.Join(parts, generatedTusNodeFileFingerprintSeparator)
 }
 
 func nodeFileFingerprintPath(path string) (string, error) {
-	if generatedTusNodeFileFingerprintPath != "absolute" {
-		return "", fmt.Errorf("tus: unsupported Node file fingerprint path policy %s", generatedTusNodeFileFingerprintPath)
-	}
-
 	return filepath.Abs(path)
 }
 
@@ -1864,9 +1586,6 @@ func (c *Client) createUploadForURLStorage(
 	upload := &Upload{}
 	remoteSize := options.Size
 	if options.UploadLengthDeferred {
-		if err := generatedTusAssertDeferredLengthPolicySupported(); err != nil {
-			return upload, "", nil, err
-		}
 		remoteSize = SizeUnknown
 	}
 	response, err := c.CreateUpload(upload, remoteSize, false, options.Metadata)
@@ -1901,9 +1620,6 @@ func (c *Client) createUploadWithDataForURLStorage(
 	options URLStorageUploadOptions,
 	detailedErrorRecorder *generatedTusDetailedErrorRecorder,
 ) (*Upload, string, *http.Response, error) {
-	if err := generatedTusAssertCreationWithUploadPolicySupported(); err != nil {
-		return nil, "", nil, err
-	}
 	if _, err := options.Source.Seek(0, io.SeekStart); err != nil {
 		return nil, "", nil, err
 	}
@@ -1983,10 +1699,6 @@ func URLStorageUploadFromUpload(upload Upload) URLStorageUpload {
 }
 
 func urlStorageCreationTime() string {
-	if generatedTusURLStorageCreationTime != "sdk-current-date-string" {
-		panic(fmt.Sprintf("tus: unsupported URL storage creation time policy %s", generatedTusURLStorageCreationTime))
-	}
-
 	return time.Now().String()
 }
 

@@ -123,12 +123,9 @@ func TestGeneratedURLStorageCreateFlow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	shouldRemoveStoredUpload, shouldRemoveStoredUploadErr := generatedTusShouldRemoveStoredUploadOnSuccess(
+	shouldRemoveStoredUpload := generatedTusShouldRemoveStoredUploadOnSuccess(
 		generatedTusCreateFlowRemoveFingerprintOnSuccess,
 	)
-	if shouldRemoveStoredUploadErr != nil {
-		t.Fatal(shouldRemoveStoredUploadErr)
-	}
 	if shouldRemoveStoredUpload {
 		if len(storedUploads) != 0 {
 			t.Fatalf("expected successful create flow to remove stored upload, got %#v", storedUploads)
