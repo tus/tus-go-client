@@ -17,7 +17,7 @@ import (
 // headed to
 func NewClient(client *http.Client, baseURL *url.URL) *Client {
 	c := &Client{
-		ProtocolVersion: "1.0.0",
+		ProtocolVersion: DefaultProtocolVersion,
 		GetRequest:      newRequest,
 		client:          client,
 		BaseURL:         baseURL,
@@ -49,7 +49,7 @@ type Client struct {
 	// BaseURL is base url the client making queries to. For example, "http://example.com/files"
 	BaseURL *url.URL
 
-	// ProtocolVersion is TUS protocol version will be used in requests. Default is "1.0.0"
+	// ProtocolVersion is TUS protocol version will be used in requests. Default is DefaultProtocolVersion.
 	ProtocolVersion string
 
 	// Server capabilities and settings. Use UpdateCapabilities to query the capabilities from a server
@@ -237,6 +237,9 @@ func (c *Client) CreateUploadWithData(u *Upload, data []byte, remoteSize int64, 
 	s.ChunkSize = int64(len(data)) // Data must be uploaded in one request
 	s.uploadMethod = http.MethodPost
 	headers := map[string]string{"Upload-Length": strconv.Itoa(int(remoteSize)), "Upload-Offset": ""}
+	if headerName, value, ok := protocolUploadCompleteHeader(c.ProtocolVersion, true); ok {
+		headers[headerName] = value
+	}
 	if partial {
 		headers["Upload-Concat"] = "partial"
 	}
@@ -429,8 +432,18 @@ func (c *Client) UpdateCapabilities() (response *http.Response, err error) {
 }
 
 func (c *Client) tusRequest(ctx context.Context, req *http.Request) (response *http.Response, err error) {
-	if req.Method != http.MethodOptions && req.Header.Get("Tus-Resumable") == "" {
-		req.Header.Set("Tus-Resumable", c.ProtocolVersion)
+	if req.Method != http.MethodOptions {
+		requestHeaders, ok := protocolRequestHeaders(c.ProtocolVersion)
+		if !ok {
+			err = ErrProtocol.WithText(fmt.Sprintf("unsupported protocol version %q", c.ProtocolVersion))
+			return
+		}
+		for headerName, value := range requestHeaders {
+			if req.Header.Get(headerName) != "" {
+				continue
+			}
+			req.Header.Set(headerName, value)
+		}
 	}
 	if ctx != nil {
 		req = req.WithContext(ctx)

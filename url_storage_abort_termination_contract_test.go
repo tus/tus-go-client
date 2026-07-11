@@ -1,0 +1,277 @@
+package tusgo
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strings"
+	"testing"
+	"time"
+)
+
+const (
+	generatedTusAbortTerminationCancelRequestIndex = 1
+	generatedTusAbortTerminationEventPolicy        = "exact"
+	generatedTusAbortTerminationContent            = "hello world"
+	generatedTusAbortTerminationContentType        = "application/offset+octet-stream"
+	generatedTusAbortTerminationContentTypeHeader  = "Content-Type"
+	generatedTusAbortTerminationEndpointPath       = "/uploads"
+	generatedTusAbortTerminationFingerprint        = "contract-abort-terminate-fingerprint"
+	generatedTusAbortTerminationMethod             = "POST"
+	generatedTusAbortTerminationOverrideHeader     = "X-HTTP-Method-Override"
+	generatedTusAbortTerminationOverrideValue      = "PATCH"
+	generatedTusAbortTerminationPatchBody          = "hello world"
+	generatedTusAbortTerminationPatchOffset        = "0"
+	generatedTusAbortTerminationOffsetHeader       = "Upload-Offset"
+	generatedTusAbortTerminationUploadLength       = "11"
+	generatedTusAbortTerminationUploadPath         = "/uploads/abort-terminate-contract"
+)
+
+var generatedTusAbortTerminationHeaders = map[string]string{"X-Tus-Contract": "abort-policy", "X-Tus-Trace": "abort-trace-123"}
+var generatedTusAbortTerminationExtraEventPrefixes = []string{}
+var generatedTusAbortTerminationExpectedEvents = []string{"request-abort:1"}
+var generatedTusAbortTerminationMetadata = map[string]string{"filename": "hello.txt"}
+
+func TestGeneratedAbortTerminatesKnownUpload(t *testing.T) {
+	createOperation := generatedProtocolOperation("createTusUpload")
+	patchOperation := generatedProtocolOperation("patchTusUpload")
+	terminateOperation := generatedProtocolOperation("terminateTusUpload")
+	encodedMetadata, err := EncodeMetadata(generatedTusAbortTerminationMetadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	patchStarted := make(chan struct{})
+	patchDone := make(chan struct{})
+	terminationDone := make(chan struct{})
+	requestErrs := make(chan error, 8)
+	events := []string{}
+	recordRequestErr := func(err error) {
+		if err != nil {
+			requestErrs <- err
+		}
+	}
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(responseWriter http.ResponseWriter, request *http.Request) {
+		switch {
+		case request.URL.Path == generatedTusAbortTerminationEndpointPath && request.Method == createOperation.Method:
+			recordRequestErr(generatedAssertTusAbortTerminationRequestHeaders(
+				request,
+				createOperation,
+				map[string]string{
+					"Tus-Resumable":   "1.0.0",
+					"Upload-Length":   generatedTusAbortTerminationUploadLength,
+					"Upload-Metadata": encodedMetadata,
+					"X-Tus-Contract":  "abort-policy",
+					"X-Tus-Trace":     "abort-trace-123",
+				},
+			))
+			recordRequestErr(generatedAssertTusAbortTerminationCustomHeaders(
+				request,
+				generatedTusAbortTerminationHeaders,
+			))
+			createResponse := generatedResponseFor(createOperation, 201)
+			generatedWriteTusAbortTerminationResponseHeaders(
+				responseWriter,
+				createResponse,
+				map[string]string{
+					"Location":      server.URL + generatedTusAbortTerminationUploadPath,
+					"Tus-Resumable": "1.0.0",
+				},
+			)
+			responseWriter.WriteHeader(201)
+
+		case request.URL.Path == generatedTusAbortTerminationUploadPath && request.Method == generatedTusAbortTerminationMethod:
+			defer close(patchDone)
+			body, err := io.ReadAll(request.Body)
+			recordRequestErr(err)
+			if string(body) != generatedTusAbortTerminationPatchBody {
+				recordRequestErr(fmt.Errorf("expected abort patch body %q, got %q", generatedTusAbortTerminationPatchBody, string(body)))
+			}
+			recordRequestErr(generatedAssertTusAbortTerminationRequestHeaders(
+				request,
+				patchOperation,
+				map[string]string{
+					"Content-Type":           generatedTusAbortTerminationContentType,
+					"Tus-Resumable":          "1.0.0",
+					"Upload-Offset":          generatedTusAbortTerminationPatchOffset,
+					"X-HTTP-Method-Override": generatedTusAbortTerminationOverrideValue,
+					"X-Tus-Contract":         "abort-policy",
+					"X-Tus-Trace":            "abort-trace-123",
+				},
+			))
+			recordRequestErr(generatedAssertTusAbortTerminationCustomHeaders(
+				request,
+				generatedTusAbortTerminationHeaders,
+			))
+			if actual := request.Header.Get(generatedTusAbortTerminationOverrideHeader); actual != generatedTusAbortTerminationOverrideValue {
+				recordRequestErr(fmt.Errorf("expected override header %s, got %s", generatedTusAbortTerminationOverrideValue, actual))
+			}
+			events = append(events, generatedTusEventKeyRequestAbort(
+				generatedTusEventKeyNumber(int64(generatedTusAbortTerminationCancelRequestIndex)),
+			))
+			close(patchStarted)
+			<-request.Context().Done()
+
+		case request.URL.Path == generatedTusAbortTerminationUploadPath && request.Method == terminateOperation.Method:
+			recordRequestErr(generatedAssertTusAbortTerminationRequestHeaders(
+				request,
+				terminateOperation,
+				map[string]string{
+					"Tus-Resumable":  "1.0.0",
+					"X-Tus-Contract": "abort-policy",
+					"X-Tus-Trace":    "abort-trace-123",
+				},
+			))
+			recordRequestErr(generatedAssertTusAbortTerminationCustomHeaders(
+				request,
+				generatedTusAbortTerminationHeaders,
+			))
+			if actual := request.Header.Get(generatedTusAbortTerminationOverrideHeader); actual != "" {
+				recordRequestErr(fmt.Errorf("expected no override header on termination request, got %s", actual))
+			}
+			terminateResponse := generatedResponseFor(terminateOperation, 204)
+			generatedWriteTusAbortTerminationResponseHeaders(
+				responseWriter,
+				terminateResponse,
+				map[string]string{
+					"Tus-Resumable": "1.0.0",
+				},
+			)
+			responseWriter.WriteHeader(204)
+			close(terminationDone)
+
+		default:
+			recordRequestErr(fmt.Errorf("unexpected request %s %s", request.Method, request.URL.Path))
+			responseWriter.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	baseURL, err := url.Parse(server.URL + generatedTusAbortTerminationEndpointPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := NewClient(http.DefaultClient, baseURL)
+	client.Capabilities = &ServerCapabilities{
+		Extensions:       []string{createOperation.Role, terminateOperation.Role},
+		ProtocolVersions: []string{DefaultProtocolVersion},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	storage := NewMemoryURLStorage()
+	go func() {
+		_, err := client.UploadWithURLStorage(URLStorageUploadOptions{
+			Context:                ctx,
+			Storage:                storage,
+			Source:                 strings.NewReader(generatedTusAbortTerminationContent),
+			Fingerprint:            generatedTusAbortTerminationFingerprint,
+			Size:                   11,
+			Headers:                generatedTusAbortTerminationHeaders,
+			Metadata:               generatedTusAbortTerminationMetadata,
+			OverridePatchMethod:    true,
+			TerminateUploadOnAbort: true,
+		})
+		result <- err
+	}()
+
+	select {
+	case <-patchStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for abort patch request")
+	}
+	cancel()
+
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected context cancellation, got %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for abort termination result")
+	}
+	select {
+	case <-patchDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for server to observe abort")
+	}
+	select {
+	case <-terminationDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for termination request")
+	}
+	select {
+	case err := <-requestErrs:
+		t.Fatal(err)
+	default:
+	}
+	generatedTusAssertEvents(t, "abortUploadAfterStoredUrl", generatedTusAbortTerminationEventPolicy, generatedTusAbortTerminationExtraEventPrefixes, generatedTusAbortTerminationExpectedEvents, events)
+
+	storedUploads, err := storage.FindAllUploads()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(storedUploads) != 0 {
+		t.Fatalf("expected terminated abort to remove stored uploads, got %#v", storedUploads)
+	}
+}
+
+func generatedAssertTusAbortTerminationRequestHeaders(
+	request *http.Request,
+	operation generatedTusProtocolOperation,
+	values map[string]string,
+) error {
+	variant := operation.Request.HeaderVariants[0]
+	for _, field := range variant.Fields {
+		if !field.Required {
+			continue
+		}
+		expected := generatedTusRequestHeaderValue(values, field.DisplayName)
+		if actual := request.Header.Get(field.DisplayName); actual != expected {
+			return fmt.Errorf(
+				"expected request header %s=%s, got %s",
+				field.DisplayName,
+				expected,
+				actual,
+			)
+		}
+	}
+
+	return nil
+}
+
+func generatedAssertTusAbortTerminationCustomHeaders(
+	request *http.Request,
+	expected map[string]string,
+) error {
+	for key, value := range expected {
+		if actual := request.Header.Get(key); actual != value {
+			return fmt.Errorf("expected custom header %s=%s, got %s", key, value, actual)
+		}
+	}
+
+	return nil
+}
+
+func generatedWriteTusAbortTerminationResponseHeaders(
+	responseWriter http.ResponseWriter,
+	contract generatedTusResponseContract,
+	values map[string]string,
+) {
+	if len(contract.HeaderVariants) == 0 {
+		return
+	}
+	variant := contract.HeaderVariants[0]
+	for _, field := range variant.Fields {
+		if !field.Required {
+			continue
+		}
+		value := generatedTusResponseHeaderValue(values, field.DisplayName)
+		responseWriter.Header().Set(field.DisplayName, value)
+	}
+}

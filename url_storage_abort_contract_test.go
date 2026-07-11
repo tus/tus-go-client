@@ -1,0 +1,146 @@
+package tusgo
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strings"
+	"testing"
+	"time"
+)
+
+const (
+	generatedTusAbortCancelRequestIndex = 0
+	generatedTusAbortEventPolicy        = "exact"
+	generatedTusAbortContent            = "hello world"
+	generatedTusAbortEndpointPath       = "/uploads"
+	generatedTusAbortUploadLength       = "11"
+)
+
+var generatedTusAbortExtraEventPrefixes = []string{}
+var generatedTusAbortExpectedEvents = []string{"request-abort:0"}
+var generatedTusAbortMetadata = map[string]string{"filename": "hello.txt"}
+
+func TestGeneratedAbortUploadContext(t *testing.T) {
+	createOperation := generatedProtocolOperation("createTusUpload")
+	encodedMetadata, err := EncodeMetadata(generatedTusAbortMetadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	requestStarted := make(chan struct{})
+	requestDone := make(chan struct{})
+	events := []string{}
+	var requestErr error
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
+		defer close(requestDone)
+		if request.URL.Path != generatedTusAbortEndpointPath {
+			requestErr = fmt.Errorf("expected path %s, got %s", generatedTusAbortEndpointPath, request.URL.Path)
+		}
+		if request.Method != createOperation.Method {
+			requestErr = fmt.Errorf("expected method %s, got %s", createOperation.Method, request.Method)
+		}
+		if err := generatedAssertTusAbortRequestHeaders(
+			request,
+			createOperation,
+			map[string]string{
+				"Tus-Resumable":   "1.0.0",
+				"Upload-Length":   generatedTusAbortUploadLength,
+				"Upload-Metadata": encodedMetadata,
+			},
+		); err != nil {
+			requestErr = err
+		}
+		events = append(events, generatedTusEventKeyRequestAbort(
+			generatedTusEventKeyNumber(int64(generatedTusAbortCancelRequestIndex)),
+		))
+		close(requestStarted)
+		<-request.Context().Done()
+	}))
+	defer server.Close()
+
+	baseURL, err := url.Parse(server.URL + generatedTusAbortEndpointPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := NewClient(http.DefaultClient, baseURL)
+	client.Capabilities = &ServerCapabilities{
+		Extensions:       []string{createOperation.Role},
+		ProtocolVersions: []string{DefaultProtocolVersion},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	storage := NewMemoryURLStorage()
+	go func() {
+		_, err := client.UploadWithURLStorage(URLStorageUploadOptions{
+			Context:     ctx,
+			Storage:     storage,
+			Source:      strings.NewReader(generatedTusAbortContent),
+			Fingerprint: "contract-abort-fingerprint",
+			Size:        11,
+			Metadata:    generatedTusAbortMetadata,
+		})
+		result <- err
+	}()
+
+	select {
+	case <-requestStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for abort request")
+	}
+	if requestErr != nil {
+		t.Fatal(requestErr)
+	}
+	cancel()
+
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected context cancellation, got %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for abort result")
+	}
+	select {
+	case <-requestDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for server to observe abort")
+	}
+	generatedTusAssertEvents(t, "abortUpload", generatedTusAbortEventPolicy, generatedTusAbortExtraEventPrefixes, generatedTusAbortExpectedEvents, events)
+
+	storedUploads, err := storage.FindAllUploads()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(storedUploads) != 0 {
+		t.Fatalf("expected aborted create not to store uploads, got %#v", storedUploads)
+	}
+}
+
+func generatedAssertTusAbortRequestHeaders(
+	request *http.Request,
+	operation generatedTusProtocolOperation,
+	values map[string]string,
+) error {
+	variant := operation.Request.HeaderVariants[0]
+	for _, field := range variant.Fields {
+		if !field.Required {
+			continue
+		}
+		expected := generatedTusRequestHeaderValue(values, field.DisplayName)
+		if actual := request.Header.Get(field.DisplayName); actual != expected {
+			return fmt.Errorf(
+				"expected request header %s=%s, got %s",
+				field.DisplayName,
+				expected,
+				actual,
+			)
+		}
+	}
+
+	return nil
+}

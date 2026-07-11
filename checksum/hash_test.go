@@ -75,4 +75,3 @@ var _ = Describe("HashBase64ReadWriter", func() {
 		})
 	})
 })
-
