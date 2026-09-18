@@ -180,7 +180,7 @@ func (c *Client) CreateUpload(u *Upload, remoteSize int64, partial bool, meta ma
 	case remoteSize > 0:
 		req.Header.Set("Upload-Length", strconv.FormatInt(remoteSize, 10))
 	default:
-		panic(fmt.Sprintf("upload size is negative: %d", remoteSize))
+		panic(fmt.Sprintf("remoteSize is negative: %d", remoteSize))
 	}
 
 	if len(meta) > 0 {

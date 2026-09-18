@@ -212,7 +212,7 @@ func (us *UploadStream) Seek(offset int64, whence int) (int64, error) {
 	case io.SeekEnd:
 		newOffset = us.Upload.RemoteSize - 1 + offset
 	default:
-		panic("unknown whence value")
+		panic(fmt.Sprintf("unknown whence value: %d", whence))
 	}
 	if offset >= us.Upload.RemoteSize {
 		return newOffset, fmt.Errorf("offset %d exceeds the upload size %d bytes", newOffset, us.Upload.RemoteSize)
@@ -419,7 +419,7 @@ func (us *UploadStream) uploadChunkImpl(requestURL string, data io.Reader, extra
 
 func (us *UploadStream) validate() error {
 	if us.Upload.RemoteSize == SizeUnknown {
-		panic("upload must have size before start the uploading")
+		return fmt.Errorf("upload size must be set before uploading starts")
 	}
 	if us.Upload.RemoteSize < 0 {
 		panic(fmt.Sprintf("upload size is negative %d", us.Upload.RemoteSize))

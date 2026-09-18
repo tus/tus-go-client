@@ -45,12 +45,12 @@ func (te TusError) WithResponse(r *http.Response) TusError {
 	b := make([]byte, 256)
 	if l, err := io.ReadFull(r.Body, b); err == nil || err == io.EOF {
 		if l > 0 {
-			te.inner = fmt.Errorf("HTTP %d: <no body>", r.StatusCode)
-		} else {
 			te.inner = fmt.Errorf("HTTP %d: %s", r.StatusCode, b[:l])
+		} else {
+			te.inner = fmt.Errorf("HTTP %d: <no body>", r.StatusCode)
 		}
 	} else {
-		panic(err)
+		te.inner = fmt.Errorf("HTTP %d: read body: %w", r.StatusCode, err)
 	}
 	return te
 }

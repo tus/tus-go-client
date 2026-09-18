@@ -517,7 +517,8 @@ var _ = Describe("UploadStream", func() {
 				u := Upload{Location: "/foo/bar", RemoteSize: SizeUnknown}
 				s := NewUploadStream(testClient, &u)
 				rd := io.LimitReader(rand.New(rand.NewSource(time.Now().UnixNano())), 1024)
-				Ω(func() { _, _ = s.ReadFrom(rd) }).Should(Panic())
+				_, err := s.ReadFrom(rd)
+				Ω(err).Should(MatchError("upload size must be set before uploading starts"))
 			})
 		})
 		When("upload with defer length, but creation-defer-length extension is not active", func() {

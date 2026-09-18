@@ -221,20 +221,23 @@ var _ = Describe("Client", func() {
 			})
 			When("http error or unexpected code", func() {
 				DescribeTable("should return error",
-					func(status int, expectErr error) {
+					func(status int, expectErr error, expectMsg string) {
 						srvMock.AddMocks(tRequest(http.MethodHead, "/foo/bar", tusHeaders).Reply(reply.Status(status)))
 						f := Upload{}
 
 						resp, err := testClient.GetUpload(&f, "/foo/bar")
+						Ω(err).Should(And(
+							MatchError(expectErr),
+							MatchError(expectMsg),
+						))
 						Ω(resp).ShouldNot(BeNil())
-						Ω(err).Should(MatchError(expectErr))
 						Ω(f).Should(Equal(Upload{}))
 					},
-					Entry("404", http.StatusNotFound, ErrUploadDoesNotExist),
-					Entry("410", http.StatusGone, ErrUploadDoesNotExist),
-					Entry("403", http.StatusForbidden, ErrUploadDoesNotExist),
-					Entry("400", http.StatusBadRequest, ErrUnexpectedResponse),
-					Entry("201", http.StatusCreated, ErrUnexpectedResponse),
+					Entry("404", http.StatusNotFound, ErrUploadDoesNotExist, "upload does not exist: HTTP 404: <no body>"),
+					Entry("410", http.StatusGone, ErrUploadDoesNotExist, "upload does not exist: HTTP 410: <no body>"),
+					Entry("403", http.StatusForbidden, ErrUploadDoesNotExist, "upload does not exist: HTTP 403: <no body>"),
+					Entry("400", http.StatusBadRequest, ErrUnexpectedResponse, "unexpected HTTP response code: %!s(<nil>)"),
+					Entry("201", http.StatusCreated, ErrUnexpectedResponse, "unexpected HTTP response code: %!s(<nil>)"),
 				)
 			})
 			When("corrupted numeric header value", func() {
