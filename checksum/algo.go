@@ -9,6 +9,14 @@ import (
 	"hash/fnv"
 	"strings"
 	"unicode"
+
+	// Register hashes whose constructors live in x/crypto, not stdlib.
+	// crypto.Hash.New panics without these imports (see #11).
+	_ "golang.org/x/crypto/blake2b"
+	_ "golang.org/x/crypto/blake2s"
+	_ "golang.org/x/crypto/md4"
+	_ "golang.org/x/crypto/ripemd160"
+	_ "golang.org/x/crypto/sha3"
 )
 
 type Algorithm string
