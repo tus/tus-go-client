@@ -25,6 +25,9 @@ type mockTusUploader struct {
 	requests []*http.Request
 	replies  []*reply.StdReply
 	buf      *bytes.Buffer
+	// ackOnly, if non-empty, is consumed per request: 0 copies none of the
+	// body, >0 copies that many bytes, <0 copies the whole body.
+	ackOnly []int
 }
 
 func (mtu *mockTusUploader) handler() func(r *http.Request, m reply.M, p params.P) (*reply.Response, error) {
@@ -39,8 +42,27 @@ func (mtu *mockTusUploader) handler() func(r *http.Request, m reply.M, p params.
 		}
 		mtu.replies = mtu.replies[1:]
 		if resp.Status == http.StatusNoContent {
-			if _, err = io.Copy(mtu.buf, r.Body); err != nil {
-				return resp, err
+			limit := -1
+			if len(mtu.ackOnly) > 0 {
+				limit = mtu.ackOnly[0]
+				mtu.ackOnly = mtu.ackOnly[1:]
+			}
+			switch {
+			case limit == 0:
+				if _, err = io.Copy(io.Discard, r.Body); err != nil {
+					return resp, err
+				}
+			case limit > 0:
+				if _, err = io.CopyN(mtu.buf, r.Body, int64(limit)); err != nil && err != io.EOF {
+					return resp, err
+				}
+				if _, err = io.Copy(io.Discard, r.Body); err != nil {
+					return resp, err
+				}
+			default:
+				if _, err = io.Copy(mtu.buf, r.Body); err != nil {
+					return resp, err
+				}
 			}
 			resp.Header["Upload-Offset"] = []string{strconv.Itoa(mtu.buf.Len())}
 		}
@@ -153,6 +175,65 @@ var _ = Describe("UploadStream", func() {
 				Ω(s.LastResponse).Should(BeNil())
 				Ω(s.Dirty()).Should(BeFalse())
 				Ω(u).Should(Equal(Upload{Location: "/foo/bar", RemoteSize: 1024, RemoteOffset: 64}))
+			})
+		})
+		Context("server acknowledges fewer bytes than the chunk", func() {
+			It("ReadFrom retransmits the unacked tail and finishes the source", func() {
+				// 1000-byte source, 100-byte chunks. First PATCH acks 50 of 100;
+				// leftover 50 is resent, then the remaining 900 bytes.
+				replies := make([]*reply.StdReply, 11)
+				for i := range replies {
+					replies[i] = tReply(reply.NoContent())
+				}
+				up := mockTusUploader{replies: replies, buf: bytes.NewBuffer(make([]byte, 0)), ackOnly: []int{50}}
+				srvMock.AddMocks(up.makeRequest(http.MethodPatch, "/foo/bar", emptyHeaders).ReplyFunction(up.handler()))
+
+				u := Upload{Location: "/foo/bar", RemoteSize: 1000}
+				s := NewUploadStream(testClient, &u)
+				s.ChunkSize = 100
+				data, _ := io.ReadAll(io.LimitReader(rand.New(rand.NewSource(time.Now().UnixNano())), 1000))
+
+				n, err := s.ReadFrom(bytes.NewReader(data))
+				Ω(err).ShouldNot(HaveOccurred())
+				Ω(n).Should(BeEquivalentTo(1000))
+				Ω(u.RemoteOffset).Should(BeEquivalentTo(1000))
+				Ω(s.Dirty()).Should(BeFalse())
+				Ω(data).Should(Equal(up.buf.Bytes()))
+				Ω(up.requests).Should(HaveLen(11))
+			})
+			It("Write retransmits the unacked tail of a short last chunk", func() {
+				replies := []*reply.StdReply{tReply(reply.NoContent()), tReply(reply.NoContent()), tReply(reply.NoContent())}
+				up := mockTusUploader{replies: replies, buf: bytes.NewBuffer(make([]byte, 0)), ackOnly: []int{-1, 20}}
+				srvMock.AddMocks(up.makeRequest(http.MethodPatch, "/foo/bar", emptyHeaders).ReplyFunction(up.handler()))
+
+				u := Upload{Location: "/foo/bar", RemoteSize: 150}
+				s := NewUploadStream(testClient, &u)
+				s.ChunkSize = 100
+				data, _ := io.ReadAll(io.LimitReader(rand.New(rand.NewSource(time.Now().UnixNano())), 150))
+
+				n, err := s.Write(data)
+				Ω(err).ShouldNot(HaveOccurred())
+				Ω(n).Should(Equal(150))
+				Ω(u.RemoteOffset).Should(BeEquivalentTo(150))
+				Ω(s.Dirty()).Should(BeFalse())
+				Ω(data).Should(Equal(up.buf.Bytes()))
+			})
+			It("returns a protocol error when the server acknowledges zero bytes", func() {
+				replies := []*reply.StdReply{tReply(reply.NoContent())}
+				up := mockTusUploader{replies: replies, buf: bytes.NewBuffer(make([]byte, 0)), ackOnly: []int{0}}
+				srvMock.AddMocks(up.makeRequest(http.MethodPatch, "/foo/bar", emptyHeaders).ReplyFunction(up.handler()))
+
+				u := Upload{Location: "/foo/bar", RemoteSize: 1000}
+				s := NewUploadStream(testClient, &u)
+				s.ChunkSize = 100
+				data, _ := io.ReadAll(io.LimitReader(rand.New(rand.NewSource(time.Now().UnixNano())), 1000))
+
+				n, err := s.ReadFrom(bytes.NewReader(data))
+				Ω(err).Should(MatchError(ErrProtocol))
+				Ω(err).Should(MatchError(io.ErrNoProgress))
+				Ω(n).Should(BeEquivalentTo(100))
+				Ω(u.RemoteOffset).Should(BeEquivalentTo(0))
+				Ω(s.Dirty()).Should(BeTrue())
 			})
 		})
 		Context("retry to upload data after error", func() {
