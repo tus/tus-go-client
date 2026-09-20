@@ -31,6 +31,38 @@ func tReply(startReply *reply.StdReply) *reply.StdReply {
 	return startReply.Header("Tus-Resumable", "1.0.0")
 }
 
+type closeTrackingBody struct {
+	data   []byte
+	closed int
+}
+
+func (b *closeTrackingBody) Read(p []byte) (int, error) {
+	if len(b.data) == 0 {
+		return 0, io.EOF
+	}
+	n := copy(p, b.data)
+	b.data = b.data[n:]
+	return n, nil
+}
+
+func (b *closeTrackingBody) Close() error {
+	b.closed++
+	return nil
+}
+
+type roundTrip412 struct {
+	body *closeTrackingBody
+}
+
+func (r roundTrip412) RoundTrip(req *http.Request) (*http.Response, error) {
+	return &http.Response{
+		StatusCode: http.StatusPreconditionFailed,
+		Header:     http.Header{"Tus-Version": []string{"1.0.1,0.9.0"}},
+		Body:       r.body,
+		Request:    req,
+	}, nil
+}
+
 var _ = Describe("Client", func() {
 	var testClient *Client
 	var testURL *url.URL
@@ -118,6 +150,19 @@ var _ = Describe("Client", func() {
 					MatchError(ErrProtocol),
 					MatchError(ContainSubstring("protocol error: request protocol version \"1.0.0\", server supported versions are \"1.0.1,0.9.0\"")),
 				))
+			})
+			It("should close the 412 response body", func() {
+				tracker := &closeTrackingBody{data: []byte("precondition")}
+				c := NewClient(&http.Client{Transport: roundTrip412{body: tracker}}, testURL)
+				req, err := http.NewRequest(http.MethodGet, testURL.String()+"/foo", nil)
+				Ω(err).Should(Succeed())
+
+				resp, err := c.tusRequest(context.Background(), req)
+				Ω(err).Should(MatchError(ErrProtocol))
+				Ω(tracker.closed).Should(BeNumerically(">=", 1))
+				if resp != nil && resp.Body != nil {
+					Ω(resp.Body.Close()).Should(Succeed())
+				}
 			})
 		})
 	})
