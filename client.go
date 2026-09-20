@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -22,6 +23,7 @@ func NewClient(client *http.Client, baseURL *url.URL) *Client {
 		GetRequest:      newRequest,
 		client:          client,
 		BaseURL:         baseURL,
+		capMu:           &sync.Mutex{},
 	}
 	if client == nil {
 		c.client = http.DefaultClient
@@ -53,7 +55,8 @@ type Client struct {
 	// ProtocolVersion is TUS protocol version will be used in requests. Default is "1.0.0"
 	ProtocolVersion string
 
-	// Server capabilities and settings. Use UpdateCapabilities to query the capabilities from a server
+	// Server capabilities and settings. Use UpdateCapabilities to query the capabilities from a server.
+	// The pointer is replaced as a whole; concurrent UpdateCapabilities calls are safe.
 	Capabilities *ServerCapabilities
 
 	// GetRequest is a callback function that are called by the library to get a new request object
@@ -62,12 +65,18 @@ type Client struct {
 
 	client *http.Client
 	ctx    context.Context
+	// capMu is a pointer so WithContext copies share the lock with the original Client.
+	capMu *sync.Mutex
 }
 
 type GetRequestFunc func(method, url string, body io.Reader, tusClient *Client, httpClient *http.Client) (*http.Request, error)
 
 // WithContext returns a client copy with given context object assigned to it
 func (c *Client) WithContext(ctx context.Context) *Client {
+	if c.capMu != nil {
+		c.capMu.Lock()
+		defer c.capMu.Unlock()
+	}
 	res := *c
 	res.ctx = ctx
 	return &res
@@ -395,6 +404,9 @@ func (c *Client) ConcatenateStreams(final *Upload, streams []*UploadStream, meta
 
 // UpdateCapabilities gathers server capabilities and updates Capabilities client variable. Returns http response
 // from server  and error (if any).
+//
+// Safe to call concurrently on a Client shared across goroutines. The Capabilities pointer is replaced
+// only after the OPTIONS response is fully parsed, so readers never see a half-written struct.
 func (c *Client) UpdateCapabilities() (response *http.Response, err error) {
 	var req *http.Request
 	if req, err = c.GetRequest(http.MethodOptions, c.BaseURL.String(), nil, c, c.client); err != nil {
@@ -407,22 +419,23 @@ func (c *Client) UpdateCapabilities() (response *http.Response, err error) {
 
 	switch response.StatusCode {
 	case http.StatusNoContent, http.StatusOK:
-		c.Capabilities = &ServerCapabilities{}
+		caps := &ServerCapabilities{}
 		if v := response.Header.Get("Tus-Max-Size"); v != "" {
-			if c.Capabilities.MaxSize, err = strconv.ParseInt(v, 10, 64); err != nil {
+			if caps.MaxSize, err = strconv.ParseInt(v, 10, 64); err != nil {
 				err = newTusErrorWithErr(ErrProtocol, fmt.Errorf("cannot parse Tus-Max-Size integer value %q: %w", v, err))
 				return
 			}
 		}
 		if v := response.Header.Get("Tus-Extension"); v != "" {
-			c.Capabilities.Extensions = strings.Split(v, ",")
+			caps.Extensions = strings.Split(v, ",")
 		}
 		if v := response.Header.Get("Tus-Version"); v != "" {
-			c.Capabilities.ProtocolVersions = strings.Split(v, ",")
+			caps.ProtocolVersions = strings.Split(v, ",")
 		}
 		if v := response.Header.Get("Tus-Checksum-Algorithm"); v != "" {
-			c.Capabilities.ChecksumAlgorithms = strings.Split(v, ",")
+			caps.ChecksumAlgorithms = strings.Split(v, ",")
 		}
+		c.setCapabilities(caps)
 	default:
 		err = newTusErrorWithResponse(ErrUnexpectedResponse, response)
 	}
@@ -455,13 +468,34 @@ func (c *Client) tusRequest(ctx context.Context, req *http.Request) (response *h
 	return
 }
 
+func (c *Client) setCapabilities(caps *ServerCapabilities) {
+	if c.capMu != nil {
+		c.capMu.Lock()
+		defer c.capMu.Unlock()
+	}
+	c.Capabilities = caps
+}
+
+func (c *Client) capabilities() *ServerCapabilities {
+	if c.capMu != nil {
+		c.capMu.Lock()
+		defer c.capMu.Unlock()
+	}
+	return c.Capabilities
+}
+
 func (c *Client) ensureExtension(extension string) error {
-	if c.Capabilities == nil {
+	caps := c.capabilities()
+	if caps == nil {
 		if _, err := c.UpdateCapabilities(); err != nil {
 			return fmt.Errorf("cannot obtain server capabilities: %w", err)
 		}
+		caps = c.capabilities()
 	}
-	for _, e := range c.Capabilities.Extensions {
+	if caps == nil {
+		return newTusErrorWithErr(ErrUnsupportedFeature, errors.New(extension))
+	}
+	for _, e := range caps.Extensions {
 		if extension == e {
 			return nil
 		}
