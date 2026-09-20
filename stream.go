@@ -201,7 +201,9 @@ func (us *UploadStream) Sync() (response *http.Response, err error) {
 	return
 }
 
-// Seek moves Upload.RemoteOffset to the requested position. Returns new offset
+// Seek moves Upload.RemoteOffset to the requested position. Returns new offset.
+// The resulting offset is clamped to RemoteSize; seeking past the end of the
+// upload lands on RemoteSize (a valid EOF offset) instead of going beyond it.
 func (us *UploadStream) Seek(offset int64, whence int) (int64, error) {
 	var newOffset int64
 	switch whence {
@@ -214,11 +216,11 @@ func (us *UploadStream) Seek(offset int64, whence int) (int64, error) {
 	default:
 		panic(fmt.Sprintf("unknown whence value: %d", whence))
 	}
-	if offset >= us.Upload.RemoteSize {
-		return newOffset, fmt.Errorf("offset %d exceeds the upload size %d bytes", newOffset, us.Upload.RemoteSize)
-	}
-	if offset < 0 {
+	if newOffset < 0 {
 		return newOffset, fmt.Errorf("offset %d is negative", newOffset)
+	}
+	if newOffset > us.Upload.RemoteSize {
+		newOffset = us.Upload.RemoteSize
 	}
 	us.Upload.RemoteOffset = newOffset
 	return newOffset, nil
