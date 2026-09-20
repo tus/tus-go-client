@@ -155,6 +155,29 @@ var _ = Describe("UploadStream", func() {
 				Ω(u).Should(Equal(Upload{Location: "/foo/bar", RemoteSize: 1024, RemoteOffset: 64}))
 			})
 		})
+		When("reader is empty in non-chunked mode", func() {
+			It("should send at most one request and return", func() {
+				replies := []*reply.StdReply{tReply(reply.NoContent())}
+				up := mockTusUploader{replies: replies, buf: bytes.NewBuffer(make([]byte, 0))}
+				srvMock.AddMocks(up.makeRequest(http.MethodPatch, "/foo/bar", emptyHeaders).ReplyFunction(up.handler()))
+
+				u := Upload{Location: "/foo/bar", RemoteSize: 1024}
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				defer cancel()
+				s := NewUploadStream(testClient, &u).WithContext(ctx)
+				s.ChunkSize = NoChunked
+
+				// bytes.Reader implements WriterTo, so io.Copy would skip ReadFrom.
+				// A Reader-only wrapper matches the hang: Copy → ReadFrom → empty PATCH loop.
+				type onlyReader struct{ io.Reader }
+				copied, err := io.Copy(s, onlyReader{bytes.NewReader(nil)})
+				Ω(err).ShouldNot(HaveOccurred())
+				Ω(copied).Should(BeEquivalentTo(0))
+				Ω(len(up.requests)).Should(Equal(1))
+				Ω(s.Dirty()).Should(BeFalse())
+				Ω(u.RemoteOffset).Should(BeEquivalentTo(0))
+			})
+		})
 		Context("retry to upload data after error", func() {
 			When("ReadFrom, error in the middle", func() {
 				It("retrying should work correctly", func() {

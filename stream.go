@@ -255,8 +255,8 @@ func (us *UploadStream) uploadChunked(r io.Reader) (uploadedBytes int64, err err
 	}
 	u := us.client.BaseURL.ResolveReference(loc).String()
 
-	uploaded := us.ChunkSize
-	for uploaded == us.ChunkSize {
+	for {
+		var uploaded int64
 		uploaded, offset, lastResponse, err = us.uploadChunkImpl(u, r, nil)
 		if lastResponse != nil {
 			us.LastResponse = lastResponse
@@ -266,9 +266,13 @@ func (us *UploadStream) uploadChunked(r io.Reader) (uploadedBytes int64, err err
 		}
 		us.Upload.RemoteOffset = offset
 		uploadedBytes += uploaded
+		// NoChunked copies the remaining body in a single request. The old
+		// `uploaded == ChunkSize` loop treated ChunkSize 0 as "keep going",
+		// so an empty source reissued the same empty PATCH forever.
+		if us.ChunkSize == NoChunked || uploaded != us.ChunkSize {
+			return
+		}
 	}
-
-	return
 }
 
 func (us *UploadStream) setupDirtyBuffer() {
