@@ -97,6 +97,13 @@ type UploadStream struct {
 	dirtyBuffer         []byte
 	uploadMethod        string
 	ctx                 context.Context
+	// chunkLeftover is true when dirtyBuffer holds bytes the server has not
+	// acknowledged yet. The next PATCH must resend that tail without reading
+	// more from the source reader (otherwise those bytes are lost).
+	chunkLeftover bool
+	// readerDrained is true when the last fill from the source reader was short
+	// or empty, so there is no further source data after the current buffer.
+	readerDrained bool
 }
 
 // WithContext assigns a given context to the copy of stream and returns it
@@ -104,6 +111,8 @@ func (us *UploadStream) WithContext(ctx context.Context) *UploadStream {
 	res := *us
 	res.LastResponse = nil
 	res.dirtyBuffer = nil
+	res.chunkLeftover = false
+	res.readerDrained = false
 	res.ctx = ctx
 	return &res
 }
@@ -113,6 +122,8 @@ func (us *UploadStream) WithChecksumAlgorithm(name string) *UploadStream {
 	res := *us
 	res.LastResponse = nil
 	res.dirtyBuffer = nil
+	res.chunkLeftover = false
+	res.readerDrained = false
 
 	if alg, ok := checksum.GetAlgorithm(name); !ok {
 		panic(fmt.Sprintf("checksum algorithm %q does not supported", name))
@@ -134,6 +145,8 @@ func (us *UploadStream) WithChecksumAlgorithm(name string) *UploadStream {
 // If the error has occurred in the middle, we keep the failed chunk in the dirty buffer and return an error.
 // The stream remains "dirty". On the repeated ReadFrom calls, we try to upload the dirty buffer first before further reading r.
 // If error has occurred again, the dirty buffer is kept as it was.
+// If the server acknowledges fewer bytes than the chunk we sent, the unacked tail stays in the dirty buffer
+// and is resent before reading more from r. A zero-byte acknowledgement is a protocol error.
 //
 // After the uploading has finished successfully, we clear the dirty buffer, and the stream becomes "clean".
 //
@@ -249,14 +262,27 @@ func (us *UploadStream) uploadChunked(r io.Reader) (uploadedBytes int64, err err
 	var loc *url.URL
 	var offset int64
 	var lastResponse *http.Response
+	var uploaded int64
 
 	if loc, err = url.Parse(us.Upload.Location); err != nil {
 		return
 	}
 	u := us.client.BaseURL.ResolveReference(loc).String()
 
-	uploaded := us.ChunkSize
-	for uploaded == us.ChunkSize {
+	if us.ChunkSize == NoChunked {
+		uploaded, offset, lastResponse, err = us.uploadChunkImpl(u, r, nil)
+		if lastResponse != nil {
+			us.LastResponse = lastResponse
+		}
+		if err != nil {
+			return
+		}
+		us.Upload.RemoteOffset = offset
+		return uploaded, nil
+	}
+
+	for {
+		fromLeftover := us.chunkLeftover
 		uploaded, offset, lastResponse, err = us.uploadChunkImpl(u, r, nil)
 		if lastResponse != nil {
 			us.LastResponse = lastResponse
@@ -266,12 +292,23 @@ func (us *UploadStream) uploadChunked(r io.Reader) (uploadedBytes int64, err err
 		}
 		us.Upload.RemoteOffset = offset
 		uploadedBytes += uploaded
+		if us.chunkLeftover {
+			continue
+		}
+		if fromLeftover {
+			// Unacked tail is fully on the server; keep reading the source.
+			continue
+		}
+		if uploaded == 0 || us.readerDrained || uploaded < us.ChunkSize {
+			return
+		}
 	}
-
-	return
 }
 
 func (us *UploadStream) setupDirtyBuffer() {
+	if us.chunkLeftover {
+		return
+	}
 	if int64(len(us.dirtyBuffer)) != us.ChunkSize {
 		us.dirtyBuffer = nil
 	}
@@ -292,6 +329,9 @@ func (us *UploadStream) uploadChunkImpl(requestURL string, data io.Reader, extra
 	if chunking {
 		if int64(len(us.dirtyBuffer)) > us.ChunkSize {
 			panic("programming error: dirty buffer is larger than ChunkSize")
+		}
+		if !us.chunkLeftover && int64(len(us.dirtyBuffer)) != us.ChunkSize {
+			us.dirtyBuffer = make([]byte, us.ChunkSize)
 		}
 		bytesToUpload = int64(len(us.dirtyBuffer))
 		remoteBytesLeft := us.Upload.RemoteSize - offset
@@ -316,17 +356,21 @@ func (us *UploadStream) uploadChunkImpl(requestURL string, data io.Reader, extra
 	}
 
 	if chunking {
-		t, e := io.ReadAtLeast(data, us.dirtyBuffer, int(bytesToUpload))
-		switch {
-		case errors.Is(e, io.EOF): // Reader is empty
-			return
-		case errors.Is(e, io.ErrUnexpectedEOF): // Reader has ended early
-			bytesToUpload = int64(t)
-			us.dirtyBuffer = us.dirtyBuffer[:bytesToUpload]
-		default:
-			if e != nil {
-				err = e
+		if !us.chunkLeftover {
+			t, e := io.ReadAtLeast(data, us.dirtyBuffer, int(bytesToUpload))
+			switch {
+			case errors.Is(e, io.EOF): // Reader is empty
 				return
+			case errors.Is(e, io.ErrUnexpectedEOF): // Reader has ended early
+				bytesToUpload = int64(t)
+				us.dirtyBuffer = us.dirtyBuffer[:bytesToUpload]
+				us.readerDrained = true
+			default:
+				if e != nil {
+					err = e
+					return
+				}
+				us.readerDrained = false
 			}
 		}
 		data = bytes.NewReader(us.dirtyBuffer)
@@ -388,6 +432,21 @@ func (us *UploadStream) uploadChunkImpl(requestURL string, data io.Reader, extra
 		bytesUploaded = offset - us.Upload.RemoteOffset
 		if bytesUploaded < 0 {
 			bytesUploaded = 0
+		}
+		if chunking && bytesToUpload > 0 {
+			if bytesUploaded == 0 {
+				err = newTusErrorWithErr(ErrProtocol, io.ErrNoProgress)
+				return
+			}
+			if bytesUploaded < bytesToUpload {
+				leftover := us.dirtyBuffer[bytesUploaded:bytesToUpload]
+				buf := make([]byte, len(leftover))
+				copy(buf, leftover)
+				us.dirtyBuffer = buf
+				us.chunkLeftover = true
+			} else {
+				us.chunkLeftover = false
+			}
 		}
 		if v := response.Header.Get("Upload-Expires"); v != "" {
 			var t time.Time
