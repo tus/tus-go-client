@@ -262,6 +262,25 @@ var _ = Describe("Client", func() {
 					Entry("Upload-Length", "Upload-Length", map[string]string{"Upload-Length": "asdf", "Upload-Offset": "123"}),
 				)
 			})
+			When("corrupted metadata header value", func() {
+				It("should return protocol error and leave the caller's Upload unchanged", func() {
+					srvMock.AddMocks(tRequest(http.MethodHead, "/foo/bar", tusHeaders).
+						Reply(tReply(reply.OK()).
+							Header("Upload-Offset", "64").
+							Header("Upload-Metadata", "not-valid")),
+					)
+					f := Upload{Location: "keep-me", RemoteOffset: 7, Metadata: map[string]string{"k": "v"}}
+					orig := f
+
+					resp, err := testClient.GetUpload(&f, "/foo/bar")
+					Ω(resp).ShouldNot(BeNil())
+					Ω(err).Should(And(
+						MatchError(ErrProtocol),
+						MatchError("protocol error: cannot parse Upload-Metadata header \"not-valid\": metadata item \"not-valid\" has bad format"),
+					))
+					Ω(f).Should(Equal(orig))
+				})
+			})
 		})
 	})
 	Context("CreateUpload", func() {

@@ -130,9 +130,12 @@ func (c *Client) GetUpload(u *Upload, location string) (response *http.Response,
 			}
 		}
 		if v := response.Header.Get("Upload-Metadata"); v != "" {
-			if u2.Metadata, err = DecodeMetadata(v); err != nil {
-				err = newTusErrorWithErr(ErrProtocol, fmt.Errorf("cannot parse Upload-Metadata header %q: %w", v, err))
+			md, decErr := DecodeMetadata(v)
+			if decErr != nil {
+				err = newTusErrorWithErr(ErrProtocol, fmt.Errorf("cannot parse Upload-Metadata header %q: %w", v, decErr))
+				return
 			}
+			u2.Metadata = md
 		}
 		*u = u2
 	case http.StatusNotFound, http.StatusGone, http.StatusForbidden:
