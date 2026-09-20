@@ -212,7 +212,7 @@ func (us *UploadStream) Seek(offset int64, whence int) (int64, error) {
 	case io.SeekEnd:
 		newOffset = us.Upload.RemoteSize - 1 + offset
 	default:
-		panic("unknown whence value")
+		panic(fmt.Sprintf("unknown whence value: %d", whence))
 	}
 	if offset >= us.Upload.RemoteSize {
 		return newOffset, fmt.Errorf("offset %d exceeds the upload size %d bytes", newOffset, us.Upload.RemoteSize)
@@ -376,13 +376,13 @@ func (us *UploadStream) uploadChunkImpl(requestURL string, data io.Reader, extra
 	switch response.StatusCode {
 	case http.StatusCreated: // For "Creation With Upload" feature
 		if us.uploadMethod != http.MethodPost {
-			err = ErrUnexpectedResponse
+			err = newTusErrorWithResponse(ErrUnexpectedResponse, response)
 			return
 		}
 		fallthrough
 	case http.StatusNoContent:
 		if offset, err = strconv.ParseInt(response.Header.Get("Upload-Offset"), 10, 64); err != nil {
-			err = ErrProtocol.WithErr(fmt.Errorf("cannot parse Upload-Offset header %q: %w", response.Header.Get("Upload-Offset"), err))
+			err = newTusErrorWithErr(ErrProtocol, fmt.Errorf("cannot parse Upload-Offset header %q: %w", response.Header.Get("Upload-Offset"), err))
 			return
 		}
 		bytesUploaded = offset - us.Upload.RemoteOffset
@@ -392,34 +392,34 @@ func (us *UploadStream) uploadChunkImpl(requestURL string, data io.Reader, extra
 		if v := response.Header.Get("Upload-Expires"); v != "" {
 			var t time.Time
 			if t, err = time.Parse(time.RFC1123, v); err != nil {
-				err = ErrProtocol.WithErr(fmt.Errorf("cannot parse Upload-Expires RFC1123 header %q: %w", v, err))
+				err = newTusErrorWithErr(ErrProtocol, fmt.Errorf("cannot parse Upload-Expires RFC1123 header %q: %w", v, err))
 				return
 			}
 			us.Upload.UploadExpired = &t
 		}
 	case http.StatusConflict:
-		err = ErrOffsetsNotSynced.WithResponse(response)
+		err = newTusErrorWithResponse(ErrOffsetsNotSynced, response)
 	case http.StatusForbidden:
-		err = ErrCannotUpload.WithResponse(response)
+		err = newTusErrorWithResponse(ErrCannotUpload, response)
 	case http.StatusNotFound, http.StatusGone:
-		err = ErrUploadDoesNotExist.WithResponse(response)
+		err = newTusErrorWithResponse(ErrUploadDoesNotExist, response)
 	case http.StatusRequestEntityTooLarge:
-		err = ErrUploadTooLarge.WithResponse(response)
+		err = newTusErrorWithResponse(ErrUploadTooLarge, response)
 	case 460: // Non-standard HTTP code '460 Checksum Mismatch'
 		if us.checksumHash != nil {
-			err = ErrChecksumMismatch.WithResponse(response)
+			err = newTusErrorWithResponse(ErrChecksumMismatch, response)
 			return
 		}
 		fallthrough
 	default:
-		err = ErrUnexpectedResponse
+		err = newTusErrorWithResponse(ErrUnexpectedResponse, response)
 	}
 	return
 }
 
 func (us *UploadStream) validate() error {
 	if us.Upload.RemoteSize == SizeUnknown {
-		panic("upload must have size before start the uploading")
+		return fmt.Errorf("upload size must be set before uploading starts")
 	}
 	if us.Upload.RemoteSize < 0 {
 		panic(fmt.Sprintf("upload size is negative %d", us.Upload.RemoteSize))

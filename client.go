@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -111,33 +112,33 @@ func (c *Client) GetUpload(u *Upload, location string) (response *http.Response,
 		// Upload-Offset may not be present if final upload concatenation still in progress on server side
 		if uploadOffset == "" {
 			if response.Header.Get("Upload-Concat") != "final" {
-				err = ErrProtocol.WithText("lack of Upload-Offset required header in response")
+				err = newTusErrorWithErr(ErrProtocol, errors.New("lack of Upload-Offset required header in response"))
 				return
 			}
 			u2.RemoteOffset = OffsetUnknown
-		} else if uploadOffset != "" {
+		} else {
 			if u2.RemoteOffset, err = strconv.ParseInt(uploadOffset, 10, 64); err != nil {
-				err = ErrProtocol.WithErr(fmt.Errorf("cannot parse Upload-Offset header %q: %w", uploadOffset, err))
+				err = newTusErrorWithErr(ErrProtocol, fmt.Errorf("cannot parse Upload-Offset header %q: %w", uploadOffset, err))
 				return
 			}
 		}
 		// Responses for final concatenated upload may contain Upload-Length header
 		if v := response.Header.Get("Upload-Length"); v != "" {
 			if u2.RemoteSize, err = strconv.ParseInt(v, 10, 64); err != nil {
-				err = ErrProtocol.WithErr(fmt.Errorf("cannot parse Upload-Length header %q: %w", v, err))
+				err = newTusErrorWithErr(ErrProtocol, fmt.Errorf("cannot parse Upload-Length header %q: %w", v, err))
 				return
 			}
 		}
 		if v := response.Header.Get("Upload-Metadata"); v != "" {
 			if u2.Metadata, err = DecodeMetadata(v); err != nil {
-				err = ErrProtocol.WithErr(fmt.Errorf("cannot parse Upload-Metadata header %q: %w", v, err))
+				err = newTusErrorWithErr(ErrProtocol, fmt.Errorf("cannot parse Upload-Metadata header %q: %w", v, err))
 			}
 		}
 		*u = u2
 	case http.StatusNotFound, http.StatusGone, http.StatusForbidden:
-		err = ErrUploadDoesNotExist.WithResponse(response)
+		err = newTusErrorWithResponse(ErrUploadDoesNotExist, response)
 	default:
-		err = ErrUnexpectedResponse
+		err = newTusErrorWithResponse(ErrUnexpectedResponse, response)
 	}
 	return
 }
@@ -180,7 +181,7 @@ func (c *Client) CreateUpload(u *Upload, remoteSize int64, partial bool, meta ma
 	case remoteSize > 0:
 		req.Header.Set("Upload-Length", strconv.FormatInt(remoteSize, 10))
 	default:
-		panic(fmt.Sprintf("upload size is negative: %d", remoteSize))
+		panic(fmt.Sprintf("remoteSize is negative: %d", remoteSize))
 	}
 
 	if len(meta) > 0 {
@@ -206,16 +207,16 @@ func (c *Client) CreateUpload(u *Upload, remoteSize int64, partial bool, meta ma
 		if v := response.Header.Get("Upload-Expires"); v != "" {
 			var t time.Time
 			if t, err = time.Parse(time.RFC1123, v); err != nil {
-				err = ErrProtocol.WithErr(fmt.Errorf("cannot parse Upload-Expires RFC1123 header %q: %w", v, err))
+				err = newTusErrorWithErr(ErrProtocol, fmt.Errorf("cannot parse Upload-Expires RFC1123 header %q: %w", v, err))
 				return
 			}
 			u2.UploadExpired = &t
 		}
 		*u = u2
 	case http.StatusRequestEntityTooLarge:
-		err = ErrUploadTooLarge.WithResponse(response)
+		err = newTusErrorWithResponse(ErrUploadTooLarge, response)
 	default:
-		err = ErrUnexpectedResponse
+		err = newTusErrorWithResponse(ErrUnexpectedResponse, response)
 	}
 
 	return
@@ -294,9 +295,9 @@ func (c *Client) DeleteUpload(u Upload) (response *http.Response, err error) {
 	switch response.StatusCode {
 	case http.StatusNoContent:
 	case http.StatusNotFound, http.StatusGone, http.StatusForbidden:
-		err = ErrUploadDoesNotExist.WithResponse(response)
+		err = newTusErrorWithResponse(ErrUploadDoesNotExist, response)
 	default:
-		err = ErrUnexpectedResponse
+		err = newTusErrorWithResponse(ErrUnexpectedResponse, response)
 	}
 
 	return
@@ -357,9 +358,9 @@ func (c *Client) ConcatenateUploads(final *Upload, partials []Upload, meta map[s
 		u2.Metadata = meta
 		*final = u2
 	case http.StatusNotFound, http.StatusGone:
-		err = ErrUploadDoesNotExist.WithResponse(response)
+		err = newTusErrorWithResponse(ErrUploadDoesNotExist, response)
 	default:
-		err = ErrUnexpectedResponse
+		err = newTusErrorWithResponse(ErrUnexpectedResponse, response)
 	}
 	return
 }
@@ -409,7 +410,7 @@ func (c *Client) UpdateCapabilities() (response *http.Response, err error) {
 		c.Capabilities = &ServerCapabilities{}
 		if v := response.Header.Get("Tus-Max-Size"); v != "" {
 			if c.Capabilities.MaxSize, err = strconv.ParseInt(v, 10, 64); err != nil {
-				err = ErrProtocol.WithErr(fmt.Errorf("cannot parse Tus-Max-Size integer value %q: %w", v, err))
+				err = newTusErrorWithErr(ErrProtocol, fmt.Errorf("cannot parse Tus-Max-Size integer value %q: %w", v, err))
 				return
 			}
 		}
@@ -423,7 +424,7 @@ func (c *Client) UpdateCapabilities() (response *http.Response, err error) {
 			c.Capabilities.ChecksumAlgorithms = strings.Split(v, ",")
 		}
 	default:
-		err = ErrUnexpectedResponse
+		err = newTusErrorWithResponse(ErrUnexpectedResponse, response)
 	}
 	return
 }
@@ -438,7 +439,7 @@ func (c *Client) tusRequest(ctx context.Context, req *http.Request) (response *h
 	response, err = c.client.Do(req)
 	if err == nil && response.StatusCode == http.StatusPreconditionFailed {
 		versions := response.Header.Get("Tus-Version")
-		err = ErrProtocol.WithText(fmt.Sprintf("request protocol version %q, server supported versions are %q", c.ProtocolVersion, versions))
+		err = newTusErrorWithErr(ErrProtocol, fmt.Errorf("request protocol version %q, server supported versions are %q", c.ProtocolVersion, versions))
 		return
 	}
 	if response != nil && response.Body != nil {
@@ -465,7 +466,7 @@ func (c *Client) ensureExtension(extension string) error {
 			return nil
 		}
 	}
-	return ErrUnsupportedFeature.WithText(extension)
+	return newTusErrorWithErr(ErrUnsupportedFeature, errors.New(extension))
 }
 
 // EncodeMetadata converts map of values to the Tus Upload-Metadata header format

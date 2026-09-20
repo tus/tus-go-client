@@ -221,38 +221,45 @@ var _ = Describe("Client", func() {
 			})
 			When("http error or unexpected code", func() {
 				DescribeTable("should return error",
-					func(status int, expectErr error) {
+					func(status int, expectErr error, expectMsg string) {
 						srvMock.AddMocks(tRequest(http.MethodHead, "/foo/bar", tusHeaders).Reply(reply.Status(status)))
 						f := Upload{}
 
 						resp, err := testClient.GetUpload(&f, "/foo/bar")
+						Ω(err).Should(And(
+							MatchError(expectErr),
+							MatchError(expectMsg),
+						))
 						Ω(resp).ShouldNot(BeNil())
-						Ω(err).Should(MatchError(expectErr))
 						Ω(f).Should(Equal(Upload{}))
 					},
-					Entry("404", http.StatusNotFound, ErrUploadDoesNotExist),
-					Entry("410", http.StatusGone, ErrUploadDoesNotExist),
-					Entry("403", http.StatusForbidden, ErrUploadDoesNotExist),
-					Entry("400", http.StatusBadRequest, ErrUnexpectedResponse),
-					Entry("201", http.StatusCreated, ErrUnexpectedResponse),
+					Entry("404", http.StatusNotFound, ErrUploadDoesNotExist, "upload does not exist: HTTP 404: empty body"),
+					Entry("410", http.StatusGone, ErrUploadDoesNotExist, "upload does not exist: HTTP 410: empty body"),
+					Entry("403", http.StatusForbidden, ErrUploadDoesNotExist, "upload does not exist: HTTP 403: empty body"),
+					Entry("400", http.StatusBadRequest, ErrUnexpectedResponse, "unexpected HTTP response code: HTTP 400: empty body"),
+					Entry("201", http.StatusCreated, ErrUnexpectedResponse, "unexpected HTTP response code: HTTP 201: empty body"),
 				)
 			})
 			When("corrupted numeric header value", func() {
 				DescribeTable("should return protocol error",
-					func(header, value string) {
-						srvMock.AddMocks(tRequest(http.MethodHead, "/foo/bar", tusHeaders).
-							Reply(tReply(reply.OK()).
-								Header(header, value)),
-						)
+					func(testHeader string, headers map[string]string) {
+						r := tReply(reply.OK())
+						for h, v := range headers {
+							r = r.Header(h, v)
+						}
+						srvMock.AddMocks(tRequest(http.MethodHead, "/foo/bar", tusHeaders).Reply(r))
 						f := Upload{}
 
 						resp, err := testClient.GetUpload(&f, "/foo/bar")
 						Ω(resp).ShouldNot(BeNil())
-						Ω(err).Should(MatchError(ErrProtocol))
+						Ω(err).Should(And(
+							MatchError(ErrProtocol),
+							MatchError("protocol error: cannot parse "+testHeader+" header \"asdf\": strconv.ParseInt: parsing \"asdf\": invalid syntax"),
+						))
 						Ω(f).Should(Equal(Upload{}))
 					},
-					Entry("Upload-Offset", "Upload-Offset", "asdf"),
-					Entry("Upload-Length", "Upload-Length", "asdf"),
+					Entry("Upload-Offset", "Upload-Offset", map[string]string{"Upload-Offset": "asdf"}),
+					Entry("Upload-Length", "Upload-Length", map[string]string{"Upload-Length": "asdf", "Upload-Offset": "123"}),
 				)
 			})
 		})
@@ -407,7 +414,7 @@ var _ = Describe("Client", func() {
 			})
 			When("http error or unexpected code", func() {
 				DescribeTable("should return error",
-					func(status int, expectErr error) {
+					func(status int, expectErr error, expectErrMsg string) {
 						eh := []string{"Upload-Concat", "Upload-Defer-Length", "Upload-Metadata", "Upload-Checksum", "Upload-Offset"}
 						testClient.Capabilities.Extensions = append(testClient.Capabilities.Extensions, "creation")
 						srvMock.AddMocks(tRequest(http.MethodPost, "/", eh).
@@ -418,15 +425,18 @@ var _ = Describe("Client", func() {
 
 						resp, err := testClient.CreateUpload(&f, 1024, false, nil)
 						Ω(resp).ShouldNot(BeNil())
-						Ω(err).Should(MatchError(expectErr))
+						Ω(err).Should(And(
+							MatchError(expectErr),
+							MatchError(ContainSubstring(expectErrMsg)),
+						))
 						Ω(f).Should(Equal(Upload{RemoteSize: 0}))
 					},
-					Entry("413", http.StatusRequestEntityTooLarge, ErrUploadTooLarge),
-					Entry("404", http.StatusNotFound, ErrUnexpectedResponse),
-					Entry("410", http.StatusGone, ErrUnexpectedResponse),
-					Entry("403", http.StatusForbidden, ErrUnexpectedResponse),
-					Entry("400", http.StatusBadRequest, ErrUnexpectedResponse),
-					Entry("200", http.StatusOK, ErrUnexpectedResponse),
+					Entry("413", http.StatusRequestEntityTooLarge, ErrUploadTooLarge, "upload is too large: HTTP 413: empty body"),
+					Entry("404", http.StatusNotFound, ErrUnexpectedResponse, "unexpected HTTP response code: HTTP 404: empty body"),
+					Entry("410", http.StatusGone, ErrUnexpectedResponse, "unexpected HTTP response code: HTTP 410: empty body"),
+					Entry("403", http.StatusForbidden, ErrUnexpectedResponse, "unexpected HTTP response code: HTTP 403: empty body"),
+					Entry("400", http.StatusBadRequest, ErrUnexpectedResponse, "unexpected HTTP response code: HTTP 400: empty body"),
+					Entry("200", http.StatusOK, ErrUnexpectedResponse, "unexpected HTTP response code: HTTP 200: empty body"),
 				)
 			})
 		})
@@ -539,7 +549,7 @@ var _ = Describe("Client", func() {
 				))
 			})
 			DescribeTable("http errors handling",
-				func(expectStatus int, expectErr error) {
+				func(expectStatus int, expectErr error, expectErrMsg string) {
 					testClient.Capabilities.Extensions = append(testClient.Capabilities.Extensions, "creation", "creation-with-upload")
 					d, _ := io.ReadAll(io.LimitReader(rand.New(rand.NewSource(time.Now().UnixNano())), 1024))
 					eh := []string{"Upload-Defer-Length", "Upload-Metadata", "Upload-Checksum", "Upload-Offset"}
@@ -557,17 +567,21 @@ var _ = Describe("Client", func() {
 					bytes, resp, err := testClient.CreateUploadWithData(&u, d, 1024, true, nil)
 					Ω(bytes).Should(BeEquivalentTo(0))
 					Ω(resp.StatusCode).Should(Equal(expectStatus))
-					Ω(err).Should(MatchError(expectErr))
+					Ω(err).Should(And(
+						MatchError(expectErr),
+						MatchError(ContainSubstring(expectErrMsg)),
+					))
 					Ω(u).Should(Equal(Upload{}))
 				},
-				Entry("409", http.StatusConflict, ErrOffsetsNotSynced),
-				Entry("403", http.StatusForbidden, ErrCannotUpload),
-				Entry("410", http.StatusGone, ErrUploadDoesNotExist),
-				Entry("404", http.StatusNotFound, ErrUploadDoesNotExist),
-				Entry("413", http.StatusRequestEntityTooLarge, ErrUploadTooLarge),
-				Entry("460", 460, ErrUnexpectedResponse),
-				Entry("401", http.StatusUnauthorized, ErrUnexpectedResponse),
-				Entry("200", http.StatusOK, ErrUnexpectedResponse),
+				Entry("409", http.StatusConflict, ErrOffsetsNotSynced, "client stream and server offsets are not synced: HTTP 409: empty body"),
+				Entry("403", http.StatusForbidden, ErrCannotUpload, "can not upload: HTTP 403: empty body"),
+				Entry("410", http.StatusGone, ErrUploadDoesNotExist, "upload does not exist: HTTP 410: empty body"),
+				Entry("404", http.StatusNotFound, ErrUploadDoesNotExist, "upload does not exist: HTTP 404: empty body"),
+				Entry("413", http.StatusRequestEntityTooLarge, ErrUploadTooLarge, "upload is too large: HTTP 413: empty body"),
+				Entry("460", 460, ErrUnexpectedResponse, "unexpected HTTP response code: HTTP 460: empty body"),
+				Entry("401", http.StatusUnauthorized, ErrUnexpectedResponse, "unexpected HTTP response code: HTTP 401: empty body"),
+				Entry("400", http.StatusBadRequest, ErrUnexpectedResponse, "unexpected HTTP response code: HTTP 400: empty body"),
+				Entry("200", http.StatusOK, ErrUnexpectedResponse, "unexpected HTTP response code: HTTP 200: empty body"),
 			)
 		})
 	})
@@ -595,22 +609,24 @@ var _ = Describe("Client", func() {
 			})
 			When("http error or unexpected code", func() {
 				DescribeTable("should return error",
-					func(status int, expectErr error) {
+					func(status int, expectErr error, expectErrMsg string) {
 						testClient.Capabilities.Extensions = append(testClient.Capabilities.Extensions, "termination")
 						srvMock.AddMocks(tRequest(http.MethodDelete, "/foo/bar", tusHeaders).Reply(reply.Status(status)))
 						f := Upload{Location: "/foo/bar"}
 
 						resp, err := testClient.DeleteUpload(f)
 						Ω(resp).ShouldNot(BeNil())
-						Ω(err).Should(MatchError(expectErr))
+						Ω(err).Should(And(
+							MatchError(expectErr), MatchError(ContainSubstring(expectErrMsg)),
+						))
 						Ω(f).Should(Equal(Upload{Location: "/foo/bar"}))
 					},
-					Entry("413", http.StatusRequestEntityTooLarge, ErrUnexpectedResponse),
-					Entry("404", http.StatusNotFound, ErrUploadDoesNotExist),
-					Entry("410", http.StatusGone, ErrUploadDoesNotExist),
-					Entry("403", http.StatusForbidden, ErrUploadDoesNotExist),
-					Entry("400", http.StatusBadRequest, ErrUnexpectedResponse),
-					Entry("200", http.StatusOK, ErrUnexpectedResponse),
+					Entry("413", http.StatusRequestEntityTooLarge, ErrUnexpectedResponse, "unexpected HTTP response code: HTTP 413: empty body"),
+					Entry("404", http.StatusNotFound, ErrUploadDoesNotExist, "upload does not exist: HTTP 404: empty body"),
+					Entry("410", http.StatusGone, ErrUploadDoesNotExist, "upload does not exist: HTTP 410: empty body"),
+					Entry("403", http.StatusForbidden, ErrUploadDoesNotExist, "upload does not exist: HTTP 403: empty body"),
+					Entry("400", http.StatusBadRequest, ErrUnexpectedResponse, "unexpected HTTP response code: HTTP 400: empty body"),
+					Entry("200", http.StatusOK, ErrUnexpectedResponse, "unexpected HTTP response code: HTTP 200: empty body"),
 				)
 			})
 		})
@@ -709,7 +725,7 @@ var _ = Describe("Client", func() {
 			})
 			When("http error or unexpected code", func() {
 				DescribeTable("should return error",
-					func(status int, expectErr error) {
+					func(status int, expectErr error, expectErrMsg string) {
 						eh := []string{"Upload-Defer-Length", "Upload-Length", "Upload-Metadata", "Upload-Checksum", "Upload-Offset"}
 						testClient.Capabilities.Extensions = append(testClient.Capabilities.Extensions, "concatenation")
 						srvMock.AddMocks(tRequest(http.MethodPost, "/", eh).
@@ -721,14 +737,17 @@ var _ = Describe("Client", func() {
 
 						resp, err := testClient.ConcatenateUploads(&f, []Upload{f1, f2}, nil)
 						Ω(resp).ShouldNot(BeNil())
-						Ω(err).Should(MatchError(expectErr))
+						Ω(err).Should(And(
+							MatchError(expectErr),
+							MatchError(ContainSubstring(expectErrMsg)),
+						))
 						Ω(f).Should(Equal(Upload{}))
 					},
-					Entry("404", http.StatusNotFound, ErrUploadDoesNotExist),
-					Entry("410", http.StatusGone, ErrUploadDoesNotExist),
-					Entry("403", http.StatusForbidden, ErrUnexpectedResponse),
-					Entry("400", http.StatusBadRequest, ErrUnexpectedResponse),
-					Entry("200", http.StatusOK, ErrUnexpectedResponse),
+					Entry("404", http.StatusNotFound, ErrUploadDoesNotExist, "upload does not exist: HTTP 404: empty body"),
+					Entry("410", http.StatusGone, ErrUploadDoesNotExist, "upload does not exist: HTTP 410: empty body"),
+					Entry("403", http.StatusForbidden, ErrUnexpectedResponse, "unexpected HTTP response code: HTTP 403: empty body"),
+					Entry("400", http.StatusBadRequest, ErrUnexpectedResponse, "unexpected HTTP response code: HTTP 400: empty body"),
+					Entry("200", http.StatusOK, ErrUnexpectedResponse, "unexpected HTTP response code: HTTP 200: empty body"),
 				)
 			})
 		})
@@ -847,7 +866,7 @@ var _ = Describe("Client", func() {
 			})
 			When("http error or unexpected code", func() {
 				DescribeTable("should return error",
-					func(status int, expectErr error) {
+					func(status int, expectErr error, expectErrMsg string) {
 						srvMock.AddMocks(mocha.Request().
 							URL(expect.URLPath("/")).Method(http.MethodOptions).
 							Header("Tus-Resumable", expect.ToBeEmpty()). // OPTIONS request should not contain this header
@@ -856,13 +875,16 @@ var _ = Describe("Client", func() {
 
 						resp, err := testClient.UpdateCapabilities()
 						Ω(resp).ShouldNot(BeNil())
-						Ω(err).Should(MatchError(expectErr))
+						Ω(err).Should(And(
+							MatchError(expectErr),
+							MatchError(ContainSubstring(expectErrMsg)),
+						))
 					},
-					Entry("404", http.StatusNotFound, ErrUnexpectedResponse),
-					Entry("410", http.StatusGone, ErrUnexpectedResponse),
-					Entry("403", http.StatusForbidden, ErrUnexpectedResponse),
-					Entry("400", http.StatusBadRequest, ErrUnexpectedResponse),
-					Entry("201", http.StatusCreated, ErrUnexpectedResponse),
+					Entry("404", http.StatusNotFound, ErrUnexpectedResponse, "unexpected HTTP response code: HTTP 404: empty body"),
+					Entry("410", http.StatusGone, ErrUnexpectedResponse, "unexpected HTTP response code: HTTP 410: empty body"),
+					Entry("403", http.StatusForbidden, ErrUnexpectedResponse, "unexpected HTTP response code: HTTP 403: empty body"),
+					Entry("400", http.StatusBadRequest, ErrUnexpectedResponse, "unexpected HTTP response code: HTTP 400: empty body"),
+					Entry("201", http.StatusCreated, ErrUnexpectedResponse, "unexpected HTTP response code: HTTP 201: empty body"),
 				)
 			})
 		})
@@ -892,7 +914,10 @@ var _ = Describe("Client", func() {
 		})
 		When("no such extension", func() {
 			It("should return error", func() {
-				Ω(testClient.ensureExtension("creation")).Should(MatchError(ErrUnsupportedFeature))
+				Ω(testClient.ensureExtension("creation")).Should(And(
+					MatchError(ErrUnsupportedFeature),
+					MatchError(ContainSubstring("unsupported feature: creation")),
+				))
 			})
 		})
 	})
