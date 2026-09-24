@@ -348,8 +348,16 @@ func (us *UploadStream) uploadChunkImpl(requestURL string, data io.Reader, extra
 	if bytesToUpload != unknownSize {
 		req.ContentLength = bytesToUpload
 	}
-	req.Header.Set("Content-Type", "application/offset+octet-stream")
+	if contentType, ok := protocolUploadBodyContentType(us.client.ProtocolVersion); ok {
+		req.Header.Set("Content-Type", contentType)
+	}
 	req.Header.Set("Upload-Offset", strconv.FormatInt(offset, 10))
+	if headerName, value, ok := protocolUploadCompleteHeader(
+		us.client.ProtocolVersion,
+		bytesToUpload != unknownSize && offset+bytesToUpload >= us.Upload.RemoteSize,
+	); ok {
+		req.Header.Set(headerName, value)
+	}
 
 	if us.SetUploadSize && offset == 0 {
 		req.Header.Set("Upload-Length", strconv.FormatInt(us.Upload.RemoteSize, 10))
