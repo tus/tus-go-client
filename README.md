@@ -1,33 +1,41 @@
-# tusgo
+# tus-go-client
 
-[![codecov](https://codecov.io/gh/bdragon300/tusgo/branch/master/graph/badge.svg?token=ZLI69A7FHO)](https://codecov.io/gh/bdragon300/tusgo)
-[![Go Report Card](https://goreportcard.com/badge/github.com/bdragon300/tusgo)](https://goreportcard.com/report/github.com/bdragon300/tusgo)
 ![GitHub Workflow Status (with branch)](https://img.shields.io/github/actions/workflow/status/bdragon300/tusgo/run-tests.yml?branch=master)
 [![Go reference](https://pkg.go.dev/badge/github.com/bdragon300/tusgo)](https://pkg.go.dev/github.com/bdragon300/tusgo)
 ![GitHub go.mod Go version (subdirectory of monorepo)](https://img.shields.io/github/go-mod/go-version/bdragon300/tusgo)
 
-Full-featured Go client for [TUS](https://tus.io), a protocol for resumable uploads built on HTTP.
+> **tus** is a protocol based on HTTP for *resumable file uploads*. Resumable
+> means that an upload can be interrupted at any moment and can be resumed without
+> re-uploading the previous data again. An interruption may happen willingly, if
+> the user wants to pause, or by accident in case of a network issue or server
+> outage.
 
-Documentation is available at [pkg.go.dev](https://pkg.go.dev/github.com/bdragon300/tusgo)
+**tus-go-client** is a Go client library for the [tus](https://tus.io) resumable upload protocol. It provides complete
+coverage of the [tus 1.0.0 specification](https://tus.io/protocols/resumable-upload), including the core protocol and
+all officially defined extensions.
+
+The API reference is available on [pkg.go.dev](https://pkg.go.dev/github.com/bdragon300/tusgo).
 
 ## Features
 
-* Resumable Upload writer with chunked and streamed mode support. Conforms the `io.Writer`/`io.ReaderFrom`, which allows 
-  to use the standard utils such as `io.Copy`
-* Client for Upload manipulation such as creation, deletion, concatenation, etc.
-* Intermediate data store (for chunked Uploads) now is only in-memory
-* Server extensions are supported:
-	* `creation` extension -- upload creation
-	* `creation-defer-length` -- upload creation without size. Its size is set on the first data transfer
-	* `creation-with-upload` -- upload creation and data transferring in one HTTP request
-	* `expiration` -- parsing the upload expiration info
-	* `checksum` -- data integrity verification for chunked uploads. Many checksum algorithms from Go stdlib are
-	  supported
-	* `checksum-trailer` -- data integrity verification for streamed uploads. Checksum hash is calculated for all data
-	  in stream and is put to HTTP trailer
-	* `termination` -- deleting uploads from server
-	* `concatenation` -- merge finished uploads into one
-	* `concatenation-unfinished` -- merge unfinished uploads (data streams) into one upload
+- **Resumable upload stream** with both chunked and streamed transfer modes. The stream implements `io.Writer` and
+  `io.ReaderFrom`, so it works with standard library helpers such as `io.Copy`.
+- **Upload management client** for creating, deleting, concatenating, and otherwise manipulating uploads.
+- **Protocol extensions** support (see below).
+
+### Supported extensions
+
+| Extension                  | Description                                                                                                             |
+|----------------------------|-------------------------------------------------------------------------------------------------------------------------|
+| `creation`                 | Create new uploads on the server                                                                                        |
+| `creation-defer-length`    | Create an upload without specifying its size, which is declared on the first data transfer.                             |
+| `creation-with-upload`     | Create an upload and transfer its data in a single HTTP request.                                                        |
+| `expiration`               | Upload expiration.                                                                                                      |
+| `checksum`                 | Verify data integrity of chunked uploads. Many checksum algorithms are supported.                                       |
+| `checksum-trailer`         | Verify data integrity of streamed uploads. The checksum is computed over the entire stream and sent in an HTTP trailer. |
+| `termination`              | Delete uploads from the server.                                                                                         |
+| `concatenation`            | Upload the data in multiple parts in parallel and concatenate them into a single upload.                                |
+| `concatenation-unfinished` | Same as `concatenation`, but asking the server to concatenate parts automatically once they will be finished.           |
 
 ## Installation
 
@@ -35,123 +43,57 @@ Documentation is available at [pkg.go.dev](https://pkg.go.dev/github.com/bdragon
 go get github.com/bdragon300/tusgo
 ```
 
-Go v1.18 or newer is required
+## Usage
 
-## Examples
-
-### Minimal file transfer example
+The following example resumes an upload that already exists on the server and transfers the contents of a local
+file to it.
 
 ```go
 package main
 
 import (
-	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
+
+	"github.com/bdragon300/tusgo"
 )
-import "github.com/bdragon300/tusgo"
 
 func main() {
 	baseURL, _ := url.Parse("http://example.com/files")
 	cl := tusgo.NewClient(http.DefaultClient, baseURL)
 
-	// Assume that the Upload has been created on server earlier with size 1KiB
-	u := tusgo.Upload{Location: "http://example.com/files/foo/bar", RemoteSize: 1024 * 1024}
-	// Open a file we want to upload
+	// Assume that the upload has already been created on the server with a size of 1 MiB
+	u := tusgo.Upload{
+		Location: "http://example.com/files/foo/bar", 
+		RemoteSize: 1024 * 1024,
+	}
+
+	// Open the file to upload
 	f, err := os.Open("/tmp/file.txt")
 	if err != nil {
-		panic(err)
+		log.Fatalf("Failed to open file: %s", err)
 	}
 	defer f.Close()
 
 	s := tusgo.NewUploadStream(cl, &u)
-	// Set stream and file pointers to be equal to the remote pointer
+
+	// Align the stream and file offsets with the offset reported by the server
 	if _, err = s.Sync(); err != nil {
-		panic(err)
+		log.Fatalf("Failed to sync upload stream: %s", err)
 	}
 	if _, err = f.Seek(s.Tell(), io.SeekStart); err != nil {
-		panic(err)
+		log.Fatalf("Failed to seek file: %s", err)
 	}
-	
+
 	written, err := io.Copy(s, f)
 	if err != nil {
-		panic(fmt.Sprintf("Written %d bytes, error: %s, last response: %v", written, err, s.LastResponse))
+		log.Fatalf("Written %d bytes, error: %s, last response: %v", written, err, s.LastResponse)
 	}
-	fmt.Printf("Written %d bytes\n", written)
+	log.Printf("Written %d bytes\n", written)
 }
 ```
 
-### Create an Upload and transfer the file with retrying on error
-
-```go
-package main
-
-import (
-	"errors"
-	"io"
-	"net"
-	"net/http"
-	"net/url"
-	"os"
-	"time"
-)
-import "github.com/bdragon300/tusgo"
-
-func UploadWithRetry(dst *tusgo.UploadStream, src *os.File) error {
-	// Set stream and file pointer to be equal to the remote pointer
-	// (if we resume the upload that was interrupted earlier)
-	if _, err := dst.Sync(); err != nil {
-		return err
-	}
-	if _, err := src.Seek(dst.Tell(), io.SeekStart); err != nil {
-		return err
-	}
-
-	_, err := io.Copy(dst, src)
-	attempts := 10
-	for err != nil && attempts > 0 {
-		if _, ok := err.(net.Error); !ok && !errors.Is(err, tusgo.ErrChecksumMismatch) {
-			return err // Permanent error, no luck
-		}
-		time.Sleep(5 * time.Second)
-		attempts--
-		_, err = io.Copy(dst, src) // Try to resume the transfer again
-	}
-	if attempts == 0 {
-		return errors.New("too many attempts to upload the data")
-	}
-	return nil
-}
-
-func CreateUploadFromFile(f *os.File, cl *tusgo.Client) *tusgo.Upload {
-	finfo, err := f.Stat()
-	if err != nil {
-		panic(err)
-	}
-
-	u := tusgo.Upload{}
-	if _, err = cl.CreateUpload(&u, finfo.Size(), false, nil); err != nil {
-		panic(err)
-	}
-	return &u
-}
-
-func main() {
-	baseURL, _ := url.Parse("http://example.com/files")
-	cl := tusgo.NewClient(http.DefaultClient, baseURL)
-
-	f, err := os.Open("/tmp/file.txt")
-	if err != nil {
-		panic(err)
-	}
-	defer f.Close()
-	u := CreateUploadFromFile(f, cl)
-
-	stream := tusgo.NewUploadStream(cl, u)
-	if err = UploadWithRetry(stream, f); err != nil {
-		panic(err)
-	}
-}
-```
+More examples are available in the [package documentation](https://pkg.go.dev/github.com/bdragon300/tusgo#pkg-examples).
