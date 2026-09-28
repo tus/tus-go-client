@@ -1,3 +1,18 @@
+// Package tusgo is a client library for TUS (https://tus.io), the resumable upload protocol over HTTP.
+//
+// The work is split between two types. [Client] manages the uploads on a server: it creates, deletes and queries them,
+// concatenates the partial ones and reports the server capabilities. [UploadStream] transfers the data of a single
+// upload; it implements [io.Writer], [io.ReaderFrom] and [io.Seeker].
+// [Upload] represents a particular upload object on the server and its state.
+//
+// The basic approach is following: first, create a fixed-size upload object on the server by Client,
+// and then transfer the data to the returned Upload using the UploadStream. To resume an interrupted transfer,
+// just call the same method again.
+//
+// The protocol also defines a number of extensions -- optional features that customize this process:
+// deleting an upload, concatenating several uploads into a single one or verifying the transferred data with a
+// checksum, etc. A server supports any subset of them, so the features backed by an extension fail with
+// [ErrUnsupportedFeature] unless the server announces it, see [Client.Capabilities].
 package tusgo
 
 import (
@@ -14,8 +29,9 @@ import (
 	"time"
 )
 
-// NewClient returns a new Client instance with given underlying http client and base url where the requests will be
-// headed to
+// NewClient returns a new [Client] that sends its requests to baseURL using the given HTTP client.
+//
+// If client is nil, [http.DefaultClient] is used.
 func NewClient(client *http.Client, baseURL *url.URL) *Client {
 	c := &Client{
 		ProtocolVersion: "1.0.0",
@@ -32,56 +48,52 @@ func NewClient(client *http.Client, baseURL *url.URL) *Client {
 	return c
 }
 
-// Client contains methods to manipulate server uploads except for uploading data. This includes creating, deleting,
-// getting the information, making concatenated uploads from partial ones. For uploading the data please see UploadStream
+// Client manages the uploads on a TUS server: it creates, deletes and queries them, and concatenates partial uploads.
+// It does not transfer the upload data itself, use [UploadStream] for that.
+// Client is safe for concurrent use by multiple goroutines.
 //
-// The following errors the methods may return:
+// Common errors returned by the Client methods are:
 //
-//   - ErrProtocol -- unexpected condition detected in a successful server response
-//
-//   - ErrUnsupportedFeature -- to do requested action we need the extension, that server was not advertised in capabilities
-//
-//   - ErrUploadTooLarge -- size of the requested upload more than server ready to accept. See ServerCapabilities.MaxSize
-//
-//   - ErrUploadDoesNotExist -- requested upload does not exist or access denied
-//
-//   - ErrUnexpectedResponse -- unexpected server response code
+//   - [ErrUnsupportedFeature] -- the requested action needs a TUS extension that the server does not support
+//   - [ErrProtocol] -- an otherwise successful server response contains malformed data, e.g. a missing required HTTP header
+//   - [ErrUnexpectedResponse] -- the server responded with an unexpected status code
 type Client struct {
-	// BaseURL is base url the client making queries to. For example, "http://example.com/files"
+	// BaseURL is the base URL the client sends its requests to.
 	BaseURL *url.URL
 
-	// ProtocolVersion is TUS protocol version will be used in requests. Default is "1.0.0"
+	// ProtocolVersion is the TUS protocol version sent in the requests. Default is "1.0.0".
 	ProtocolVersion string
 
-	// Server capabilities and settings. Use UpdateCapabilities to query the capabilities from a server
+	// Capabilities are the features and limits of the server. Use [Client.UpdateCapabilities] to query them from the server.
 	Capabilities *ServerCapabilities
 
-	// GetRequest is a callback function that are called by the library to get a new request object
-	// By default it returns a new empty http.Request
+	// GetRequest is called by the library every time a new request object is needed. Replace it to adjust the
+	// outgoing requests, e.g. to add the authentication headers. By default, it returns a bare http.Request.
 	GetRequest GetRequestFunc
 
 	client *http.Client
 	ctx    context.Context
 }
 
+// GetRequestFunc returns a request object the library will send. It receives the request method, the target URL and
+// the request body, along with the Client and the [net/http.Client] on whose behalf the request is made.
 type GetRequestFunc func(method, url string, body io.Reader, tusClient *Client, httpClient *http.Client) (*http.Request, error)
 
-// WithContext returns a client copy with given context object assigned to it
+// WithContext returns a copy of the client that sends its requests with the given context.
 func (c *Client) WithContext(ctx context.Context) *Client {
 	res := *c
 	res.ctx = ctx
 	return &res
 }
 
-// GetUpload obtains an upload by location. Fills `u` variable with upload info.
-// Returns http response from server  and error (if any).
+// GetUpload requests the information about the upload at the given location and stores it in u. It returns the server
+// response and an error (if any).
 //
-// For regular upload we fill in just a remote offset and set Partial flag. For final concatenated uploads we also
-// may set upload size (if server provided). Also, we may set remote offset to OffsetUnknown for concatenated final
-// uploads, if concatenation still in progress on server side.
+// For a regular upload, it fills u with the remote offset, the Partial flag and the metadata. For a final concatenated
+// upload it also fills in the upload size, if the server reports one; if the server is still concatenating the upload,
+// the remote offset is set to [OffsetUnknown].
 //
-// This method may return ErrUploadDoesNotExist error if upload with such location has not found on the server. If other
-// unexpected response has received from the server, method returns ErrUnexpectedResponse
+// The method returns [ErrUploadDoesNotExist] if no such upload has been found on the server.
 func (c *Client) GetUpload(u *Upload, location string) (response *http.Response, err error) {
 	if u == nil {
 		panic("u is nil")
@@ -143,18 +155,18 @@ func (c *Client) GetUpload(u *Upload, location string) (response *http.Response,
 	return
 }
 
-// CreateUpload creates upload on the server. Fills `u` with upload that was created.
-// Returns http response from server  and error (if any).
+// CreateUpload creates an upload of the given size and metadata on the server and stores it in u. It returns the
+// server response and an error (if any). The server must support the "creation" extension.
 //
-// Server must support "creation" extension. We create an upload with given size and metadata.
-// If Partial flag is true, we create a partial upload. Metadata map keys must not contain spaces.
+// If partial is true, the created upload is a partial one, suitable for a further concatenation. The keys of the
+// metadata map must not contain spaces.
 //
-// If `remoteSize` is equal to SizeUnknown, we create an upload with deferred size, i.e. upload with size that is
-// unknown for a moment, but must be known once the upload will be started. Server must also support
-// "creation-defer-length" extension for this feature.
+// If remoteSize is [SizeUnknown], the upload is created with a deferred size, i.e. with a size that is not known yet,
+// but has to be known by the time the data transfer begins. The server must also support the
+// "creation-defer-length" extension for this feature, and [UploadStream.SetUploadSize] must be set before the transfer.
 //
-// This method may return ErrUploadTooLarge if upload size exceeds maximum MaxSize that server is capable to accept.
-// If other unexpected response has received from the server, method returns ErrUnexpectedResponse
+// The method returns [ErrUploadTooLarge] if the upload size exceeds [ServerCapabilities.MaxSize] the server is able to
+// accept.
 func (c *Client) CreateUpload(u *Upload, remoteSize int64, partial bool, meta map[string]string) (response *http.Response, err error) {
 	if u == nil {
 		panic("u is nil")
@@ -222,13 +234,11 @@ func (c *Client) CreateUpload(u *Upload, remoteSize int64, partial bool, meta ma
 	return
 }
 
-// CreateUploadWithData creates an upload on the server and sends its data in the same HTTP request. Receives a stream
-// and data to upload. Returns count of bytes uploaded and error (if any).
+// CreateUploadWithData creates an upload on the server and transfers data in the same HTTP request. The created
+// upload is stored in u. It returns the number of bytes uploaded, the server response and an error (if any).
+// The whole data is sent in a single request, so the server must support the "creation-with-upload" extension.
 //
-// Server must support "creation-with-upload" extension for this feature.
-//
-// This method may return ErrUnsupportedFeature if server doesn't support an extension. Also, it may return all errors
-// the UploadStream methods may return.
+// The remoteSize, partial and meta parameters have the same meaning as in CreateUpload.
 func (c *Client) CreateUploadWithData(u *Upload, data []byte, remoteSize int64, partial bool, meta map[string]string) (uploadedBytes int64, response *http.Response, err error) {
 	if err = c.ensureExtension("creation-with-upload"); err != nil {
 		return
@@ -264,15 +274,10 @@ func (c *Client) CreateUploadWithData(u *Upload, data []byte, remoteSize int64, 
 	return
 }
 
-// DeleteUpload deletes an upload. Receives `u` with upload to be deleted. Returns http response from server
+// DeleteUpload deletes the upload u from the server. It returns the server response and an error (if any).
+// The server must support the "termination" extension.
 //
-//	and error (if any).
-//
-// Server must support "termination" extension to be able to delete uploads.
-//
-// This method may return ErrUploadDoesNotExist error if such upload has not found on the server, ErrUnsupportedFeature if
-// the server doesn't support "termination" extension. If unexpected response has received from the
-// server, the method returns ErrUnexpectedResponse
+// The method returns [ErrUploadDoesNotExist] if no such upload has been found on the server.
 func (c *Client) DeleteUpload(u Upload) (response *http.Response, err error) {
 	if err = c.ensureExtension("termination"); err != nil {
 		return
@@ -303,16 +308,12 @@ func (c *Client) DeleteUpload(u Upload) (response *http.Response, err error) {
 	return
 }
 
-// ConcatenateUploads makes a request to concatenate the partial uploads created before into one final upload. Fills
-// `final` with upload that was created. Returns http response from server
+// ConcatenateUploads requests the server to concatenate the previously created partial uploads into a single final
+// upload, which is stored in final. It returns the server response and an error (if any). The server must support the
+// "concatenation" extension.
 //
-//	and error (if any).
-//
-// Server must support "concatenation" extension for this feature. Typically, partial uploads must be fully uploaded
-// to the server, but if server supports "concatenation-unfinished" extension, it may accept unfinished uploads.
-//
-// This method may return ErrUnsupportedFeature if server doesn't support extension, or ErrUnexpectedResponse if
-// unexpected response has been received from server.
+// The partial uploads are concatenated in the order they are given. Typically, they must be fully transferred to the
+// server beforehand, unless the server supports the "concatenation-unfinished" extension and accepts unfinished ones.
 func (c *Client) ConcatenateUploads(final *Upload, partials []Upload, meta map[string]string) (response *http.Response, err error) {
 	if final == nil {
 		panic("final is nil")
@@ -365,16 +366,11 @@ func (c *Client) ConcatenateUploads(final *Upload, partials []Upload, meta map[s
 	return
 }
 
-// ConcatenateStreams makes a request to concatenate partial uploads from given streams into one final upload. Final
-// Upload object will be filled with location of a created final upload. Returns http response from server
+// ConcatenateStreams is a convenience method that concatenates the given UploadStream into a single final upload.
+// It extracts the Upload objects from the streams and calls ConcatenateUploads.
 //
-//	and error (if any).
-//
-// Server must support "concatenation" extension for this feature. Streams with pointers that not point to an end of
-// streams are treated as unfinished -- server must support "concatenation-unfinished" in this case.
-//
-// This method may return ErrUnsupportedFeature if server doesn't support extension, or ErrUnexpectedResponse if
-// unexpected response has been received from server.
+// Passing unfinished streams requires that the server supports the "concatenation-unfinished" extension, otherwise the
+// method returns an error.
 func (c *Client) ConcatenateStreams(final *Upload, streams []*UploadStream, meta map[string]string) (response *http.Response, err error) {
 	if len(streams) == 0 {
 		panic("must be at least one stream to concatenate")
@@ -393,8 +389,7 @@ func (c *Client) ConcatenateStreams(final *Upload, streams []*UploadStream, meta
 	return c.ConcatenateUploads(final, uploads, meta)
 }
 
-// UpdateCapabilities gathers server capabilities and updates Capabilities client variable. Returns http response
-// from server  and error (if any).
+// UpdateCapabilities queries the server for its features and limits and stores them in the [Client.Capabilities] field.
 func (c *Client) UpdateCapabilities() (response *http.Response, err error) {
 	var req *http.Request
 	if req, err = c.GetRequest(http.MethodOptions, c.BaseURL.String(), nil, c, c.client); err != nil {
@@ -469,7 +464,7 @@ func (c *Client) ensureExtension(extension string) error {
 	return newTusErrorWithErr(ErrUnsupportedFeature, errors.New(extension))
 }
 
-// EncodeMetadata converts map of values to the Tus Upload-Metadata header format
+// EncodeMetadata encodes a metadata map into the TUS `Upload-Metadata` header format.
 func EncodeMetadata(metadata map[string]string) (string, error) {
 	var encoded []string
 
@@ -483,7 +478,7 @@ func EncodeMetadata(metadata map[string]string) (string, error) {
 	return strings.Join(encoded, ","), nil
 }
 
-// DecodeMetadata decodes metadata in Tus Upload-Metadata header format
+// DecodeMetadata decodes a metadata map from the TUS `Upload-Metadata` header format.
 func DecodeMetadata(raw string) (map[string]string, error) {
 	res := make(map[string]string)
 	for _, item := range strings.Split(raw, ",") {

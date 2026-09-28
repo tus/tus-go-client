@@ -1,3 +1,5 @@
+// Package checksum provides the hash algorithms and the readers tusgo uses to verify the transferred data with the
+// TUS "checksum" and "checksum-trailer" extensions.
 package checksum
 
 import (
@@ -11,8 +13,13 @@ import (
 	"unicode"
 )
 
+// Algorithm is the simplified name of a hash algorithm, which is its common name in lowercase with all
+// non-alphanumeric characters removed, e.g. "sha512256" for SHA-512/256.
 type Algorithm string
 
+// The hash algorithms this package is able to calculate. Which of them can actually be used for an upload depends
+// on the algorithms the server announces among its capabilities.
+//
 //revive:disable
 const (
 	MD4         Algorithm = "md4"
@@ -43,6 +50,7 @@ const (
 
 //revive:enable
 
+// Algorithms maps every supported algorithm to a constructor of its hash.
 var Algorithms = map[Algorithm]func() hash.Hash{
 	MD4:         crypto.MD4.New,
 	MD5:         crypto.MD5.New,
@@ -70,10 +78,13 @@ var Algorithms = map[Algorithm]func() hash.Hash{
 	FNV1A:       func() hash.Hash { return fnv.New32a() },
 }
 
+// GetAlgorithm normalizes an algorithm name, i.e. lowercases it and removes all non-alphanumeric characters, and
+// looks the result up in Algorithms. Thus, "SHA-256", "sha 256" and "sha256" all denote the same algorithm.
+// It returns the normalized name and whether such an algorithm is supported.
 func GetAlgorithm(name string) (algo Algorithm, ok bool) {
 	res := strings.Builder{}
 	for _, r := range name {
-		// Keep only letters and digits in the result, uppercase converting to lowercase
+		// Keep only letters and digits in the result, converting uppercase to lowercase
 		if unicode.IsUpper(r) {
 			res.WriteRune(unicode.ToLower(r))
 		} else if unicode.IsLetter(r) || unicode.IsDigit(r) {

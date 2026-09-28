@@ -2,7 +2,7 @@ package tusgo
 
 import "io"
 
-// counterReader is reader that counts bytes read from underlying reader
+// counterReader is a reader that counts the bytes read from the underlying reader
 type counterReader struct {
 	Rd        io.Reader
 	BytesRead int64
