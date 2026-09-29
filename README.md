@@ -30,7 +30,7 @@ The API reference is available on [pkg.go.dev](https://pkg.go.dev/github.com/bdr
 | `creation`                 | Create new uploads on the server                                                                                        |
 | `creation-defer-length`    | Create an upload without specifying its size, which is declared on the first data transfer.                             |
 | `creation-with-upload`     | Create an upload and transfer its data in a single HTTP request.                                                        |
-| `expiration`               | Upload expiration.                                                                                                      |
+| `expiration`               | Uploads with expiration date.                                                                                           |
 | `checksum`                 | Verify data integrity of chunked uploads. Many checksum algorithms are supported.                                       |
 | `checksum-trailer`         | Verify data integrity of streamed uploads. The checksum is computed over the entire stream and sent in an HTTP trailer. |
 | `termination`              | Delete uploads from the server.                                                                                         |
@@ -67,7 +67,7 @@ func main() {
 
 	// Assume that the upload has already been created on the server with a size of 1 MiB
 	u := tusgo.Upload{
-		Location: "http://example.com/files/foo/bar", 
+		Location:   "http://example.com/files/foo/bar",
 		RemoteSize: 1024 * 1024,
 	}
 

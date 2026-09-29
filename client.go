@@ -366,11 +366,12 @@ func (c *Client) ConcatenateUploads(final *Upload, partials []Upload, meta map[s
 	return
 }
 
-// ConcatenateStreams is a convenience method that concatenates the given UploadStream into a single final upload.
-// It extracts the Upload objects from the streams and calls ConcatenateUploads.
+// ConcatenateStreams requests the server to concatenate the streams into a single final upload, which is stored in final upload.
 //
-// Passing unfinished streams requires that the server supports the "concatenation-unfinished" extension, otherwise the
-// method returns an error.
+// If all streams are finished at the moment, then functions the same as [Client.ConcatenateUploads].
+//
+// If some streams are unfinished, the server is asked to concatenate them automatically once they will be finished.
+// The server must support the "concatenation-unfinished" extension for that.
 func (c *Client) ConcatenateStreams(final *Upload, streams []*UploadStream, meta map[string]string) (response *http.Response, err error) {
 	if len(streams) == 0 {
 		panic("must be at least one stream to concatenate")
