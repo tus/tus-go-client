@@ -1,5 +1,6 @@
 # tus-go-client
 
+[![Codecov](https://img.shields.io/codecov/c/gh/tus/tus-go-client/master)](https://app.codecov.io/gh/tus/tus-go-client/tree/master)
 ![GitHub Workflow Status (with branch)](https://img.shields.io/github/actions/workflow/status/bdragon300/tusgo/run-tests.yml?branch=master)
 [![Go reference](https://pkg.go.dev/badge/github.com/bdragon300/tusgo)](https://pkg.go.dev/github.com/bdragon300/tusgo)
 ![GitHub go.mod Go version (subdirectory of monorepo)](https://img.shields.io/github/go-mod/go-version/bdragon300/tusgo)
