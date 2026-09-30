@@ -466,3 +466,39 @@ func Example_transferWithSpeedControl() {
 	}
 	fmt.Printf("Uploading complete. Offset: %d, Size: %d\n", u.RemoteOffset, u.RemoteSize)
 }
+
+// Example demonstrates how to add the Authorization header to all requests by replacing [tusgo.Client.GetRequest].
+// The function is called for every request the library sends, including the ones issued by [tusgo.UploadStream].
+func ExampleClient_headers() {
+	baseURL, err := url.Parse("http://example.com/files")
+	if err != nil {
+		log.Fatalf("Failed to parse URL: %s", err)
+	}
+	cl := tusgo.NewClient(http.DefaultClient, baseURL)
+	cl.GetRequest = func(method, url string, body io.Reader, _ *tusgo.Client, _ *http.Client) (*http.Request, error) {
+		req, err := http.NewRequest(method, url, body)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+os.Getenv("TUS_TOKEN"))
+		return req, nil
+	}
+
+	f, finfo, err := OpenFile("/tmp/file.txt")
+	if err != nil {
+		log.Fatalf("%s", err)
+	}
+	defer f.Close()
+
+	u := tusgo.Upload{}
+	if _, err = cl.CreateUpload(&u, finfo.Size(), false, nil); err != nil {
+		log.Fatalf("Failed to create upload: %s", err)
+	}
+	fmt.Printf("Location: %s\n", u.Location)
+
+	stream := tusgo.NewUploadStream(cl, &u)
+	if err = UploadWithRetry(stream, f); err != nil {
+		log.Fatalf("Failed to upload: %s", err)
+	}
+	fmt.Println("Uploading complete")
+}
