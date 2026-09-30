@@ -33,7 +33,7 @@ func ExampleDeferTrailerReader() {
 
 	b64hash := checksum.NewHashBase64ReadWriter(crypto.SHA1.New(), "sha1 ")
 	body := io.TeeReader(strings.NewReader("Hello world!"), b64hash)
-	trailers := map[string]io.Reader{"Checksum": body}
+	trailers := map[string]io.Reader{"Checksum": b64hash}
 	req.Body = io.NopCloser(checksum.NewDeferTrailerReader(body, trailers, req))
 
 	// Request will contain header "Trailer: Checksum"

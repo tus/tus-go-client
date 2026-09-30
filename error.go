@@ -8,9 +8,10 @@ import (
 	"unicode/utf8"
 )
 
-// bodyReadLimit is the maximum amount of the response body bytes that is included to an error message
+// bodyReadLimit is the maximum number of the response body bytes included in an error message
 const bodyReadLimit = 256
 
+// TusError represents an error occurred during a TUS operation.
 type TusError struct {
 	inner error
 	msg   string
@@ -70,12 +71,31 @@ func newTusErrorWithResponse(te TusError, r *http.Response) TusError {
 }
 
 var (
+	// ErrUnsupportedFeature is returned when an action requires a TUS extension the server does not support.
 	ErrUnsupportedFeature = TusError{msg: "unsupported feature"}
-	ErrUploadTooLarge     = TusError{msg: "upload is too large"}
+
+	// ErrUploadTooLarge is returned when the upload is larger than the server accepts.
+	ErrUploadTooLarge = TusError{msg: "upload is too large"}
+
+	// ErrUploadDoesNotExist is returned when the upload is not found on the server or the access to it is denied.
 	ErrUploadDoesNotExist = TusError{msg: "upload does not exist"}
-	ErrOffsetsNotSynced   = TusError{msg: "client stream and server offsets are not synced"}
-	ErrChecksumMismatch   = TusError{msg: "checksum mismatch"}
-	ErrProtocol           = TusError{msg: "protocol error"}
-	ErrCannotUpload       = TusError{msg: "can not upload"}
+
+	// ErrOffsetsNotSynced is returned when the server expects the data at an offset other than the local one.
+	// Call UploadStream.Sync to adopt the server offset.
+	ErrOffsetsNotSynced = TusError{msg: "client stream and server offsets are not synced"}
+
+	// ErrChecksumMismatch is returned when the server has detected a corruption of the transferred data.
+	ErrChecksumMismatch = TusError{msg: "checksum mismatch"}
+
+	// ErrProtocol is returned when an otherwise successful server response contains malformed data.
+	// This error may indicate that the server does not support the requested TUS version, or server misbehaves.
+	ErrProtocol = TusError{msg: "protocol error"}
+
+	// ErrCannotUpload is returned when the server refuses to accept the data for an existing upload.
+	ErrCannotUpload = TusError{msg: "can not upload"}
+
+	// ErrUnexpectedResponse is returned when the server has responded with an unexpected status code.
+	// This error may indicate that the server does not support the TUS protocol, or the response is originated
+	// by a proxy server or CDN.
 	ErrUnexpectedResponse = TusError{msg: "unexpected HTTP response code"}
 )
