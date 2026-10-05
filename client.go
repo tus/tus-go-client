@@ -245,7 +245,7 @@ func (c *Client) CreateUploadWithData(u *Upload, data []byte, remoteSize int64, 
 	}
 	u2 := Upload{}
 	s := NewUploadStream(c, &u2)
-	s.ChunkSize = int64(len(data)) // Data must be uploaded in one request
+	s.ChunkSize = int64(len(data)) // Data must be uploaded in one request as single chunk
 	s.uploadMethod = http.MethodPost
 	headers := map[string]string{"Upload-Length": strconv.Itoa(int(remoteSize)), "Upload-Offset": ""}
 	if partial {
@@ -262,14 +262,21 @@ func (c *Client) CreateUploadWithData(u *Upload, data []byte, remoteSize int64, 
 	u2.Partial = partial
 	u2.Metadata = meta
 
-	rd := bytes.NewReader(data)
-	s.setupDirtyBuffer()
-	uploadedBytes, _, response, err = s.uploadChunkImpl(c.BaseURL.String(), rd, headers) // Upload in one request
-	if err == nil {
-		u2.Location = response.Header.Get("Location")
-		u2.RemoteOffset = uploadedBytes
-		*u = u2
+	uploadedBytes, response, err = s.doRequest(c.BaseURL.String(), data, nil, headers) // Upload in one request
+	switch {
+	case err != nil:
+		return
+	case uploadedBytes == 0 && len(data) > 0:
+		err = newTusErrorWithErr(ErrProtocol, fmt.Errorf("server did not receive data, offset=%d, transferredDataSize=%d", uploadedBytes, len(data)))
+	case uploadedBytes < 0:
+		err = newTusErrorWithErr(ErrProtocol, fmt.Errorf("server offset has gone backwards, offset=%d, transferredDataSize=%d", uploadedBytes, len(data)))
+	case uploadedBytes > int64(len(data)):
+		err = newTusErrorWithErr(ErrProtocol, fmt.Errorf("server offset has been advanced too far: offset=%d, transferredDataSize=%d", uploadedBytes, len(data)))
 	}
+
+	u2.Location = response.Header.Get("Location")
+	u2.RemoteOffset = uploadedBytes
+	*u = u2
 
 	return
 }

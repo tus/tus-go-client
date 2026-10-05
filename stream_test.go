@@ -25,6 +25,9 @@ type mockTusUploader struct {
 	requests []*http.Request
 	replies  []*reply.StdReply
 	buf      *bytes.Buffer
+	// acceptSizes limits the number of body bytes the server confirms in each successful request, consumed in
+	// lockstep with replies. A missing or negative value means the whole body is confirmed.
+	acceptSizes []int
 }
 
 func (mtu *mockTusUploader) handler() func(r *http.Request, m reply.M, p params.P) (*reply.Response, error) {
@@ -38,9 +41,23 @@ func (mtu *mockTusUploader) handler() func(r *http.Request, m reply.M, p params.
 			return resp, err
 		}
 		mtu.replies = mtu.replies[1:]
+		acceptSize := -1
+		if len(mtu.acceptSizes) > 0 {
+			acceptSize = mtu.acceptSizes[0]
+			mtu.acceptSizes = mtu.acceptSizes[1:]
+		}
 		if resp.Status == http.StatusNoContent {
-			if _, err = io.Copy(mtu.buf, r.Body); err != nil {
-				return resp, err
+			if acceptSize < 0 {
+				if _, err = io.Copy(mtu.buf, r.Body); err != nil {
+					return resp, err
+				}
+			} else {
+				if _, err = io.CopyN(mtu.buf, r.Body, int64(acceptSize)); err != nil && err != io.EOF {
+					return resp, err
+				}
+				if _, err = io.Copy(io.Discard, r.Body); err != nil {
+					return resp, err
+				}
 			}
 			resp.Header["Upload-Offset"] = []string{strconv.Itoa(mtu.buf.Len())}
 		}
@@ -105,6 +122,7 @@ var _ = Describe("UploadStream", func() {
 					Upload:              u,
 					client:              testClient,
 					dirtyBuffer:         nil,
+					dirtyUnread:         nil,
 					uploadMethod:        http.MethodPatch,
 					ctx:                 testClient.ctx,
 				}))
@@ -250,7 +268,34 @@ var _ = Describe("UploadStream", func() {
 			})
 		})
 		Context("data to be uploaded is oversize", func() {
-			When("ReadFrom", func() {
+			When("ReadFrom, chunked mode", func() {
+				DescribeTable("should read only bytes left at remote",
+					func(remoteSize int64) {
+						replies := []*reply.StdReply{
+							tReply(reply.NoContent()), tReply(reply.NoContent()), tReply(reply.NoContent()), tReply(reply.NoContent()),
+						}
+						up := mockTusUploader{replies: replies, buf: bytes.NewBuffer(make([]byte, 0))}
+						srvMock.AddMocks(up.makeRequest(http.MethodPatch, "/foo/bar", emptyHeaders).ReplyFunction(up.handler()))
+
+						u := Upload{Location: "/foo/bar", RemoteSize: remoteSize, RemoteOffset: 256}
+						s := NewUploadStream(testClient, &u)
+						s.ChunkSize = 256
+						data, _ := io.ReadAll(io.LimitReader(rand.New(rand.NewSource(time.Now().UnixNano())), 2048))
+						buf := bytes.NewBuffer(data)
+						Ω(io.CopyN(up.buf, buf, 256)).Should(BeEquivalentTo(256)) // Prefill, Upload-Offset now is 256
+
+						Ω(s.ReadFrom(buf)).Should(BeEquivalentTo(remoteSize - 256))
+						Ω(u).Should(Equal(Upload{Location: "/foo/bar", RemoteSize: remoteSize, RemoteOffset: remoteSize}))
+						Ω(s.LastResponse.StatusCode).Should(Equal(http.StatusNoContent))
+						Ω(data[:remoteSize]).Should(Equal(up.buf.Bytes()))
+						Ω(buf.Len()).Should(BeEquivalentTo(2048 - int(remoteSize))) // bytes has not been read from buf
+						Ω(s.Dirty()).Should(BeFalse())
+					},
+					Entry("remote size aligned to chunk size", int64(1024)),
+					Entry("remote size unaligned to chunk size", int64(1000)),
+				)
+			})
+			When("ReadFrom, non-chunked mode", func() {
 				It("should read only bytes left at remote", func() {
 					replies := []*reply.StdReply{
 						tReply(reply.NoContent()), tReply(reply.NoContent()), tReply(reply.NoContent()), tReply(reply.NoContent()),
@@ -258,22 +303,50 @@ var _ = Describe("UploadStream", func() {
 					up := mockTusUploader{replies: replies, buf: bytes.NewBuffer(make([]byte, 0))}
 					srvMock.AddMocks(up.makeRequest(http.MethodPatch, "/foo/bar", emptyHeaders).ReplyFunction(up.handler()))
 
-					u := Upload{Location: "/foo/bar", RemoteSize: 1024, RemoteOffset: 256}
+					u := Upload{Location: "/foo/bar", RemoteSize: 1000, RemoteOffset: 256}
 					s := NewUploadStream(testClient, &u)
-					s.ChunkSize = 256
+					s.ChunkSize = NoChunked
 					data, _ := io.ReadAll(io.LimitReader(rand.New(rand.NewSource(time.Now().UnixNano())), 2048))
-					up.buf.Write(data[:256]) // Prefill, Upload-Offset now is 256
-					buf := bytes.NewBuffer(data[256:])
+					buf := bytes.NewBuffer(data)
+					Ω(io.CopyN(up.buf, buf, 256)).Should(BeEquivalentTo(256)) // Prefill, Upload-Offset now is 256
 
-					Ω(s.ReadFrom(buf)).Should(BeEquivalentTo(768))
-					Ω(u).Should(Equal(Upload{Location: "/foo/bar", RemoteSize: 1024, RemoteOffset: 1024}))
+					Ω(s.ReadFrom(buf)).Should(BeEquivalentTo(1000 - 256))
+					Ω(u).Should(Equal(Upload{Location: "/foo/bar", RemoteSize: 1000, RemoteOffset: 1000}))
 					Ω(s.LastResponse.StatusCode).Should(Equal(http.StatusNoContent))
+					Ω(data[:1000]).Should(Equal(up.buf.Bytes()))
+					Ω(buf.Len()).Should(BeEquivalentTo(2048 - 1000)) // bytes has not been read from buf
 					Ω(s.Dirty()).Should(BeFalse())
-					Ω(data[:1024]).Should(Equal(up.buf.Bytes()))
-					Ω(buf.Len()).Should(Equal(1024)) // 1024 bytes has not been read
 				})
 			})
-			When("Write method", func() {
+			When("Write, chunked mode", func() {
+				DescribeTable("should read only bytes left at remote and return ErrShortWrite",
+					func(remoteSize int64) {
+						replies := []*reply.StdReply{
+							tReply(reply.NoContent()), tReply(reply.NoContent()), tReply(reply.NoContent()), tReply(reply.NoContent()),
+						}
+						up := mockTusUploader{replies: replies, buf: bytes.NewBuffer(make([]byte, 0))}
+						srvMock.AddMocks(up.makeRequest(http.MethodPatch, "/foo/bar", emptyHeaders).ReplyFunction(up.handler()))
+
+						u := Upload{Location: "/foo/bar", RemoteSize: remoteSize, RemoteOffset: 256}
+						s := NewUploadStream(testClient, &u)
+						s.ChunkSize = 256
+						data, _ := io.ReadAll(io.LimitReader(rand.New(rand.NewSource(time.Now().UnixNano())), 2048))
+						buf := bytes.NewBuffer(data)
+						Ω(io.CopyN(up.buf, buf, 256)).Should(BeEquivalentTo(256)) // Prefill, Upload-Offset now is 256
+
+						n, err := s.Write(buf.Bytes())
+						Ω(n).Should(BeEquivalentTo(remoteSize - 256))
+						Ω(err).Should(MatchError(io.ErrShortWrite))
+						Ω(u).Should(Equal(Upload{Location: "/foo/bar", RemoteSize: remoteSize, RemoteOffset: remoteSize}))
+						Ω(s.LastResponse.StatusCode).Should(Equal(http.StatusNoContent))
+						Ω(data[:remoteSize]).Should(Equal(up.buf.Bytes()))
+						Ω(s.Dirty()).Should(BeFalse())
+					},
+					Entry("remote size aligned to chunk size", int64(1024)),
+					Entry("remote size unaligned to chunk size", int64(1000)),
+				)
+			})
+			When("Write, non-chunked mode", func() {
 				It("should read only bytes left at remote and return ErrShortWrite", func() {
 					replies := []*reply.StdReply{
 						tReply(reply.NoContent()), tReply(reply.NoContent()), tReply(reply.NoContent()), tReply(reply.NoContent()),
@@ -281,19 +354,100 @@ var _ = Describe("UploadStream", func() {
 					up := mockTusUploader{replies: replies, buf: bytes.NewBuffer(make([]byte, 0))}
 					srvMock.AddMocks(up.makeRequest(http.MethodPatch, "/foo/bar", emptyHeaders).ReplyFunction(up.handler()))
 
-					u := Upload{Location: "/foo/bar", RemoteSize: 1024, RemoteOffset: 256}
+					u := Upload{Location: "/foo/bar", RemoteSize: 1000, RemoteOffset: 256}
 					s := NewUploadStream(testClient, &u)
-					s.ChunkSize = 256
+					s.ChunkSize = NoChunked
 					data, _ := io.ReadAll(io.LimitReader(rand.New(rand.NewSource(time.Now().UnixNano())), 2048))
-					up.buf.Write(data[:256]) // Prefill, Upload-Offset now is 256
+					buf := bytes.NewBuffer(data)
+					Ω(io.CopyN(up.buf, buf, 256)).Should(BeEquivalentTo(256)) // Prefill, Upload-Offset now is 256
 
-					n, err := s.Write(data[256:])
-					Ω(n).Should(Equal(768))
+					n, err := s.Write(buf.Bytes())
+					Ω(n).Should(BeEquivalentTo(1000 - 256))
 					Ω(err).Should(MatchError(io.ErrShortWrite))
-					Ω(u).Should(Equal(Upload{Location: "/foo/bar", RemoteSize: 1024, RemoteOffset: 1024}))
+					Ω(u).Should(Equal(Upload{Location: "/foo/bar", RemoteSize: 1000, RemoteOffset: 1000}))
+					Ω(s.LastResponse.StatusCode).Should(Equal(http.StatusNoContent))
+					Ω(data[:1000]).Should(Equal(up.buf.Bytes()))
+					Ω(s.Dirty()).Should(BeFalse())
+				})
+			})
+		})
+		Context("server confirms only a part of received data in some requests", func() {
+			When("Chunked mode", func() {
+				DescribeTable("should retry rest of data",
+					func(copyCb func(s *UploadStream, data []byte) (int64, error), dataSize int, acceptSizes []int, expectRequests int) {
+						replies := make([]*reply.StdReply, expectRequests)
+						for i := range replies {
+							replies[i] = tReply(reply.NoContent())
+						}
+						up := mockTusUploader{replies: replies, buf: bytes.NewBuffer(make([]byte, 0)), acceptSizes: acceptSizes}
+						srvMock.AddMocks(up.makeRequest(http.MethodPatch, "/foo/bar", emptyHeaders).ReplyFunction(up.handler()))
+
+						u := Upload{Location: "/foo/bar", RemoteSize: 1024}
+						s := NewUploadStream(testClient, &u)
+						s.ChunkSize = 256
+						data, _ := io.ReadAll(io.LimitReader(rand.New(rand.NewSource(time.Now().UnixNano())), int64(dataSize)))
+
+						Ω(copyCb(s, data)).Should(BeEquivalentTo(dataSize))
+						Ω(u).Should(Equal(Upload{Location: "/foo/bar", RemoteSize: 1024, RemoteOffset: int64(dataSize)}))
+						Ω(s.LastResponse.StatusCode).Should(Equal(http.StatusNoContent))
+						Ω(s.Dirty()).Should(BeFalse())
+						Ω(up.requests).Should(HaveLen(expectRequests))
+						Ω(data).Should(Equal(up.buf.Bytes()))
+					},
+					// 256@0 -> 100 confirmed, 156@100, then 3 full chunks
+					Entry("ReadFrom, first chunk confirmed partially", func(s *UploadStream, data []byte) (int64, error) { return s.ReadFrom(bytes.NewReader(data)) }, 1024, []int{100}, 5),
+					Entry("Write, first chunk confirmed partially", func(s *UploadStream, data []byte) (int64, error) { n, e := s.Write(data); return int64(n), e }, 1024, []int{100}, 5),
+					// 256@0 -> 255 confirmed, 1@255, then 3 full chunks
+					Entry("ReadFrom, chunk confirmed except the last byte", func(s *UploadStream, data []byte) (int64, error) { return s.ReadFrom(bytes.NewReader(data)) }, 1024, []int{255}, 5),
+					Entry("Write, chunk confirmed except the last byte", func(s *UploadStream, data []byte) (int64, error) { n, e := s.Write(data); return int64(n), e }, 1024, []int{255}, 5),
+					// Every 256 bytes chunk is transferred by 3 requests confirming 100, 100 and 56 bytes
+					Entry("ReadFrom, every request confirmed partially", func(s *UploadStream, data []byte) (int64, error) { return s.ReadFrom(bytes.NewReader(data)) }, 1024, []int{100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100}, 12),
+					Entry("Write, every request confirmed partially", func(s *UploadStream, data []byte) (int64, error) { n, e := s.Write(data); return int64(n), e }, 1024, []int{100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100}, 12),
+					// 3 full chunks, then 232@768 -> 100 confirmed, 132@868
+					Entry("ReadFrom, last unaligned chunk confirmed partially", func(s *UploadStream, data []byte) (int64, error) { return s.ReadFrom(bytes.NewReader(data)) }, 1000, []int{-1, -1, -1, 100}, 5),
+					Entry("Write, last unaligned chunk confirmed partially", func(s *UploadStream, data []byte) (int64, error) { n, e := s.Write(data); return int64(n), e }, 1000, []int{-1, -1, -1, 100}, 5),
+				)
+			})
+			When("Non-chunked mode", func() {
+				It("ReadFrom should not retry and should return an error after the first request", func() {
+					replies := []*reply.StdReply{tReply(reply.NoContent()), tReply(reply.NoContent())}
+					up := mockTusUploader{replies: replies, buf: bytes.NewBuffer(make([]byte, 0)), acceptSizes: []int{100}}
+					srvMock.AddMocks(up.makeRequest(http.MethodPatch, "/foo/bar", emptyHeaders).ReplyFunction(up.handler()))
+
+					u := Upload{Location: "/foo/bar", RemoteSize: 1024}
+					s := NewUploadStream(testClient, &u)
+					s.ChunkSize = NoChunked
+					data, _ := io.ReadAll(io.LimitReader(rand.New(rand.NewSource(time.Now().UnixNano())), 1024))
+					rd := bytes.NewReader(data)
+
+					// 1024@0 -> 100 confirmed, 924@100
+					n, err := s.ReadFrom(rd)
+					Ω(n).Should(BeEquivalentTo(1024))
+					Ω(err).Should(MatchError(io.ErrShortWrite))
+					Ω(rd.Len()).Should(Equal(0))
+					Ω(u).Should(Equal(Upload{Location: "/foo/bar", RemoteSize: 1024, RemoteOffset: 100}))
 					Ω(s.LastResponse.StatusCode).Should(Equal(http.StatusNoContent))
 					Ω(s.Dirty()).Should(BeFalse())
-					Ω(data[:1024]).Should(Equal(up.buf.Bytes()))
+					Ω(up.requests).Should(HaveLen(1))
+					Ω(data[:100]).Should(Equal(up.buf.Bytes()))
+				})
+				It("Write should ignore the unconfirmed rest of data and return confirmed bytes", func() {
+					replies := []*reply.StdReply{tReply(reply.NoContent()), tReply(reply.NoContent())}
+					up := mockTusUploader{replies: replies, buf: bytes.NewBuffer(make([]byte, 0)), acceptSizes: []int{100}}
+					srvMock.AddMocks(up.makeRequest(http.MethodPatch, "/foo/bar", emptyHeaders).ReplyFunction(up.handler()))
+
+					u := Upload{Location: "/foo/bar", RemoteSize: 1024}
+					s := NewUploadStream(testClient, &u)
+					s.ChunkSize = NoChunked
+					data, _ := io.ReadAll(io.LimitReader(rand.New(rand.NewSource(time.Now().UnixNano())), 1024))
+
+					// 1024@0 -> 100 confirmed, 924@100
+					Ω(s.Write(data)).Should(BeEquivalentTo(100))
+					Ω(u).Should(Equal(Upload{Location: "/foo/bar", RemoteSize: 1024, RemoteOffset: 100}))
+					Ω(s.LastResponse.StatusCode).Should(Equal(http.StatusNoContent))
+					Ω(s.Dirty()).Should(BeFalse())
+					Ω(up.requests).Should(HaveLen(1))
+					Ω(data[:100]).Should(Equal(up.buf.Bytes()))
 				})
 			})
 		})

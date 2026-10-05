@@ -41,11 +41,11 @@ const NoChunked = 0
 //
 // The basic approach is following:
 //
-// 1. Create a fixed-size upload object on the server by Client, which produces an Upload object representing the upload
-// 2. If the transfer was interrupted, call UploadStream.Sync to sync the stream offset with the server offset or
-//    get the upload object from the server with Client.GetUpload, that also contains the current server offset
-// 3. Transfer the data with an UploadStream
-// 4. To resume an interrupted transfer, just call the same method again
+//  1. Create a fixed-size upload object on the server by Client, which produces an Upload object representing the upload
+//  2. If the transfer was interrupted, call UploadStream.Sync to sync the stream offset with the server offset or
+//     get the upload object from the server with Client.GetUpload, that also contains the current server offset
+//  3. Transfer the data with an UploadStream
+//  4. To resume an interrupted transfer, just call the same method again
 //
 // The server keeps the current data offset for every upload. TUS protocol demands that server data offset and offset
 // in client requests must be always in sync. So, UploadStream keeps this offset in Upload.RemoteOffset field up to
@@ -95,10 +95,21 @@ type UploadStream struct {
 	// upload must not be modified from the outside while the stream exists.
 	Upload *Upload
 
+	// dirtyBuffer is the intermediate buffer used in chunked mode that holds a chunk of data to transfer to the server.
+	// This buffer is used to make the transfer resumable, keeping the data that has not yet been
+	// confirmed by the server. len(dirtyBuffer) == ChunkSize.
+	//
+	// Once been filled, dirtyBuffer is immutable until its contents is fully transferred to the server in one or
+	// more requests.
+	dirtyBuffer []byte
+	// dirtyUnread is a pointer to the part of dirtyBuffer to be transferred in the next request.
+	// Once the server confirms the certain amount of data in a request, dirtyUnread is advanced by that amount.
+	// The len(dirtyUnread) == 0 means that the whole dirtyBuffer has been transferred and the stream is "clean".
+	dirtyUnread []byte
+
 	checksumHash        hash.Hash
 	rawChecksumHashName string
 	client              *Client
-	dirtyBuffer         []byte
 	uploadMethod        string
 	ctx                 context.Context
 }
@@ -109,6 +120,7 @@ func (us *UploadStream) WithContext(ctx context.Context) *UploadStream {
 	res := *us
 	res.LastResponse = nil
 	res.dirtyBuffer = nil
+	res.dirtyUnread = nil
 	res.ctx = ctx
 	return &res
 }
@@ -124,6 +136,7 @@ func (us *UploadStream) WithChecksumAlgorithm(name string) *UploadStream {
 	res := *us
 	res.LastResponse = nil
 	res.dirtyBuffer = nil
+	res.dirtyUnread = nil
 
 	if alg, ok := checksum.GetAlgorithm(name); !ok {
 		panic(fmt.Sprintf("checksum algorithm %q does not supported", name))
@@ -136,66 +149,91 @@ func (us *UploadStream) WithChecksumAlgorithm(name string) *UploadStream {
 	return &res
 }
 
-// ReadFrom transfers the data read from r, starting at the offset Upload.RemoteOffset, which is kept up to date while
-// the transfer goes on. It stops once r is drained or the upload is full, whichever comes first, and returns the
-// number of bytes read from r.
+// ReadFrom reads r until EOF or until the upload is full and transfers the data to the server, starting at
+// Upload.RemoteOffset and advancing it as the server confirms the data. It returns the number of bytes read from r.
 //
-// The data is read from r into the dirty buffer chunk by chunk, which makes the stream "dirty" (Dirty returns true).
-// If a chunk fails to be transferred, it is left in the dirty buffer, the stream stays "dirty" and an error is returned.
-// A subsequent ReadFrom call transfers the dirty buffer before it reads any further data from r, and keeps the buffer
-// intact if the transfer fails again. This makes the interrupted transfer resumable even if r cannot be rewound.
+// How the data is transferred depends on ChunkSize. In chunked mode, r is read in chunks into a "dirty buffer" of
+// ChunkSize bytes, and sent to the server, one request per chunk.
+// In streaming mode (ChunkSize == NoChunked), r is passed as the body of a single request.
 //
-// Once all the data has been transferred, the dirty buffer is released and the stream becomes "clean" (Dirty returns false).
-//
-// If ChunkSize is NoChunked, r is piped directly into the request body. The dirty buffer is not used, so the stream
-// never becomes "dirty".
-func (us *UploadStream) ReadFrom(r io.Reader) (n int64, err error) {
-	if err = us.validate(); err != nil {
-		return
+// If an error occurs in chunked mode, call ReadFrom again with the same r to resume the upload. If the failed chunk
+// has not been fully transferred, its remaining data is kept in the dirty buffer and the stream becomes dirty (see Dirty).
+// The next ReadFrom call sends the buffered data first and then continues reading r, so r need not be rewound.
+// To discard the buffered data instead, call ForceClean.
+func (us *UploadStream) ReadFrom(r io.Reader) (int64, error) {
+	if err := us.validate(); err != nil {
+		return 0, err
 	}
-
-	if us.dirtyBuffer != nil {
-		if _, err = us.uploadChunked(bytes.NewReader(us.dirtyBuffer)); err != nil {
-			return
-		}
-	}
-	us.setupDirtyBuffer()
 
 	counterRd := &counterReader{Rd: r}
-	if _, err = us.uploadChunked(counterRd); err != nil {
-		return counterRd.BytesRead, err
+	// Server may confirm less data than has been read from r and sent, so send it until the server confirms all the data.
+	if us.ChunkSize == NoChunked {
+		// Streaming mode, pass the reader directly
+		advance, newOffset, response, err := us.uploadData(nil, counterRd, nil)
+		if response != nil {
+			us.LastResponse = response
+		}
+		if err != nil {
+			return counterRd.BytesRead, err
+		}
+		us.Upload.RemoteOffset = newOffset
+		if int64(advance) < counterRd.BytesRead {
+			// We cannot retry the transfer in ReadFrom, because in general, the r is not seekable, so return an error to the caller.
+			// TODO: move the streamed mode to a separate Stream (#26)
+			return counterRd.BytesRead, io.ErrShortWrite
+		}
 	}
-	us.dirtyBuffer = nil // Mark stream as clean if the whole data has been uploaded successfully
+
+	// Chunked mode
+	_, err := us.uploadChunked(counterRd)
 	return counterRd.BytesRead, err
 }
 
 // Write transfers p, starting at the offset Upload.RemoteOffset, which is kept up to date while the transfer goes on.
 // It returns the number of bytes the server has accepted.
 //
-// The data is copied to the dirty buffer chunk by chunk, but, unlike ReadFrom, the stream is always left "clean"
-// afterward, whether the transfer has succeeded or not, because p can always be passed again. A dirty buffer left
-// over from an earlier call is discarded rather than transferred.
+// In chunked mode the data is copied to the dirty buffer chunk by chunk, but, unlike ReadFrom, the stream is always
+// left "clean" afterward, whether the transfer has succeeded or not, because p can always be passed again.
+// A dirty buffer left over from an earlier call is discarded rather than transferred.
 //
-// If ChunkSize is NoChunked, p is written to the request body as a whole. The dirty buffer is not used, so the stream
-// never becomes "dirty".
+// In streaming mode (ChunkSize == NoChunked), the data is piped directly into the request body, and the stream
+// never becomes "dirty" (the data that can possibly remain in dirty buffer is ignored).
 //
 // If p does not fit into the space left in the upload, as much data as fits is transferred and io.ErrShortWrite is
 // returned.
-func (us *UploadStream) Write(p []byte) (n int, err error) {
-	if err = us.validate(); err != nil {
-		return
+func (us *UploadStream) Write(p []byte) (int, error) {
+	if err := us.validate(); err != nil {
+		return 0, err
 	}
-	us.setupDirtyBuffer()
-	defer func() { us.dirtyBuffer = nil }() // Always mark stream as clean, since p is seekable
-	var rd io.Reader = bytes.NewReader(p)
+	defer func() { us.ForceClean() }() // Always mark stream as clean, since p is seekable
 
-	var uploaded int64
-	if uploaded, err = us.uploadChunked(rd); err == nil {
-		if uploaded != int64(len(p)) {
-			err = io.ErrShortWrite
+	if us.ChunkSize == NoChunked {
+		// Streaming mode, pass the reader directly
+		advance, newOffset, response, err := us.uploadData(nil, bytes.NewReader(p), nil)
+		if response != nil {
+			us.LastResponse = response
 		}
+		if err != nil {
+			return advance, err
+		}
+		us.Upload.RemoteOffset = newOffset
+		if advance < len(p) && newOffset == us.Upload.RemoteSize {
+			return advance, io.ErrShortWrite // Upload is full, but there is still some data left in p.
+		}
+
+		return advance, nil
 	}
-	return int(uploaded), err
+
+	// Chunked mode
+	n, err := us.uploadChunked(bytes.NewReader(p))
+	if err != nil {
+		return int(n), err
+	}
+	if n < int64(len(p)) && us.Upload.RemoteOffset == us.Upload.RemoteSize {
+		return int(n), io.ErrShortWrite // Upload is full, but there is still some data left in p.
+	}
+
+	return int(n), nil
 }
 
 // Sync requests the current offset of the upload from the server and adopts it as the stream offset.
@@ -252,117 +290,132 @@ func (us *UploadStream) Len() int64 {
 // Dirty reports whether the stream is "dirty", that is, whether its dirty buffer holds a chunk of data that has
 // failed to be transferred to the server.
 func (us *UploadStream) Dirty() bool {
-	return us.dirtyBuffer != nil
+	return len(us.dirtyUnread) > 0
 }
 
 // ForceClean discards the contents of the dirty buffer, making the stream "clean". The data that has not been
 // transferred is lost.
 func (us *UploadStream) ForceClean() {
-	us.dirtyBuffer = nil
+	us.dirtyUnread = nil
 }
 
-func (us *UploadStream) uploadChunked(r io.Reader) (uploadedBytes int64, err error) {
-	var loc *url.URL
-	var offset int64
-	var lastResponse *http.Response
+func (us *UploadStream) uploadChunked(r io.Reader) (int64, error) {
+	var uploaded int64
 
-	if loc, err = url.Parse(us.Upload.Location); err != nil {
-		return
-	}
-	u := us.client.BaseURL.ResolveReference(loc).String()
+	// Preliminary limit the reader to read only the space left in the upload
+	remoteFreeSpace := us.Upload.RemoteSize - us.Upload.RemoteOffset
+	r = io.LimitReader(r, remoteFreeSpace)
+	us.setupDirtyBuffer()
+	for us.Upload.RemoteOffset < us.Upload.RemoteSize {
+		if !us.Dirty() {
+			n, err := io.ReadFull(r, us.dirtyBuffer)
+			switch {
+			case errors.Is(err, io.EOF): // Reader is empty
+				return uploaded, nil
+			case errors.Is(err, io.ErrUnexpectedEOF): // Reader has ended early, upload the last chunk
+			case err != nil:
+				return uploaded, fmt.Errorf("read: %w", err)
+			}
+			us.dirtyUnread = us.dirtyBuffer[:n]
+		}
 
-	uploaded := us.ChunkSize
-	for uploaded == us.ChunkSize {
-		uploaded, offset, lastResponse, err = us.uploadChunkImpl(u, r, nil)
-		if lastResponse != nil {
-			us.LastResponse = lastResponse
+		advance, newOffset, response, err := us.uploadData(us.dirtyUnread, nil, nil)
+		if response != nil {
+			us.LastResponse = response
 		}
 		if err != nil {
-			return
+			return uploaded, fmt.Errorf("upload chunk, offset=%d: %w", us.Upload.RemoteOffset, err)
 		}
-		us.Upload.RemoteOffset = offset
-		uploadedBytes += uploaded
+
+		us.dirtyUnread = us.dirtyUnread[advance:]
+		us.Upload.RemoteOffset = newOffset
+		uploaded += int64(advance)
 	}
 
-	return
+	return uploaded, nil
 }
 
 func (us *UploadStream) setupDirtyBuffer() {
 	if int64(len(us.dirtyBuffer)) != us.ChunkSize {
 		us.dirtyBuffer = nil
+		us.dirtyUnread = nil
 	}
 	if len(us.dirtyBuffer) == 0 && us.ChunkSize != NoChunked {
 		us.dirtyBuffer = make([]byte, us.ChunkSize)
 	}
 }
 
-func (us *UploadStream) uploadChunkImpl(requestURL string, data io.Reader, extraHeaders map[string]string) (bytesUploaded int64, offset int64, response *http.Response, err error) {
-	const unknownSize int64 = -1
-	chunking := us.ChunkSize != NoChunked // Chunking enabled
-	offset = us.Upload.RemoteOffset
+func (us *UploadStream) uploadData(chunk []byte, stream io.Reader, extraHeaders map[string]string) (int, int64, *http.Response, error) {
+	offset := us.Upload.RemoteOffset
+	loc, err := url.Parse(us.Upload.Location)
+	if err != nil {
+		return 0, offset, nil, fmt.Errorf("parse location: %w", err)
+	}
+	u := us.client.BaseURL.ResolveReference(loc).String()
+
+	// Limit the data source to the space left in the upload
+	remoteFreeSpace := int(us.Upload.RemoteSize - offset)
+	if remoteFreeSpace == 0 {
+		return 0, offset, nil, nil // Upload is full, nothing to transfer
+	} else if stream == nil && remoteFreeSpace < len(chunk) {
+		// Chunked mode
+		chunk = chunk[:remoteFreeSpace]
+	} else if stream != nil {
+		// Streaming mode
+		stream = io.LimitReader(stream, int64(remoteFreeSpace))
+	}
+
+	newOffset, response, err := us.doRequest(u, chunk, stream, extraHeaders)
+	advance := int(newOffset - offset)
+	if err != nil {
+		return advance, offset, response, fmt.Errorf("request: %w", err)
+	}
+
+	switch {
+	case advance < 0:
+		return advance, newOffset, response, newTusErrorWithErr(ErrProtocol, fmt.Errorf("server offset has gone backwards, offset=%d, newOffset=%d", offset, newOffset))
+	case stream == nil && advance > len(chunk) || stream != nil && advance > remoteFreeSpace:
+		return advance, newOffset, response, newTusErrorWithErr(ErrProtocol, fmt.Errorf("server offset has been advanced too far: offset=%d, newOffset=%d, transferredDataSize=%d", offset, newOffset, len(chunk)))
+	}
+	return advance, newOffset, response, nil
+}
+
+func (us *UploadStream) doRequest(requestURL string, chunk []byte, stream io.Reader, extraHeaders map[string]string) (offset int64, response *http.Response, err error) {
 	if err = us.validate(); err != nil {
 		return
 	}
 
-	bytesToUpload := unknownSize
-	if chunking {
-		if int64(len(us.dirtyBuffer)) > us.ChunkSize {
-			panic("programming error: dirty buffer is larger than ChunkSize")
-		}
-		bytesToUpload = int64(len(us.dirtyBuffer))
-		remoteBytesLeft := us.Upload.RemoteSize - offset
-		if bytesToUpload > remoteBytesLeft { // Buffer size is larger than the space left in the remote upload
-			bytesToUpload = remoteBytesLeft
-			us.dirtyBuffer = us.dirtyBuffer[:bytesToUpload]
-		}
-		if bytesToUpload == 0 {
-			return
-		}
-	}
+	offset = us.Upload.RemoteOffset
 
 	// Perform actions that can generate an error before invoking a reader
-	if us.checksumHash != nil && !chunking {
+	if us.checksumHash != nil && stream != nil {
 		if err = us.client.ensureExtension("checksum-trailer"); err != nil {
 			return
 		}
 	}
 	var req *http.Request
 	if req, err = us.client.GetRequest(us.uploadMethod, requestURL, nil, us.client, us.client.client); err != nil {
-		return
-	}
-
-	if chunking {
-		t, e := io.ReadAtLeast(data, us.dirtyBuffer, int(bytesToUpload))
-		switch {
-		case errors.Is(e, io.EOF): // Reader is empty
-			return
-		case errors.Is(e, io.ErrUnexpectedEOF): // Reader has ended early
-			bytesToUpload = int64(t)
-			us.dirtyBuffer = us.dirtyBuffer[:bytesToUpload]
-		default:
-			if e != nil {
-				err = e
-				return
-			}
-		}
-		data = bytes.NewReader(us.dirtyBuffer)
+		return 0, nil, fmt.Errorf("create request: %w", err)
 	}
 
 	if us.checksumHash != nil {
 		us.checksumHash.Reset()
-		if chunking {
-			us.checksumHash.Write(us.dirtyBuffer)
+		if stream == nil {
+			us.checksumHash.Write(chunk)
 			sum := us.checksumHash.Sum(make([]byte, 0))
 			req.Header.Set("Upload-Checksum", fmt.Sprintf("%s %s", us.rawChecksumHashName, base64.StdEncoding.EncodeToString(sum)))
 		} else {
 			trailers := map[string]io.Reader{"Upload-Checksum": checksum.NewHashBase64ReadWriter(us.checksumHash, us.rawChecksumHashName+" ")}
-			data = checksum.NewDeferTrailerReader(io.TeeReader(data, us.checksumHash), trailers, req)
+			stream = checksum.NewDeferTrailerReader(io.TeeReader(stream, us.checksumHash), trailers, req)
 		}
 	}
 
-	req.Body = io.NopCloser(data)
-	if bytesToUpload != unknownSize {
-		req.ContentLength = bytesToUpload
+	if stream == nil {
+		req.Body = io.NopCloser(bytes.NewReader(chunk))
+		req.ContentLength = int64(len(chunk))
+	} else {
+		req.Body = io.NopCloser(stream)
+		req.ContentLength = -1 // Request body size is unknown in streamed mode. See https://pkg.go.dev/net/http#Request.ContentLength
 	}
 	req.Header.Set("Content-Type", "application/offset+octet-stream")
 	req.Header.Set("Upload-Offset", strconv.FormatInt(offset, 10))
@@ -385,7 +438,7 @@ func (us *UploadStream) uploadChunkImpl(requestURL string, data io.Reader, extra
 		req = req.WithContext(us.ctx)
 	}
 	if response, err = us.client.tusRequest(us.ctx, req); err != nil {
-		return
+		return 0, response, fmt.Errorf("request: %w", err)
 	}
 	defer response.Body.Close()
 
@@ -400,10 +453,6 @@ func (us *UploadStream) uploadChunkImpl(requestURL string, data io.Reader, extra
 		if offset, err = strconv.ParseInt(response.Header.Get("Upload-Offset"), 10, 64); err != nil {
 			err = newTusErrorWithErr(ErrProtocol, fmt.Errorf("cannot parse Upload-Offset header %q: %w", response.Header.Get("Upload-Offset"), err))
 			return
-		}
-		bytesUploaded = offset - us.Upload.RemoteOffset
-		if bytesUploaded < 0 {
-			bytesUploaded = 0
 		}
 		if v := response.Header.Get("Upload-Expires"); v != "" {
 			var t time.Time
