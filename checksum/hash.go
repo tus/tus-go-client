@@ -27,7 +27,7 @@ func NewHashBase64ReadWriter(h hash.Hash, prefix string) *HashBase64ReadWriter {
 // result has been read.
 func (h *HashBase64ReadWriter) Read(p []byte) (n int, err error) {
 	if h.rd == nil {
-		sum := h.Hash.Sum(make([]byte, 0))
+		sum := h.Sum(make([]byte, 0))
 		s := h.prefix + base64.StdEncoding.EncodeToString(sum)
 		h.rd = strings.NewReader(s)
 	}

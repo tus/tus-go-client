@@ -28,6 +28,7 @@ func (te TusError) Unwrap() error {
 	return te.inner
 }
 
+// Is reports whether the error is equal to the target error.
 func (te TusError) Is(e error) bool {
 	v, ok := e.(TusError)
 	return ok && v.msg == te.msg || errors.Is(te.inner, e)

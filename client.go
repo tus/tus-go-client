@@ -507,6 +507,6 @@ func DecodeMetadata(raw string) (map[string]string, error) {
 	return res, nil
 }
 
-func newRequest(method, url string, body io.Reader, tusClient *Client, _ *http.Client) (*http.Request, error) {
+func newRequest(method, url string, body io.Reader, _ *Client, _ *http.Client) (*http.Request, error) {
 	return http.NewRequest(method, url, body)
 }
