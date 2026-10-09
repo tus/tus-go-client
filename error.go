@@ -74,7 +74,7 @@ var (
 	// ErrUnsupportedFeature is returned when an action requires a TUS extension the server does not support.
 	ErrUnsupportedFeature = TusError{msg: "unsupported feature"}
 
-	// ErrUploadTooLarge is returned when the upload is larger than the server accepts.
+	// ErrUploadTooLarge is returned when creating an upload that is larger than the server accepts.
 	ErrUploadTooLarge = TusError{msg: "upload is too large"}
 
 	// ErrUploadDoesNotExist is returned when the upload is not found on the server or the access to it is denied.
@@ -91,7 +91,13 @@ var (
 	// This error may indicate that the server does not support the requested TUS version, or server misbehaves.
 	ErrProtocol = TusError{msg: "protocol error"}
 
-	// ErrCannotUpload is returned when the server refuses to accept the data for an existing upload.
+	// ErrZeroProgress is returned by UploadStream in chunked mode, indicating that the server did not
+	// accept any of the data and did not return an error. This may happen when client is sending data too fast and the
+	// server is overloaded, or if the server has a bug or misconfiguration.
+	ErrZeroProgress = TusError{msg: "zero progress"}
+
+	// ErrCannotUpload is returned when the server explicitly refuses to accept the data for an existing upload.
+	// This error may occur if the server returned 403 Forbidden when trying to upload data.
 	ErrCannotUpload = TusError{msg: "can not upload"}
 
 	// ErrUnexpectedResponse is returned when the server has responded with an unexpected status code.

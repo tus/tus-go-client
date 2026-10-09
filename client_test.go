@@ -583,6 +583,37 @@ var _ = Describe("Client", func() {
 				Entry("400", http.StatusBadRequest, ErrUnexpectedResponse, "unexpected HTTP response code: HTTP 400: empty body"),
 				Entry("200", http.StatusOK, ErrUnexpectedResponse, "unexpected HTTP response code: HTTP 200: empty body"),
 			)
+			When("server creates upload but does not advance the offset", func() {
+				It("should return ErrZeroProgress and the created upload", func() {
+					testClient.Capabilities.Extensions = append(testClient.Capabilities.Extensions, "creation", "creation-with-upload")
+					d, _ := io.ReadAll(io.LimitReader(rand.New(rand.NewSource(time.Now().UnixNano())), 512))
+					eh := []string{"Upload-Concat", "Upload-Defer-Length", "Upload-Metadata", "Upload-Checksum", "Upload-Offset"}
+					srvMock.AddMocks(tRequest(http.MethodPost, "/", eh).
+						Header("Content-Length", expect.ToEqual("512")).
+						Header("Upload-Length", expect.ToEqual("1024")).
+						Header("Content-Type", expect.ToEqual("application/offset+octet-stream")).
+						Body(expect.ToEqual(d)).
+						Reply(tReply(reply.Created()).
+							Header("Location", "/foo/bar").
+							Header("Upload-Offset", "0")),
+					)
+					u := Upload{}
+
+					bytes, resp, err := testClient.CreateUploadWithData(&u, d, 1024, false, nil)
+					Ω(bytes).Should(BeEquivalentTo(0))
+					Ω(resp.StatusCode).Should(Equal(http.StatusCreated))
+					Ω(err).Should(And(
+						MatchError(ErrZeroProgress),
+						MatchError(ContainSubstring("offset=0")),
+					))
+					// Upload is created anyway, so the caller can continue the transfer with UploadStream
+					Ω(u).Should(Equal(Upload{
+						RemoteSize:   1024,
+						Location:     "/foo/bar",
+						RemoteOffset: 0,
+					}))
+				})
+			})
 		})
 	})
 	Context("DeleteUpload", func() {

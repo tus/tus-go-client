@@ -239,6 +239,9 @@ func (c *Client) CreateUpload(u *Upload, remoteSize int64, partial bool, meta ma
 // The whole data is sent in a single request, so the server must support the "creation-with-upload" extension.
 //
 // The remoteSize, partial and meta parameters have the same meaning as in CreateUpload.
+//
+// The method returns [ErrZeroProgress] if the server did not accept any data by some reason, more likely when it is
+// busy and temporarily cannot accept the data. In that case, use [UploadStream] to transfer the remaining data.
 func (c *Client) CreateUploadWithData(u *Upload, data []byte, remoteSize int64, partial bool, meta map[string]string) (uploadedBytes int64, response *http.Response, err error) {
 	if err = c.ensureExtension("creation-with-upload"); err != nil {
 		return
@@ -267,7 +270,7 @@ func (c *Client) CreateUploadWithData(u *Upload, data []byte, remoteSize int64, 
 	case err != nil:
 		return
 	case uploadedBytes == 0 && len(data) > 0:
-		err = newTusErrorWithErr(ErrProtocol, fmt.Errorf("server did not receive data, offset=%d, transferredDataSize=%d", uploadedBytes, len(data)))
+		err = newTusErrorWithErr(ErrZeroProgress, fmt.Errorf("offset=%d", u.RemoteOffset))
 	case uploadedBytes < 0:
 		err = newTusErrorWithErr(ErrProtocol, fmt.Errorf("server offset has gone backwards, offset=%d, transferredDataSize=%d", uploadedBytes, len(data)))
 	case uploadedBytes > int64(len(data)):

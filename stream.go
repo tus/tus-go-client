@@ -75,6 +75,8 @@ const NoChunked = 0
 //   - [ErrChecksumMismatch] -- the server has detected a data corruption, if the checksum verification is used
 //   - [ErrCannotUpload] -- the data cannot be written to an existing upload, typically because the upload is already
 //     full, is a final concatenated upload, or does not accept the data for another reason
+//   - [ErrZeroProgress] -- the server did not accept any of the data and did not return an error, which may indicate
+//     that client is sending data too fast or the server has a bug or is misconfigured.
 type UploadStream struct {
 	// ChunkSize is the size of a chunk of data sent in a single request and the size of the dirty buffer.
 	// Set it to NoChunked to disable the chunking, which also disables the use of the dirty buffer. Default is 2 MiB.
@@ -177,11 +179,15 @@ func (us *UploadStream) ReadFrom(r io.Reader) (int64, error) {
 			return counterRd.BytesRead, err
 		}
 		us.Upload.RemoteOffset = newOffset
+		if advance == 0 && counterRd.BytesRead > 0 {
+			return counterRd.BytesRead, newTusErrorWithErr(ErrZeroProgress, fmt.Errorf("offset=%d", us.Upload.RemoteOffset))
+		}
 		if int64(advance) < counterRd.BytesRead {
 			// We cannot retry the transfer in ReadFrom, because in general, the r is not seekable, so return an error to the caller.
 			// TODO: move the streamed mode to a separate Stream (#26)
 			return counterRd.BytesRead, io.ErrShortWrite
 		}
+		return counterRd.BytesRead, nil
 	}
 
 	// Chunked mode
@@ -219,6 +225,8 @@ func (us *UploadStream) Write(p []byte) (int, error) {
 		us.Upload.RemoteOffset = newOffset
 		if advance < len(p) && newOffset == us.Upload.RemoteSize {
 			return advance, io.ErrShortWrite // Upload is full, but there is still some data left in p.
+		} else if advance == 0 {
+			return 0, newTusErrorWithErr(ErrZeroProgress, fmt.Errorf("offset=%d", us.Upload.RemoteOffset))
 		}
 
 		return advance, nil
@@ -325,6 +333,9 @@ func (us *UploadStream) uploadChunked(r io.Reader) (int64, error) {
 		}
 		if err != nil {
 			return uploaded, fmt.Errorf("upload chunk, offset=%d: %w", us.Upload.RemoteOffset, err)
+		}
+		if advance == 0 {
+			return uploaded, newTusErrorWithErr(ErrZeroProgress, fmt.Errorf("offset=%d", us.Upload.RemoteOffset))
 		}
 
 		us.dirtyUnread = us.dirtyUnread[advance:]

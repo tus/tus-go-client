@@ -666,6 +666,75 @@ var _ = Describe("UploadStream", func() {
 				Ω(up.buf.Len()).Should(Equal(0))
 			})
 		})
+		Context("server responds successfully but does not advance the offset", func() {
+			When("Chunked mode", func() {
+				DescribeTable("should return ErrZeroProgress",
+					func(copyCb func(s *UploadStream, data []byte) (int64, error), acceptSizes []int, expectN int64, expectOffset int64, expectDirty bool) {
+						replies := make([]*reply.StdReply, len(acceptSizes))
+						for i := range replies {
+							replies[i] = tReply(reply.NoContent())
+						}
+						up := mockTusUploader{replies: replies, buf: bytes.NewBuffer(make([]byte, 0)), acceptSizes: acceptSizes}
+						srvMock.AddMocks(up.makeRequest(http.MethodPatch, "/foo/bar", emptyHeaders).ReplyFunction(up.handler()))
+
+						u := Upload{Location: "/foo/bar", RemoteSize: 1024}
+						s := NewUploadStream(testClient, &u)
+						s.ChunkSize = 256
+						data, _ := io.ReadAll(io.LimitReader(rand.New(rand.NewSource(time.Now().UnixNano())), 1024))
+
+						n, err := copyCb(s, data)
+						Ω(n).Should(Equal(expectN))
+						Ω(err).Should(And(
+							MatchError(ErrZeroProgress),
+							MatchError(ContainSubstring("offset="+strconv.FormatInt(expectOffset, 10))),
+						))
+						Ω(u).Should(Equal(Upload{Location: "/foo/bar", RemoteSize: 1024, RemoteOffset: expectOffset}))
+						Ω(s.LastResponse.StatusCode).Should(Equal(http.StatusNoContent))
+						Ω(s.Dirty()).Should(Equal(expectDirty))
+						Ω(up.requests).Should(HaveLen(len(acceptSizes))) // No retries after zero progress
+						Ω(data[:expectOffset]).Should(Equal(up.buf.Bytes()))
+					},
+					// ReadFrom returns the bytes read from reader, the unconfirmed chunk is kept in the dirty buffer
+					Entry("ReadFrom, first request", func(s *UploadStream, data []byte) (int64, error) { return s.ReadFrom(bytes.NewReader(data)) }, []int{0}, int64(256), int64(0), true),
+					Entry("ReadFrom, after the first chunk", func(s *UploadStream, data []byte) (int64, error) { return s.ReadFrom(bytes.NewReader(data)) }, []int{-1, 0}, int64(512), int64(256), true),
+					Entry("ReadFrom, after the partially confirmed chunk", func(s *UploadStream, data []byte) (int64, error) { return s.ReadFrom(bytes.NewReader(data)) }, []int{100, 0}, int64(256), int64(100), true),
+					// Write returns the bytes confirmed by server and always leaves the stream clean
+					Entry("Write, first request", func(s *UploadStream, data []byte) (int64, error) { n, e := s.Write(data); return int64(n), e }, []int{0}, int64(0), int64(0), false),
+					Entry("Write, after the first chunk", func(s *UploadStream, data []byte) (int64, error) { n, e := s.Write(data); return int64(n), e }, []int{-1, 0}, int64(256), int64(256), false),
+					Entry("Write, after the partially confirmed chunk", func(s *UploadStream, data []byte) (int64, error) { n, e := s.Write(data); return int64(n), e }, []int{100, 0}, int64(100), int64(100), false),
+				)
+			})
+			When("Non-chunked mode", func() {
+				DescribeTable("should return ErrZeroProgress",
+					func(copyCb func(s *UploadStream, data []byte) (int64, error), expectN int64) {
+						replies := []*reply.StdReply{tReply(reply.NoContent())}
+						up := mockTusUploader{replies: replies, buf: bytes.NewBuffer(make([]byte, 0)), acceptSizes: []int{0}}
+						srvMock.AddMocks(up.makeRequest(http.MethodPatch, "/foo/bar", emptyHeaders).ReplyFunction(up.handler()))
+
+						u := Upload{Location: "/foo/bar", RemoteSize: 1024, RemoteOffset: 256}
+						s := NewUploadStream(testClient, &u)
+						s.ChunkSize = NoChunked
+						data, _ := io.ReadAll(io.LimitReader(rand.New(rand.NewSource(time.Now().UnixNano())), 1024))
+						Ω(up.buf.Write(data[:256])).Should(Equal(256)) // Prefill, Upload-Offset now is 256
+
+						n, err := copyCb(s, data[256:])
+						Ω(n).Should(Equal(expectN))
+						Ω(err).Should(And(
+							MatchError(ErrZeroProgress),
+							MatchError(ContainSubstring("offset=256")),
+						))
+						Ω(u).Should(Equal(Upload{Location: "/foo/bar", RemoteSize: 1024, RemoteOffset: 256}))
+						Ω(s.LastResponse.StatusCode).Should(Equal(http.StatusNoContent))
+						Ω(s.Dirty()).Should(BeFalse())
+						Ω(up.requests).Should(HaveLen(1))
+						Ω(data[:256]).Should(Equal(up.buf.Bytes()))
+					},
+					// ReadFrom returns the bytes read from reader, Write returns the bytes confirmed by server
+					Entry("ReadFrom", func(s *UploadStream, data []byte) (int64, error) { return s.ReadFrom(bytes.NewReader(data)) }, int64(768)),
+					Entry("Write", func(s *UploadStream, data []byte) (int64, error) { n, e := s.Write(data); return int64(n), e }, int64(0)),
+				)
+			})
+		})
 		When("upload size is unknown", func() {
 			It("should panic", func() {
 				u := Upload{Location: "/foo/bar", RemoteSize: SizeUnknown}
