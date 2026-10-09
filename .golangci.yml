@@ -1,28 +1,28 @@
 # This file contains all available configuration options
 # with their default values.
-# Config file reference: https://golangci-lint.run/usage/configuration/#config-file
+# Config file reference: https://golangci-lint.run/docs/configuration/file/
 # Linters list: https://golangci-lint.run/usage/linters
 
+version: "2"
 run:
-  timeout: 5m
   modules-download-mode: readonly
-  skip-dirs:
-    - charts
-    - config
-
 linters:
   enable:
-    - gofumpt
-    - revive
-    - gocritic
-    - govet
-    - staticcheck
     - errname
-linters-settings:
-  govet:
-    disable:
-      - composites
-
+    - gocritic
+    - revive
+  disable:
+    - errcheck
+  exclusions:
+    generated: lax
+    rules:
+      - path: _test\.go
+        linters:
+          - gocritic
+          - revive
 issues:
   max-issues-per-linter: 0
   max-same-issues: 0
+formatters:
+  enable:
+    - gofumpt

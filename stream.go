@@ -140,12 +140,13 @@ func (us *UploadStream) WithChecksumAlgorithm(name string) *UploadStream {
 	res.dirtyBuffer = nil
 	res.dirtyUnread = nil
 
-	if alg, ok := checksum.GetAlgorithm(name); !ok {
+	alg, ok := checksum.GetAlgorithm(name)
+	if !ok {
 		panic(fmt.Sprintf("checksum algorithm %q does not supported", name))
-	} else {
-		f := checksum.Algorithms[alg]
-		res.checksumHash = f()
 	}
+
+	f := checksum.Algorithms[alg]
+	res.checksumHash = f()
 	res.rawChecksumHashName = name
 
 	return &res
@@ -366,12 +367,13 @@ func (us *UploadStream) uploadData(chunk []byte, stream io.Reader, extraHeaders 
 
 	// Limit the data source to the space left in the upload
 	remoteFreeSpace := int(us.Upload.RemoteSize - offset)
-	if remoteFreeSpace == 0 {
+	switch {
+	case remoteFreeSpace == 0:
 		return 0, offset, nil, nil // Upload is full, nothing to transfer
-	} else if stream == nil && remoteFreeSpace < len(chunk) {
+	case stream == nil && remoteFreeSpace < len(chunk):
 		// Chunked mode
 		chunk = chunk[:remoteFreeSpace]
-	} else if stream != nil {
+	case stream != nil:
 		// Streaming mode
 		stream = io.LimitReader(stream, int64(remoteFreeSpace))
 	}
