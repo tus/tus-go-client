@@ -13,7 +13,7 @@ jobs:
           go-version: '>=1.22'
       - run: go test -race -covermode=atomic -coverprofile=coverage.out ./...
       - name: Upload coverage reports to Codecov
-        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5.
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: coverage.out
