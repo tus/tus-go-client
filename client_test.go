@@ -12,6 +12,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/onsi/gomega/types"
 	"github.com/vitorsalgado/mocha/v3"
 	"github.com/vitorsalgado/mocha/v3/expect"
 	"github.com/vitorsalgado/mocha/v3/reply"
@@ -29,6 +30,32 @@ func tRequest(method, location string, emptyHeaders []string) *mocha.MockBuilder
 
 func tReply(startReply *reply.StdReply) *reply.StdReply {
 	return startReply.Header("Tus-Resumable", "1.0.0")
+}
+
+// closeTrackingBody wraps a response body and records whether it was closed
+type closeTrackingBody struct {
+	io.ReadCloser
+	closed bool
+}
+
+func (b *closeTrackingBody) Close() error {
+	b.closed = true
+	return b.ReadCloser.Close()
+}
+
+// closeTrackingTransport replaces each response body with closeTrackingBody and remembers the last one
+type closeTrackingTransport struct {
+	lastBody *closeTrackingBody
+}
+
+func (t *closeTrackingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := http.DefaultTransport.RoundTrip(req)
+	if err != nil {
+		return nil, err
+	}
+	t.lastBody = &closeTrackingBody{ReadCloser: resp.Body}
+	resp.Body = t.lastBody
+	return resp, nil
 }
 
 var _ = Describe("Client", func() {
@@ -103,6 +130,27 @@ var _ = Describe("Client", func() {
 				_, err = testClient.tusRequest(ctx, req)
 				Ω(err).Should(MatchError(context.Canceled))
 			})
+			DescribeTable("should read the body into returned response and close the original body",
+				func(status int, errMatcher types.GomegaMatcher) {
+					srvMock.AddMocks(tRequest(http.MethodGet, "/foo", tusHeaders).
+						Reply(tReply(reply.Status(status)).Body([]byte("test"))),
+					)
+					transport := &closeTrackingTransport{}
+					testClient = NewClient(&http.Client{Transport: transport}, testURL)
+					req, err := http.NewRequest(http.MethodGet, srvMock.URL()+"/foo", nil)
+					Ω(err).Should(Succeed())
+
+					resp, err := testClient.tusRequest(context.Background(), req)
+					Ω(err).Should(errMatcher)
+					Ω(resp).ShouldNot(BeNil())
+					Ω(transport.lastBody).ShouldNot(BeNil())
+					Ω(transport.lastBody.closed).Should(BeTrue())
+					Ω(resp.Body).ShouldNot(BeIdenticalTo(transport.lastBody))
+					Ω(resp).Should(HaveHTTPBody([]byte("test")))
+				},
+				Entry("200", http.StatusOK, Succeed()),
+				Entry("412", http.StatusPreconditionFailed, MatchError(ErrProtocol)),
+			)
 		})
 		Context("error path", func() {
 			It("should process http 412 unknown versions", func() {

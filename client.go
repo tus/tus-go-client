@@ -435,30 +435,33 @@ func (c *Client) UpdateCapabilities() (response *http.Response, err error) {
 	return
 }
 
-func (c *Client) tusRequest(ctx context.Context, req *http.Request) (response *http.Response, err error) {
+func (c *Client) tusRequest(ctx context.Context, req *http.Request) (*http.Response, error) {
 	if req.Method != http.MethodOptions && req.Header.Get("Tus-Resumable") == "" {
 		req.Header.Set("Tus-Resumable", c.ProtocolVersion)
 	}
 	if ctx != nil {
 		req = req.WithContext(ctx)
 	}
-	response, err = c.client.Do(req)
-	if err == nil && response.StatusCode == http.StatusPreconditionFailed {
+	response, err := c.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+
+	var bodyBytes []byte
+	bodyBytes, err = io.ReadAll(response.Body)
+	if err != nil {
+		return response, fmt.Errorf("read body: %w", err)
+	}
+	response.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+
+	if response.StatusCode == http.StatusPreconditionFailed {
 		versions := response.Header.Get("Tus-Version")
 		err = newTusErrorWithErr(ErrProtocol, fmt.Errorf("request protocol version %q, server supported versions are %q", c.ProtocolVersion, versions))
-		return
-	}
-	if response != nil && response.Body != nil {
-		var bodyBytes []byte
-		bodyBytes, err = io.ReadAll(response.Body)
-		if err != nil {
-			return
-		}
-		response.Body.Close() // Close the original body
-		response.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+		return response, err
 	}
 
-	return
+	return response, nil
 }
 
 func (c *Client) ensureExtension(extension string) error {
