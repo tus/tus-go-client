@@ -310,6 +310,41 @@ var _ = Describe("Client", func() {
 					Entry("Upload-Length", "Upload-Length", map[string]string{"Upload-Length": "asdf", "Upload-Offset": "123"}),
 				)
 			})
+			When("corrupted metadata header value", func() {
+				DescribeTable("should return protocol error and leave upload untouched",
+					func(metadata, expectMsg string) {
+						srvMock.AddMocks(tRequest(http.MethodHead, "/foo/bar", tusHeaders).
+							Reply(tReply(reply.OK()).
+								Header("Upload-Offset", "64").
+								Header("Upload-Length", "1024").
+								Header("Upload-Metadata", metadata)),
+						)
+						f := Upload{
+							Location:     "/old/location",
+							RemoteSize:   2048,
+							RemoteOffset: 128,
+							Metadata:     map[string]string{"key": "value"},
+							Partial:      true,
+						}
+
+						resp, err := testClient.GetUpload(&f, "/foo/bar")
+						Ω(resp).ShouldNot(BeNil())
+						Ω(err).Should(And(
+							MatchError(ErrProtocol),
+							MatchError("protocol error: cannot parse Upload-Metadata header \""+metadata+"\": "+expectMsg),
+						))
+						Ω(f).Should(Equal(Upload{
+							Location:     "/old/location",
+							RemoteSize:   2048,
+							RemoteOffset: 128,
+							Metadata:     map[string]string{"key": "value"},
+							Partial:      true,
+						}))
+					},
+					Entry("item without value", "key1 dmFsdWUx,key2", "metadata item \"key2\" has bad format"),
+					Entry("invalid base64 value", "key1 dmFsdWUx,key2 !!!!", "illegal base64 data at input byte 0"),
+				)
+			})
 		})
 	})
 	Context("CreateUpload", func() {
