@@ -603,6 +603,48 @@ var _ = Describe("UploadStream", func() {
 				Ω(s.Dirty()).Should(BeFalse())
 			})
 		})
+		Context("Seek", func() {
+			DescribeTable("should move local offset",
+				func(initialOffset, offset int64, whence int, expectOffset int64) {
+					u := Upload{Location: "/foo/bar", RemoteSize: 1024, RemoteOffset: initialOffset}
+					s := NewUploadStream(testClient, &u)
+
+					Ω(s.Seek(offset, whence)).Should(Equal(expectOffset))
+					Ω(u).Should(Equal(Upload{Location: "/foo/bar", RemoteSize: 1024, RemoteOffset: expectOffset}))
+					Ω(s.Tell()).Should(Equal(expectOffset))
+					Ω(s.LastResponse).Should(BeNil())
+				},
+				Entry("io.SeekStart", int64(100), int64(512), io.SeekStart, int64(512)),
+				Entry("io.SeekStart to zero", int64(100), int64(0), io.SeekStart, int64(0)),
+				Entry("io.SeekStart to the end", int64(100), int64(1024), io.SeekStart, int64(1024)),
+				Entry("io.SeekCurrent forward", int64(100), int64(50), io.SeekCurrent, int64(150)),
+				Entry("io.SeekCurrent backward", int64(100), int64(-50), io.SeekCurrent, int64(50)),
+				Entry("io.SeekCurrent zero offset", int64(100), int64(0), io.SeekCurrent, int64(100)),
+				Entry("io.SeekCurrent to zero", int64(100), int64(-100), io.SeekCurrent, int64(0)),
+				Entry("io.SeekEnd zero offset", int64(100), int64(0), io.SeekEnd, int64(1024)),
+				Entry("io.SeekEnd backward", int64(100), int64(-24), io.SeekEnd, int64(1000)),
+				Entry("io.SeekEnd to zero", int64(100), int64(-1024), io.SeekEnd, int64(0)),
+			)
+			DescribeTable("should clamp offset to upload size",
+				func(initialOffset, offset int64, whence int) {
+					u := Upload{Location: "/foo/bar", RemoteSize: 1024, RemoteOffset: initialOffset}
+					s := NewUploadStream(testClient, &u)
+
+					Ω(s.Seek(offset, whence)).Should(Equal(int64(1024)))
+					Ω(u.RemoteOffset).Should(Equal(int64(1024)))
+				},
+				Entry("io.SeekStart", int64(100), int64(1025), io.SeekStart),
+				Entry("io.SeekCurrent", int64(1000), int64(100), io.SeekCurrent),
+				Entry("io.SeekEnd", int64(100), int64(1), io.SeekEnd),
+			)
+			It("should seek in an empty upload", func() {
+				u := Upload{Location: "/foo/bar", RemoteSize: 0}
+				s := NewUploadStream(testClient, &u)
+
+				Ω(s.Seek(10, io.SeekStart)).Should(Equal(int64(0)))
+				Ω(u.RemoteOffset).Should(Equal(int64(0)))
+			})
+		})
 		Context("WithContext", func() {
 			It("should set context and return a copy of UploadStream", func() {
 				ctx := context.Background()
@@ -784,6 +826,37 @@ var _ = Describe("UploadStream", func() {
 					MatchError(ErrUnsupportedFeature),
 					MatchError(ContainSubstring("unsupported feature: checksum-trailer")),
 				))
+			})
+		})
+		Context("Seek", func() {
+			DescribeTable("should return error and keep offset if resulting offset is negative",
+				func(offset int64, whence int) {
+					u := Upload{Location: "/foo/bar", RemoteSize: 1024, RemoteOffset: 100}
+					s := NewUploadStream(testClient, &u)
+
+					_, err := s.Seek(offset, whence)
+					Ω(err).Should(MatchError(ContainSubstring("is negative")))
+					Ω(u.RemoteOffset).Should(Equal(int64(100)))
+				},
+				Entry("io.SeekStart", int64(-1), io.SeekStart),
+				Entry("io.SeekCurrent", int64(-101), io.SeekCurrent),
+				Entry("io.SeekEnd", int64(-1025), io.SeekEnd),
+			)
+			It("should return error and keep offset if upload size is unknown", func() {
+				u := Upload{Location: "/foo/bar", RemoteSize: SizeUnknown, RemoteOffset: 100}
+				s := NewUploadStream(testClient, &u)
+
+				n, err := s.Seek(10, io.SeekStart)
+				Ω(err).Should(MatchError(ContainSubstring("unknown size")))
+				Ω(n).Should(Equal(int64(100)))
+				Ω(u.RemoteOffset).Should(Equal(int64(100)))
+			})
+			It("should panic on unknown whence", func() {
+				u := Upload{Location: "/foo/bar", RemoteSize: 1024, RemoteOffset: 100}
+				s := NewUploadStream(testClient, &u)
+
+				Ω(func() { _, _ = s.Seek(10, 42) }).Should(PanicWith("unknown whence value: 42"))
+				Ω(u.RemoteOffset).Should(Equal(int64(100)))
 			})
 		})
 	})

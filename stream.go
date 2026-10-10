@@ -266,20 +266,25 @@ func (us *UploadStream) Sync() (response *http.Response, err error) {
 // position it does not expect. Use Sync to adopt the server offset instead.
 func (us *UploadStream) Seek(offset int64, whence int) (int64, error) {
 	var newOffset int64
+
+	if us.Upload.RemoteSize == SizeUnknown {
+		return us.Upload.RemoteOffset, fmt.Errorf("cannot seek in an upload with unknown size")
+	}
+
 	switch whence {
 	case io.SeekStart:
 		newOffset = offset
 	case io.SeekCurrent:
 		newOffset = us.Upload.RemoteOffset + offset
 	case io.SeekEnd:
-		newOffset = us.Upload.RemoteSize - 1 + offset
+		newOffset = us.Upload.RemoteSize + offset
 	default:
 		panic(fmt.Sprintf("unknown whence value: %d", whence))
 	}
-	if offset >= us.Upload.RemoteSize {
-		return newOffset, fmt.Errorf("offset %d exceeds the upload size %d bytes", newOffset, us.Upload.RemoteSize)
+	if newOffset >= us.Upload.RemoteSize {
+		newOffset = us.Upload.RemoteSize
 	}
-	if offset < 0 {
+	if newOffset < 0 {
 		return newOffset, fmt.Errorf("offset %d is negative", newOffset)
 	}
 	us.Upload.RemoteOffset = newOffset
