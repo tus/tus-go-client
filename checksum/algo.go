@@ -11,6 +11,11 @@ import (
 	"hash/fnv"
 	"strings"
 	"unicode"
+
+	_ "golang.org/x/crypto/blake2b"
+	_ "golang.org/x/crypto/blake2s"
+	_ "golang.org/x/crypto/md4"
+	_ "golang.org/x/crypto/ripemd160"
 )
 
 // Algorithm is the simplified name of a hash algorithm, which is its common name in lowercase with all

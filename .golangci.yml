@@ -20,6 +20,17 @@ linters:
         linters:
           - gocritic
           - revive
+  settings:
+    revive:
+      rules:
+        - name: blank-imports
+          exclude:
+            - "~checksum/algo\\.go$"
+    staticcheck:
+      checks:
+        - "all"
+        - "-SA1019"  # Disable warning about using the deprecated algorithms
+        - "-ST1003"  # Disable warning about format of CAPS in algorithm names
 issues:
   max-issues-per-linter: 0
   max-same-issues: 0
