@@ -144,6 +144,7 @@ func (c *Client) GetUpload(u *Upload, location string) (response *http.Response,
 		if v := response.Header.Get("Upload-Metadata"); v != "" {
 			if u2.Metadata, err = DecodeMetadata(v); err != nil {
 				err = newTusErrorWithErr(ErrProtocol, fmt.Errorf("cannot parse Upload-Metadata header %q: %w", v, err))
+				return
 			}
 		}
 		*u = u2
