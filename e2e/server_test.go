@@ -56,7 +56,7 @@ func startServer(configure func(cfg *handler.Config), mw middleware) *tusServer 
 	h, err := handler.NewHandler(cfg)
 	Expect(err).NotTo(HaveOccurred())
 
-	var tusHandler http.Handler = http.StripPrefix(basePath, h)
+	tusHandler := http.StripPrefix(basePath, h)
 	if mw != nil {
 		tusHandler = mw(tusHandler)
 	}
