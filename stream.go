@@ -412,7 +412,7 @@ func (us *UploadStream) doRequest(requestURL string, chunk []byte, stream io.Rea
 		}
 	}
 	var req *http.Request
-	if req, err = us.client.GetRequest(us.uploadMethod, requestURL, nil, us.client, us.client.client); err != nil {
+	if req, err = us.client.createRequest(us.uploadMethod, requestURL, nil); err != nil {
 		return 0, nil, fmt.Errorf("create request: %w", err)
 	}
 

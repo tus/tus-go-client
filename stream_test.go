@@ -589,7 +589,98 @@ var _ = Describe("UploadStream", func() {
 				Entry("Write", func(s *UploadStream, data []byte) (int64, error) { n, e := s.Write(data); return int64(n), e }),
 			)
 		})
+		DescribeTable("should use GetRequest and ignore ExtraHeaders",
+			func(copyCb func(s *UploadStream, data []byte) (int64, error), chunkSize int64, expectRequests int) {
+				replies := []*reply.StdReply{
+					tReply(reply.NoContent()), tReply(reply.NoContent()), tReply(reply.NoContent()), tReply(reply.NoContent()),
+				}
+				up := mockTusUploader{replies: replies, buf: bytes.NewBuffer(make([]byte, 0))}
+				srvMock.AddMocks(up.makeRequest(http.MethodPatch, "/foo/bar", emptyHeaders).
+					Header("X-Custom", expect.ToEqual("custom")).
+					Header("X-Extra", expect.ToBeEmpty()).
+					ReplyFunction(up.handler()))
+				spy := &getRequestSpy{}
+				testClient.GetRequest = spy.GetRequest
+				testClient.ExtraHeaders = http.Header{"X-Extra": {"extra"}}
+
+				u := Upload{Location: "/foo/bar", RemoteSize: 1024}
+				s := NewUploadStream(testClient, &u)
+				s.ChunkSize = chunkSize
+				data, _ := io.ReadAll(io.LimitReader(rand.New(rand.NewSource(time.Now().UnixNano())), 1024))
+
+				Ω(copyCb(s, data)).Should(BeEquivalentTo(1024))
+				Ω(u).Should(Equal(Upload{Location: "/foo/bar", RemoteSize: 1024, RemoteOffset: 1024}))
+				Ω(data).Should(Equal(up.buf.Bytes()))
+				expectCalls := make([]getRequestCall, expectRequests)
+				for i := range expectCalls {
+					expectCalls[i] = getRequestCall{http.MethodPatch, srvMock.URL() + "/foo/bar", testClient}
+				}
+				Ω(spy.calls).Should(Equal(expectCalls))
+			},
+			Entry("ReadFrom, chunked", func(s *UploadStream, data []byte) (int64, error) { return s.ReadFrom(bytes.NewReader(data)) }, int64(256), 4),
+			Entry("Write, chunked", func(s *UploadStream, data []byte) (int64, error) { n, e := s.Write(data); return int64(n), e }, int64(256), 4),
+			Entry("ReadFrom, no chunked", func(s *UploadStream, data []byte) (int64, error) { return s.ReadFrom(bytes.NewReader(data)) }, int64(NoChunked), 1),
+			Entry("Write, no chunked", func(s *UploadStream, data []byte) (int64, error) { n, e := s.Write(data); return int64(n), e }, int64(NoChunked), 1),
+		)
+		DescribeTable("should send ExtraHeaders and leave them untouched",
+			func(copyCb func(s *UploadStream, data []byte) (int64, error), chunkSize int64, expectRequests int) {
+				replies := []*reply.StdReply{
+					tReply(reply.NoContent()), tReply(reply.NoContent()), tReply(reply.NoContent()), tReply(reply.NoContent()),
+				}
+				up := mockTusUploader{replies: replies, buf: bytes.NewBuffer(make([]byte, 0))}
+				srvMock.AddMocks(up.makeRequest(http.MethodPatch, "/foo/bar", emptyHeaders).
+					Header("X-Extra", expect.ToEqual("extra")).
+					ReplyFunction(up.handler()))
+				testClient.ExtraHeaders = http.Header{"X-Extra": {"extra"}}
+
+				u := Upload{Location: "/foo/bar", RemoteSize: 1024}
+				s := NewUploadStream(testClient, &u)
+				s.ChunkSize = chunkSize
+				data, _ := io.ReadAll(io.LimitReader(rand.New(rand.NewSource(time.Now().UnixNano())), 1024))
+
+				Ω(copyCb(s, data)).Should(BeEquivalentTo(1024))
+				Ω(u).Should(Equal(Upload{Location: "/foo/bar", RemoteSize: 1024, RemoteOffset: 1024}))
+				Ω(data).Should(Equal(up.buf.Bytes()))
+				Ω(up.requests).Should(HaveLen(expectRequests))
+				Ω(testClient.ExtraHeaders).Should(Equal(http.Header{"X-Extra": {"extra"}}))
+			},
+			Entry("ReadFrom, chunked", func(s *UploadStream, data []byte) (int64, error) { return s.ReadFrom(bytes.NewReader(data)) }, int64(256), 4),
+			Entry("Write, chunked", func(s *UploadStream, data []byte) (int64, error) { n, e := s.Write(data); return int64(n), e }, int64(256), 4),
+			Entry("ReadFrom, no chunked", func(s *UploadStream, data []byte) (int64, error) { return s.ReadFrom(bytes.NewReader(data)) }, int64(NoChunked), 1),
+			Entry("Write, no chunked", func(s *UploadStream, data []byte) (int64, error) { n, e := s.Write(data); return int64(n), e }, int64(NoChunked), 1),
+		)
 		Context("Sync", func() {
+			It("should use GetRequest and ignore ExtraHeaders", func() {
+				eh := []string{"Upload-Concat", "Upload-Defer-Length", "Upload-Length", "Upload-Metadata", "Upload-Checksum", "Upload-Offset"}
+				srvMock.AddMocks(tRequest(http.MethodHead, "/foo/bar", eh).
+					Header("X-Custom", expect.ToEqual("custom")).
+					Header("X-Extra", expect.ToBeEmpty()).
+					Reply(tReply(reply.Status(http.StatusOK)).Header("Upload-Offset", "512")),
+				)
+				spy := &getRequestSpy{}
+				testClient.GetRequest = spy.GetRequest
+				testClient.ExtraHeaders = http.Header{"X-Extra": {"extra"}}
+				u := Upload{Location: "/foo/bar", RemoteSize: 1024, RemoteOffset: 8}
+				s := NewUploadStream(testClient, &u)
+
+				Ω(s.Sync()).ShouldNot(BeNil())
+				Ω(spy.calls).Should(Equal([]getRequestCall{{http.MethodHead, srvMock.URL() + "/foo/bar", testClient}}))
+				Ω(u).Should(Equal(Upload{Location: "/foo/bar", RemoteSize: 1024, RemoteOffset: 512}))
+			})
+			It("should send ExtraHeaders and leave them untouched", func() {
+				eh := []string{"Upload-Concat", "Upload-Defer-Length", "Upload-Length", "Upload-Metadata", "Upload-Checksum", "Upload-Offset"}
+				srvMock.AddMocks(tRequest(http.MethodHead, "/foo/bar", eh).
+					Header("X-Extra", expect.ToEqual("extra")).
+					Reply(tReply(reply.Status(http.StatusOK)).Header("Upload-Offset", "512")),
+				)
+				testClient.ExtraHeaders = http.Header{"X-Extra": {"extra"}}
+				u := Upload{Location: "/foo/bar", RemoteSize: 1024, RemoteOffset: 8}
+				s := NewUploadStream(testClient, &u)
+
+				Ω(s.Sync()).ShouldNot(BeNil())
+				Ω(testClient.ExtraHeaders).Should(Equal(http.Header{"X-Extra": {"extra"}}))
+				Ω(u).Should(Equal(Upload{Location: "/foo/bar", RemoteSize: 1024, RemoteOffset: 512}))
+			})
 			It("should sync local offset with remote offset", func() {
 				eh := []string{"Upload-Concat", "Upload-Defer-Length", "Upload-Length", "Upload-Metadata", "Upload-Checksum", "Upload-Offset"}
 				srvMock.AddMocks(tRequest(http.MethodHead, "/foo/bar", eh).
