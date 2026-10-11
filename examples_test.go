@@ -475,14 +475,7 @@ func ExampleClient_headers() {
 		log.Fatalf("Failed to parse URL: %s", err)
 	}
 	cl := tusgo.NewClient(http.DefaultClient, baseURL)
-	cl.GetRequest = func(method, url string, body io.Reader, _ *tusgo.Client, _ *http.Client) (*http.Request, error) {
-		req, err := http.NewRequest(method, url, body)
-		if err != nil {
-			return nil, err
-		}
-		req.Header.Set("Authorization", "Bearer "+os.Getenv("TUS_TOKEN"))
-		return req, nil
-	}
+	cl.ExtraHeaders.Set("Authorization", "Bearer "+os.Getenv("TUS_TOKEN"))
 
 	f, finfo, err := OpenFile("/tmp/file.txt")
 	if err != nil {

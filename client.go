@@ -35,8 +35,8 @@ import (
 func NewClient(client *http.Client, baseURL *url.URL) *Client {
 	c := &Client{
 		ProtocolVersion: "1.0.0",
-		GetRequest:      newRequest,
 		client:          client,
+		ExtraHeaders:    make(http.Header),
 		BaseURL:         baseURL,
 	}
 	if client == nil {
@@ -67,8 +67,10 @@ type Client struct {
 	// Capabilities are the features and limits of the server. Use [Client.UpdateCapabilities] to query them from the server.
 	Capabilities *ServerCapabilities
 
-	// GetRequest is called by the library every time a new request object is needed. Replace it to adjust the
-	// outgoing requests, e.g. to add the authentication headers. By default, it returns a bare http.Request.
+	// ExtraHeaders are the additional HTTP headers the client sends with every request. Ignored if [Client.GetRequest] is set.
+	ExtraHeaders http.Header
+
+	// GetRequest is called by the library to construct a new HTTP request. If nil, the library uses [http.NewRequest].
 	GetRequest GetRequestFunc
 
 	client *http.Client
@@ -106,8 +108,8 @@ func (c *Client) GetUpload(u *Upload, location string) (response *http.Response,
 	ref := c.BaseURL.ResolveReference(loc).String()
 
 	var req *http.Request
-	if req, err = c.GetRequest(http.MethodHead, ref, nil, c, c.client); err != nil {
-		return
+	if req, err = c.createRequest(http.MethodHead, ref, nil); err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
 	}
 	if response, err = c.tusRequest(c.ctx, req); err != nil {
 		return
@@ -177,8 +179,8 @@ func (c *Client) CreateUpload(u *Upload, remoteSize int64, partial bool, meta ma
 	}
 
 	var req *http.Request
-	if req, err = c.GetRequest(http.MethodPost, c.BaseURL.String(), nil, c, c.client); err != nil {
-		return
+	if req, err = c.createRequest(http.MethodPost, c.BaseURL.String(), nil); err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
 	}
 
 	req.Header.Set("Content-Length", strconv.FormatInt(0, 10))
@@ -300,8 +302,8 @@ func (c *Client) DeleteUpload(u Upload) (response *http.Response, err error) {
 		return
 	}
 	ref := c.BaseURL.ResolveReference(loc).String()
-	if req, err = c.GetRequest(http.MethodDelete, ref, nil, c, c.client); err != nil {
-		return
+	if req, err = c.createRequest(http.MethodDelete, ref, nil); err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
 	}
 	if response, err = c.tusRequest(c.ctx, req); err != nil {
 		return
@@ -337,8 +339,8 @@ func (c *Client) ConcatenateUploads(final *Upload, partials []Upload, meta map[s
 	}
 
 	var req *http.Request
-	if req, err = c.GetRequest(http.MethodPost, c.BaseURL.String(), nil, c, c.client); err != nil {
-		return
+	if req, err = c.createRequest(http.MethodPost, c.BaseURL.String(), nil); err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
 	}
 
 	locations := make([]string, 0)
@@ -404,8 +406,8 @@ func (c *Client) ConcatenateStreams(final *Upload, streams []*UploadStream, meta
 // UpdateCapabilities queries the server for its features and limits and stores them in the [Client.Capabilities] field.
 func (c *Client) UpdateCapabilities() (response *http.Response, err error) {
 	var req *http.Request
-	if req, err = c.GetRequest(http.MethodOptions, c.BaseURL.String(), nil, c, c.client); err != nil {
-		return
+	if req, err = c.createRequest(http.MethodOptions, c.BaseURL.String(), nil); err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
 	}
 	if response, err = c.tusRequest(c.ctx, req); err != nil {
 		return
@@ -479,6 +481,20 @@ func (c *Client) ensureExtension(extension string) error {
 	return newTusErrorWithErr(ErrUnsupportedFeature, errors.New(extension))
 }
 
+func (c *Client) createRequest(method, url string, body io.Reader) (*http.Request, error) {
+	if c.GetRequest != nil {
+		return c.GetRequest(method, url, body, c, c.client)
+	}
+	req, err := http.NewRequest(method, url, body)
+	if err != nil {
+		return nil, err
+	}
+	if len(c.ExtraHeaders) > 0 {
+		req.Header = c.ExtraHeaders.Clone()
+	}
+	return req, nil
+}
+
 // EncodeMetadata encodes a metadata map into the TUS `Upload-Metadata` header format.
 func EncodeMetadata(metadata map[string]string) (string, error) {
 	var encoded []string
@@ -509,8 +525,4 @@ func DecodeMetadata(raw string) (map[string]string, error) {
 	}
 
 	return res, nil
-}
-
-func newRequest(method, url string, body io.Reader, _ *Client, _ *http.Client) (*http.Request, error) {
-	return http.NewRequest(method, url, body)
 }

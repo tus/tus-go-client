@@ -58,11 +58,34 @@ func (t *closeTrackingTransport) RoundTrip(req *http.Request) (*http.Response, e
 	return resp, nil
 }
 
+type getRequestCall struct {
+	method    string
+	url       string
+	tusClient *Client
+}
+
+// getRequestSpy provides a GetRequestFunc that records its calls and sets the X-Custom header in every request
+type getRequestSpy struct {
+	calls []getRequestCall
+}
+
+func (s *getRequestSpy) GetRequest(method, url string, body io.Reader, tusClient *Client, _ *http.Client) (*http.Request, error) {
+	s.calls = append(s.calls, getRequestCall{method: method, url: url, tusClient: tusClient})
+	req, err := http.NewRequest(method, url, body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("X-Custom", "custom")
+	return req, nil
+}
+
 var _ = Describe("Client", func() {
 	var testClient *Client
 	var testURL *url.URL
 	var srvMock *mocha.Mocha
 	var tusHeaders []string
+	var spy *getRequestSpy
+	var extraHeaders http.Header
 
 	BeforeEach(func() {
 		srvMock = mocha.New(GinkgoT())
@@ -73,6 +96,8 @@ var _ = Describe("Client", func() {
 			ProtocolVersions: []string{"1.0.0"},
 		}
 		tusHeaders = []string{"Upload-Concat", "Upload-Defer-Length", "Upload-Length", "Upload-Metadata", "Upload-Checksum", "Upload-Offset"}
+		spy = &getRequestSpy{}
+		extraHeaders = http.Header{"X-Extra": {"extra"}}
 	})
 	AfterEach(func() {
 		if srvMock != nil {
@@ -83,7 +108,8 @@ var _ = Describe("Client", func() {
 	Context("NewClient", func() {
 		It("should correct set initial values", func() {
 			Ω(testClient.ProtocolVersion).Should(Equal("1.0.0"))
-			Ω(testClient.GetRequest).ShouldNot(BeNil())
+			Ω(testClient.GetRequest).Should(BeNil())
+			Ω(testClient.ExtraHeaders).Should(Equal(http.Header{}))
 			Ω(testClient.BaseURL).Should(Equal(testURL))
 			Ω(testClient.ctx).Should(BeNil())
 		})
@@ -171,6 +197,34 @@ var _ = Describe("Client", func() {
 	})
 	Context("GetUpload", func() {
 		Context("happy path", func() {
+			It("should use GetRequest and ignore ExtraHeaders", func() {
+				srvMock.AddMocks(tRequest(http.MethodHead, "/foo/bar", tusHeaders).
+					Header("X-Custom", expect.ToEqual("custom")).
+					Header("X-Extra", expect.ToBeEmpty()).
+					Reply(tReply(reply.OK()).
+						Header("Upload-Offset", "64")),
+				)
+				testClient.GetRequest = spy.GetRequest
+				testClient.ExtraHeaders = extraHeaders
+				f := Upload{}
+
+				Ω(testClient.GetUpload(&f, "/foo/bar")).ShouldNot(BeNil())
+				Ω(spy.calls).Should(Equal([]getRequestCall{{http.MethodHead, srvMock.URL() + "/foo/bar", testClient}}))
+				Ω(f).Should(Equal(Upload{Location: "/foo/bar", RemoteOffset: 64}))
+			})
+			It("should send ExtraHeaders and leave them untouched", func() {
+				srvMock.AddMocks(tRequest(http.MethodHead, "/foo/bar", tusHeaders).
+					Header("X-Extra", expect.ToEqual("extra")).
+					Reply(tReply(reply.OK()).
+						Header("Upload-Offset", "64")),
+				)
+				testClient.ExtraHeaders = extraHeaders
+				f := Upload{}
+
+				Ω(testClient.GetUpload(&f, "/foo/bar")).ShouldNot(BeNil())
+				Ω(testClient.ExtraHeaders).Should(Equal(http.Header{"X-Extra": {"extra"}}))
+				Ω(f).Should(Equal(Upload{Location: "/foo/bar", RemoteOffset: 64}))
+			})
 			When("ordinary upload", func() {
 				It("should get upload info", func() {
 					srvMock.AddMocks(tRequest(http.MethodHead, "/foo/bar", tusHeaders).
@@ -352,6 +406,40 @@ var _ = Describe("Client", func() {
 			BeforeEach(func() {
 				testClient.Capabilities.Extensions = append(testClient.Capabilities.Extensions, "creation")
 			})
+			It("should use GetRequest and ignore ExtraHeaders", func() {
+				eh := []string{"Upload-Concat", "Upload-Defer-Length", "Upload-Metadata", "Upload-Checksum", "Upload-Offset"}
+				srvMock.AddMocks(tRequest(http.MethodPost, "/", eh).
+					Header("X-Custom", expect.ToEqual("custom")).
+					Header("X-Extra", expect.ToBeEmpty()).
+					Header("Content-Length", expect.ToEqual("0")).
+					Header("Upload-Length", expect.ToEqual("1024")).
+					Reply(tReply(reply.Created()).
+						Header("Location", "/foo/bar")),
+				)
+				testClient.GetRequest = spy.GetRequest
+				testClient.ExtraHeaders = extraHeaders
+				f := Upload{}
+
+				Ω(testClient.CreateUpload(&f, 1024, false, nil)).ShouldNot(BeNil())
+				Ω(spy.calls).Should(Equal([]getRequestCall{{http.MethodPost, srvMock.URL(), testClient}}))
+				Ω(f).Should(Equal(Upload{RemoteSize: 1024, Location: "/foo/bar"}))
+			})
+			It("should send ExtraHeaders and leave them untouched", func() {
+				eh := []string{"Upload-Concat", "Upload-Defer-Length", "Upload-Metadata", "Upload-Checksum", "Upload-Offset"}
+				srvMock.AddMocks(tRequest(http.MethodPost, "/", eh).
+					Header("X-Extra", expect.ToEqual("extra")).
+					Header("Content-Length", expect.ToEqual("0")).
+					Header("Upload-Length", expect.ToEqual("1024")).
+					Reply(tReply(reply.Created()).
+						Header("Location", "/foo/bar")),
+				)
+				testClient.ExtraHeaders = extraHeaders
+				f := Upload{}
+
+				Ω(testClient.CreateUpload(&f, 1024, false, nil)).ShouldNot(BeNil())
+				Ω(testClient.ExtraHeaders).Should(Equal(http.Header{"X-Extra": {"extra"}}))
+				Ω(f).Should(Equal(Upload{RemoteSize: 1024, Location: "/foo/bar"}))
+			})
 			When("upload with size, without metadata", func() {
 				It("should create upload", func() {
 					eh := []string{"Upload-Concat", "Upload-Defer-Length", "Upload-Metadata", "Upload-Checksum", "Upload-Offset"}
@@ -529,6 +617,54 @@ var _ = Describe("Client", func() {
 			BeforeEach(func() {
 				testClient.Capabilities.Extensions = append(testClient.Capabilities.Extensions, "creation", "creation-with-upload")
 			})
+			It("should use GetRequest and ignore ExtraHeaders", func() {
+				eh := []string{"Upload-Concat", "Upload-Defer-Length", "Upload-Metadata", "Upload-Checksum", "Upload-Offset"}
+				d, _ := io.ReadAll(io.LimitReader(rand.New(rand.NewSource(time.Now().UnixNano())), 512))
+				srvMock.AddMocks(tRequest(http.MethodPost, "/", eh).
+					Header("X-Custom", expect.ToEqual("custom")).
+					Header("X-Extra", expect.ToBeEmpty()).
+					Header("Content-Length", expect.ToEqual("512")).
+					Header("Upload-Length", expect.ToEqual("1024")).
+					Header("Content-Type", expect.ToEqual("application/offset+octet-stream")).
+					Body(expect.ToEqual(d)).
+					Reply(tReply(reply.Created()).
+						Header("Location", "/foo/bar").
+						Header("Upload-Offset", "512")),
+				)
+				testClient.GetRequest = spy.GetRequest
+				testClient.ExtraHeaders = extraHeaders
+				u := Upload{}
+
+				bytes, resp, err := testClient.CreateUploadWithData(&u, d, 1024, false, nil)
+				Ω(bytes).Should(BeEquivalentTo(512))
+				Ω(resp).ShouldNot(BeNil())
+				Ω(err).Should(Succeed())
+				Ω(spy.calls).Should(Equal([]getRequestCall{{http.MethodPost, srvMock.URL(), testClient}}))
+				Ω(u).Should(Equal(Upload{RemoteSize: 1024, Location: "/foo/bar", RemoteOffset: 512}))
+			})
+			It("should send ExtraHeaders and leave them untouched", func() {
+				eh := []string{"Upload-Concat", "Upload-Defer-Length", "Upload-Metadata", "Upload-Checksum", "Upload-Offset"}
+				d, _ := io.ReadAll(io.LimitReader(rand.New(rand.NewSource(time.Now().UnixNano())), 512))
+				srvMock.AddMocks(tRequest(http.MethodPost, "/", eh).
+					Header("X-Extra", expect.ToEqual("extra")).
+					Header("Content-Length", expect.ToEqual("512")).
+					Header("Upload-Length", expect.ToEqual("1024")).
+					Header("Content-Type", expect.ToEqual("application/offset+octet-stream")).
+					Body(expect.ToEqual(d)).
+					Reply(tReply(reply.Created()).
+						Header("Location", "/foo/bar").
+						Header("Upload-Offset", "512")),
+				)
+				testClient.ExtraHeaders = extraHeaders
+				u := Upload{}
+
+				bytes, resp, err := testClient.CreateUploadWithData(&u, d, 1024, false, nil)
+				Ω(bytes).Should(BeEquivalentTo(512))
+				Ω(resp).ShouldNot(BeNil())
+				Ω(err).Should(Succeed())
+				Ω(testClient.ExtraHeaders).Should(Equal(http.Header{"X-Extra": {"extra"}}))
+				Ω(u).Should(Equal(Upload{RemoteSize: 1024, Location: "/foo/bar", RemoteOffset: 512}))
+			})
 			When("upload without metadata", func() {
 				DescribeTable("should upload data in one request",
 					func(dataLen int) {
@@ -704,6 +840,28 @@ var _ = Describe("Client", func() {
 			BeforeEach(func() {
 				testClient.Capabilities.Extensions = append(testClient.Capabilities.Extensions, "termination")
 			})
+			It("should use GetRequest and ignore ExtraHeaders", func() {
+				srvMock.AddMocks(tRequest(http.MethodDelete, "/foo/bar", tusHeaders).
+					Header("X-Custom", expect.ToEqual("custom")).
+					Header("X-Extra", expect.ToBeEmpty()).
+					Reply(tReply(reply.NoContent())))
+				testClient.GetRequest = spy.GetRequest
+				testClient.ExtraHeaders = extraHeaders
+				f := Upload{Location: "/foo/bar"}
+
+				Ω(testClient.DeleteUpload(f)).ShouldNot(BeNil())
+				Ω(spy.calls).Should(Equal([]getRequestCall{{http.MethodDelete, srvMock.URL() + "/foo/bar", testClient}}))
+			})
+			It("should send ExtraHeaders and leave them untouched", func() {
+				srvMock.AddMocks(tRequest(http.MethodDelete, "/foo/bar", tusHeaders).
+					Header("X-Extra", expect.ToEqual("extra")).
+					Reply(tReply(reply.NoContent())))
+				testClient.ExtraHeaders = extraHeaders
+				f := Upload{Location: "/foo/bar"}
+
+				Ω(testClient.DeleteUpload(f)).ShouldNot(BeNil())
+				Ω(testClient.ExtraHeaders).Should(Equal(http.Header{"X-Extra": {"extra"}}))
+			})
 			Specify("make a request", func() {
 				srvMock.AddMocks(
 					tRequest(http.MethodDelete, "/foo/bar", tusHeaders).
@@ -749,6 +907,40 @@ var _ = Describe("Client", func() {
 		Context("happy path", func() {
 			BeforeEach(func() {
 				testClient.Capabilities.Extensions = append(testClient.Capabilities.Extensions, "concatenation")
+			})
+			It("should use GetRequest and ignore ExtraHeaders", func() {
+				eh := []string{"Upload-Defer-Length", "Upload-Length", "Upload-Metadata", "Upload-Checksum", "Upload-Offset"}
+				srvMock.AddMocks(tRequest(http.MethodPost, "/", eh).
+					Header("X-Custom", expect.ToEqual("custom")).
+					Header("X-Extra", expect.ToBeEmpty()).
+					Header("Upload-Concat", expect.ToEqual("final;/foo/bar /foo/baz")).
+					Reply(tReply(reply.Created()).Header("Location", "/foo/bar/baz")),
+				)
+				testClient.GetRequest = spy.GetRequest
+				testClient.ExtraHeaders = extraHeaders
+				f1 := Upload{Location: "/foo/bar", RemoteSize: 256, RemoteOffset: 256, Partial: true}
+				f2 := Upload{Location: "/foo/baz", RemoteSize: 512, RemoteOffset: 512, Partial: true}
+				f := Upload{}
+
+				Ω(testClient.ConcatenateUploads(&f, []Upload{f1, f2}, nil)).ShouldNot(BeNil())
+				Ω(spy.calls).Should(Equal([]getRequestCall{{http.MethodPost, srvMock.URL(), testClient}}))
+				Ω(f).Should(Equal(Upload{Location: "/foo/bar/baz"}))
+			})
+			It("should send ExtraHeaders and leave them untouched", func() {
+				eh := []string{"Upload-Defer-Length", "Upload-Length", "Upload-Metadata", "Upload-Checksum", "Upload-Offset"}
+				srvMock.AddMocks(tRequest(http.MethodPost, "/", eh).
+					Header("X-Extra", expect.ToEqual("extra")).
+					Header("Upload-Concat", expect.ToEqual("final;/foo/bar /foo/baz")).
+					Reply(tReply(reply.Created()).Header("Location", "/foo/bar/baz")),
+				)
+				testClient.ExtraHeaders = extraHeaders
+				f1 := Upload{Location: "/foo/bar", RemoteSize: 256, RemoteOffset: 256, Partial: true}
+				f2 := Upload{Location: "/foo/baz", RemoteSize: 512, RemoteOffset: 512, Partial: true}
+				f := Upload{}
+
+				Ω(testClient.ConcatenateUploads(&f, []Upload{f1, f2}, nil)).ShouldNot(BeNil())
+				Ω(testClient.ExtraHeaders).Should(Equal(http.Header{"X-Extra": {"extra"}}))
+				Ω(f).Should(Equal(Upload{Location: "/foo/bar/baz"}))
 			})
 			When("send several uploads, no metadata", func() {
 				It("should make a request", func() {
@@ -871,6 +1063,44 @@ var _ = Describe("Client", func() {
 			BeforeEach(func() {
 				testClient.Capabilities.Extensions = append(testClient.Capabilities.Extensions, "concatenation", "concatenation-unfinished")
 			})
+			It("should use GetRequest and ignore ExtraHeaders", func() {
+				eh := []string{"Upload-Defer-Length", "Upload-Length", "Upload-Metadata", "Upload-Checksum", "Upload-Offset"}
+				srvMock.AddMocks(tRequest(http.MethodPost, "/", eh).
+					Header("X-Custom", expect.ToEqual("custom")).
+					Header("X-Extra", expect.ToBeEmpty()).
+					Header("Upload-Concat", expect.ToEqual("final;/foo/bar /foo/baz")).
+					Reply(tReply(reply.Created()).Header("Location", "/foo/bar/baz")),
+				)
+				testClient.GetRequest = spy.GetRequest
+				testClient.ExtraHeaders = extraHeaders
+				f1 := Upload{Location: "/foo/bar", RemoteSize: 256, RemoteOffset: 256, Partial: true}
+				s1 := NewUploadStream(testClient, &f1)
+				f2 := Upload{Location: "/foo/baz", RemoteSize: 512, RemoteOffset: 512, Partial: true}
+				s2 := NewUploadStream(testClient, &f2)
+				f := Upload{}
+
+				Ω(testClient.ConcatenateStreams(&f, []*UploadStream{s1, s2}, nil)).ShouldNot(BeNil())
+				Ω(spy.calls).Should(Equal([]getRequestCall{{http.MethodPost, srvMock.URL(), testClient}}))
+				Ω(f).Should(Equal(Upload{Location: "/foo/bar/baz"}))
+			})
+			It("should send ExtraHeaders and leave them untouched", func() {
+				eh := []string{"Upload-Defer-Length", "Upload-Length", "Upload-Metadata", "Upload-Checksum", "Upload-Offset"}
+				srvMock.AddMocks(tRequest(http.MethodPost, "/", eh).
+					Header("X-Extra", expect.ToEqual("extra")).
+					Header("Upload-Concat", expect.ToEqual("final;/foo/bar /foo/baz")).
+					Reply(tReply(reply.Created()).Header("Location", "/foo/bar/baz")),
+				)
+				testClient.ExtraHeaders = extraHeaders
+				f1 := Upload{Location: "/foo/bar", RemoteSize: 256, RemoteOffset: 256, Partial: true}
+				s1 := NewUploadStream(testClient, &f1)
+				f2 := Upload{Location: "/foo/baz", RemoteSize: 512, RemoteOffset: 512, Partial: true}
+				s2 := NewUploadStream(testClient, &f2)
+				f := Upload{}
+
+				Ω(testClient.ConcatenateStreams(&f, []*UploadStream{s1, s2}, nil)).ShouldNot(BeNil())
+				Ω(testClient.ExtraHeaders).Should(Equal(http.Header{"X-Extra": {"extra"}}))
+				Ω(f).Should(Equal(Upload{Location: "/foo/bar/baz"}))
+			})
 			Specify("all streams are finished", func() {
 				eh := []string{"Upload-Defer-Length", "Upload-Length", "Upload-Metadata", "Upload-Checksum", "Upload-Offset"}
 				srvMock.AddMocks(tRequest(http.MethodPost, "/", eh).
@@ -940,6 +1170,42 @@ var _ = Describe("Client", func() {
 	})
 	Context("UpdateCapabilities", func() {
 		Context("happy path", func() {
+			It("should use GetRequest and ignore ExtraHeaders", func() {
+				srvMock.AddMocks(
+					mocha.Request().URL(expect.URLPath("/")).Method(http.MethodOptions).
+						Header("X-Custom", expect.ToEqual("custom")).
+						Header("X-Extra", expect.ToBeEmpty()).
+						Reply(tReply(reply.NoContent()).
+							Header("Tus-Version", "1.0.0").
+							Header("Tus-Extension", "creation")),
+				)
+				testClient.GetRequest = spy.GetRequest
+				testClient.ExtraHeaders = extraHeaders
+
+				Ω(testClient.UpdateCapabilities()).ShouldNot(BeNil())
+				Ω(spy.calls).Should(Equal([]getRequestCall{{http.MethodOptions, srvMock.URL(), testClient}}))
+				Ω(*testClient.Capabilities).Should(Equal(ServerCapabilities{
+					Extensions:       []string{"creation"},
+					ProtocolVersions: []string{"1.0.0"},
+				}))
+			})
+			It("should send ExtraHeaders and leave them untouched", func() {
+				srvMock.AddMocks(
+					mocha.Request().URL(expect.URLPath("/")).Method(http.MethodOptions).
+						Header("X-Extra", expect.ToEqual("extra")).
+						Reply(tReply(reply.NoContent()).
+							Header("Tus-Version", "1.0.0").
+							Header("Tus-Extension", "creation")),
+				)
+				testClient.ExtraHeaders = extraHeaders
+
+				Ω(testClient.UpdateCapabilities()).ShouldNot(BeNil())
+				Ω(testClient.ExtraHeaders).Should(Equal(http.Header{"X-Extra": {"extra"}}))
+				Ω(*testClient.Capabilities).Should(Equal(ServerCapabilities{
+					Extensions:       []string{"creation"},
+					ProtocolVersions: []string{"1.0.0"},
+				}))
+			})
 			DescribeTable("should fill client capabilities",
 				func(status int) {
 					srvMock.AddMocks(
