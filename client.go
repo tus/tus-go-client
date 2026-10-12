@@ -500,8 +500,13 @@ func EncodeMetadata(metadata map[string]string) (string, error) {
 	var encoded []string
 
 	for k, v := range metadata {
-		if strings.Contains(k, " ") {
+		switch {
+		case k == "":
+			return "", fmt.Errorf("empty key")
+		case strings.Contains(k, " "):
 			return "", fmt.Errorf("key %q contains spaces", k)
+		case strings.Contains(k, ","):
+			return "", fmt.Errorf("key %q contains commas", k)
 		}
 		encoded = append(encoded, fmt.Sprintf("%s %s", k, base64.StdEncoding.EncodeToString([]byte(v))))
 	}

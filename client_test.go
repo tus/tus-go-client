@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"reflect"
 	"strconv"
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -1300,5 +1301,102 @@ var _ = Describe("Client", func() {
 				))
 			})
 		})
+	})
+})
+
+var _ = Describe("Metadata", func() {
+	Context("EncodeMetadata", func() {
+		// Map iteration order is random, so the items are compared regardless of their order
+		encodedItems := func(metadata map[string]string) []string {
+			s, err := EncodeMetadata(metadata)
+			Ω(err).Should(Succeed())
+			return strings.Split(s, ",")
+		}
+
+		DescribeTable("should encode metadata",
+			func(metadata map[string]string, expectItems []string) {
+				Ω(encodedItems(metadata)).Should(ConsistOf(expectItems))
+			},
+			Entry("single item", map[string]string{"key": "value"}, []string{"key dmFsdWU="}),
+			Entry("multiple items separated by commas",
+				map[string]string{"key1": "value1", "key2": "&^%$\"\t"}, []string{"key1 dmFsdWUx", "key2 Jl4lJCIJ"}),
+			Entry("empty value as an empty base64 string", map[string]string{"key": ""}, []string{"key "}),
+			Entry("value containing spaces and commas", map[string]string{"key": "a b,c"}, []string{"key YSBiLGM="}),
+			Entry("non-ASCII value", map[string]string{"filename": "файл.txt"}, []string{"filename 0YTQsNC50LsudHh0"}),
+		)
+		DescribeTable("should return an empty string for empty metadata",
+			func(metadata map[string]string) {
+				Ω(EncodeMetadata(metadata)).Should(BeEmpty())
+			},
+			Entry("nil map", nil),
+			Entry("empty map", map[string]string{}),
+		)
+		DescribeTable("should return error if a key is invalid",
+			func(key, expectMsg string) {
+				s, err := EncodeMetadata(map[string]string{key: "value"})
+				Ω(err).Should(MatchError(expectMsg))
+				Ω(s).Should(BeEmpty())
+			},
+			Entry("space in the middle", "my key", `key "my key" contains spaces`),
+			Entry("leading space", " key", `key " key" contains spaces`),
+			Entry("trailing space", "key ", `key "key " contains spaces`),
+			Entry("comma in the middle", "my,key", `key "my,key" contains commas`),
+			Entry("leading comma", ",key", `key ",key" contains commas`),
+			Entry("trailing comma", "key,", `key "key," contains commas`),
+			Entry("empty key", "", `empty key`),
+		)
+		It("should return error if an invalid key is among valid ones", func() {
+			s, err := EncodeMetadata(map[string]string{"key1": "value1", "bad,key": "value2", "key3": "value3"})
+			Ω(err).Should(MatchError(`key "bad,key" contains commas`))
+			Ω(s).Should(BeEmpty())
+		})
+	})
+
+	Context("DecodeMetadata", func() {
+		DescribeTable("should decode metadata",
+			func(raw string, expectMetadata map[string]string) {
+				Ω(DecodeMetadata(raw)).Should(Equal(expectMetadata))
+			},
+			Entry("single item", "key dmFsdWU=", map[string]string{"key": "value"}),
+			Entry("multiple items", "key1 dmFsdWUx,key2 Jl4lJCIJ", map[string]string{"key1": "value1", "key2": "&^%$\"\t"}),
+			Entry("empty value", "key ", map[string]string{"key": ""}),
+			Entry("value containing spaces and commas", "key YSBiLGM=", map[string]string{"key": "a b,c"}),
+			Entry("non-ASCII value", "filename 0YTQsNC50LsudHh0", map[string]string{"filename": "файл.txt"}),
+			Entry("duplicated key, keeping the last value", "key dmFsdWUx,key dmFsdWUy", map[string]string{"key": "value2"}),
+		)
+		DescribeTable("should return error",
+			func(raw, expectMsg string) {
+				_, err := DecodeMetadata(raw)
+				Ω(err).Should(MatchError(expectMsg))
+			},
+			Entry("empty string", "", `metadata item "" has bad format`),
+			Entry("item without value", "key1 dmFsdWUx,key2", `metadata item "key2" has bad format`),
+			Entry("trailing comma", "key dmFsdWU=,", `metadata item "" has bad format`),
+			Entry("empty item in the middle", "key1 dmFsdWUx,,key2 dmFsdWUy", `metadata item "" has bad format`),
+			Entry("illegal base64 characters", "key !!!!", "illegal base64 data at input byte 0"),
+			Entry("missing padding", "key dmFsdWU", "illegal base64 data at input byte 4"),
+			Entry("URL-safe alphabet", "key Pz8_", "illegal base64 data at input byte 3"),
+			Entry("extra space before the value", "key  dmFsdWU=", "illegal base64 data at input byte 0"),
+		)
+		It("should return the items decoded before the error", func() {
+			m, err := DecodeMetadata("key1 dmFsdWUx,key2,key3 dmFsdWUz")
+			Ω(err).Should(HaveOccurred())
+			Ω(m).Should(Equal(map[string]string{"key1": "value1"}))
+		})
+	})
+
+	Context("round trip", func() {
+		DescribeTable("should decode the encoded metadata to the same map",
+			func(metadata map[string]string) {
+				s, err := EncodeMetadata(metadata)
+				Ω(err).Should(Succeed())
+				Ω(DecodeMetadata(s)).Should(Equal(metadata))
+			},
+			Entry("single item", map[string]string{"key": "value"}),
+			Entry("multiple items", map[string]string{"key1": "value1", "key2": "value2", "key3": "value3"}),
+			Entry("empty value", map[string]string{"key1": "", "key2": "value2"}),
+			Entry("special characters in values", map[string]string{"key": "a b,c\x00\n\t\"'"}),
+			Entry("non-ASCII key and value", map[string]string{"ключ": "значение"}),
+		)
 	})
 })
