@@ -249,13 +249,15 @@ func (us *UploadStream) Write(p []byte) (int, error) {
 //
 // Call it before starting a transfer or after the stream has returned ErrOffsetsNotSynced. The data source is not
 // affected, so it has to be rewound to Tell separately before the transfer is resumed.
-func (us *UploadStream) Sync() (response *http.Response, err error) {
-	f := Upload{}
-	if response, err = us.client.GetUpload(&f, us.Upload.Location); err == nil {
-		us.Upload.RemoteOffset = f.RemoteOffset
+func (us *UploadStream) Sync() (*http.Response, error) {
+	u, response, err := us.client.GetUpload(us.Upload.Location)
+	if err != nil {
+		return response, fmt.Errorf("get upload: %w", err)
 	}
+	us.Upload.RemoteOffset = u.RemoteOffset
 	us.LastResponse = response
-	return
+
+	return response, nil
 }
 
 // Seek moves the stream offset, i.e. Upload.RemoteOffset, to the given position, interpreted according to whence:

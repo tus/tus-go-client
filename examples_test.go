@@ -116,8 +116,8 @@ func ExampleClient_CreateUpload() {
 	}
 	defer f.Close()
 
-	u := tusgo.Upload{}
-	if _, err = cl.CreateUpload(&u, finfo.Size(), false, nil); err != nil {
+	u, _, err := cl.CreateUpload(finfo.Size(), false, nil)
+	if err != nil {
 		log.Fatalf("Failed to create upload: %s", err)
 	}
 	fmt.Printf("Location: %s\n", u.Location)
@@ -143,8 +143,7 @@ func ExampleClient_CreateUploadWithData() {
 		log.Fatalf("Failed to read file: %s", err)
 	}
 
-	u := tusgo.Upload{}
-	uploaded, _, err := cl.CreateUploadWithData(&u, data, int64(len(data)), false, map[string]string{"filename": "file.txt"})
+	uploaded, u, _, err := cl.CreateUploadWithData(data, int64(len(data)), false, map[string]string{"filename": "file.txt"})
 	if err != nil {
 		log.Fatalf("Failed to create upload: %s", err)
 	}
@@ -172,8 +171,8 @@ func ExampleClient_DeleteUpload() {
 	}
 	defer f.Close()
 
-	u := tusgo.Upload{}
-	if _, err = cl.CreateUpload(&u, finfo.Size(), false, nil); err != nil {
+	u, _, err := cl.CreateUpload(finfo.Size(), false, nil)
+	if err != nil {
 		log.Fatalf("Failed to create upload: %s", err)
 	}
 	fmt.Printf("Location: %s\n", u.Location)
@@ -227,8 +226,8 @@ func ExampleClient_ConcatenateUploads_parallel() {
 		go func() {
 			defer wg.Done()
 
-			u := tusgo.Upload{}
-			if _, err := cl.CreateUpload(&u, part.Size(), true, nil); err != nil {
+			u, _, err := cl.CreateUpload(part.Size(), true, nil)
+			if err != nil {
 				log.Fatalf("Part #%d: failed to create upload: %s", ind, err)
 			}
 
@@ -245,8 +244,8 @@ func ExampleClient_ConcatenateUploads_parallel() {
 	fmt.Println("Uploading complete, starting concatenation...")
 
 	// Concatenate partial uploads into a final upload
-	final := tusgo.Upload{}
-	if _, err = cl.ConcatenateUploads(&final, uploads, nil); err != nil {
+	final, _, err := cl.ConcatenateUploads(uploads, nil)
+	if err != nil {
 		log.Fatalf("Failed to concatenate uploads: %s", err)
 	}
 	fmt.Printf("Final upload location: %s\n", final.Location)
@@ -272,8 +271,8 @@ func ExampleClient_ConcatenateStreams_parallel() {
 	parts := SplitFile(f, finfo.Size(), 4)
 	streams := make([]*tusgo.UploadStream, len(parts))
 	for ind, part := range parts {
-		u := tusgo.Upload{}
-		if _, err = cl.CreateUpload(&u, part.Size(), true, nil); err != nil {
+		u, _, err := cl.CreateUpload(part.Size(), true, nil)
+		if err != nil {
 			log.Fatalf("Part #%d: failed to create upload: %s", ind, err)
 		}
 		fmt.Printf("Part #%d: location %s\n", ind, u.Location)
@@ -281,8 +280,8 @@ func ExampleClient_ConcatenateStreams_parallel() {
 	}
 
 	// Asking the server to concatenate the partial uploads into a final upload once they are finished.
-	final := tusgo.Upload{}
-	if _, err = cl.ConcatenateStreams(&final, streams, nil); err != nil {
+	final, _, err := cl.ConcatenateStreams(streams, nil)
+	if err != nil {
 		log.Fatalf("Failed to concatenate uploads: %s", err)
 	}
 	fmt.Printf("Final upload location: %s\n", final.Location)
@@ -312,8 +311,8 @@ func ExampleClient_CreateUpload_deferredSize() {
 	}
 	cl := tusgo.NewClient(http.DefaultClient, baseURL)
 
-	u := tusgo.Upload{}
-	if _, err = cl.CreateUpload(&u, tusgo.SizeUnknown, false, nil); err != nil {
+	u, _, err := cl.CreateUpload(tusgo.SizeUnknown, false, nil)
+	if err != nil {
 		log.Fatalf("Failed to create upload: %s", err)
 	}
 	fmt.Printf("Location: %s\n", u.Location)
@@ -348,8 +347,8 @@ func Example_expiration() {
 	}
 	defer f.Close()
 
-	u := tusgo.Upload{}
-	if _, err = cl.CreateUpload(&u, finfo.Size(), false, nil); err != nil {
+	u, _, err := cl.CreateUpload(finfo.Size(), false, nil)
+	if err != nil {
 		log.Fatalf("Failed to create upload: %s", err)
 	}
 
@@ -374,8 +373,8 @@ func ExampleUploadStream_WithChecksumAlgorithm() {
 		log.Fatalf("%s", err)
 	}
 	defer f.Close()
-	u := tusgo.Upload{}
-	if _, err = cl.CreateUpload(&u, finfo.Size(), false, nil); err != nil {
+	u, _, err := cl.CreateUpload(finfo.Size(), false, nil)
+	if err != nil {
 		log.Fatalf("Failed to create upload: %s", err)
 	}
 
@@ -404,8 +403,8 @@ func ExampleUploadStream_WithChecksumAlgorithm_streamed() {
 		log.Fatalf("%s", err)
 	}
 	defer f.Close()
-	u := tusgo.Upload{}
-	if _, err = cl.CreateUpload(&u, finfo.Size(), false, nil); err != nil {
+	u, _, err := cl.CreateUpload(finfo.Size(), false, nil)
+	if err != nil {
 		log.Fatalf("Failed to create upload: %s", err)
 	}
 	fmt.Printf("Location: %s\n", u.Location)
@@ -452,8 +451,8 @@ func Example_transferWithSpeedControl() {
 		log.Fatalf("%s", err)
 	}
 	defer f.Close()
-	u := tusgo.Upload{}
-	if _, err = cl.CreateUpload(&u, finfo.Size(), false, nil); err != nil {
+	u, _, err := cl.CreateUpload(finfo.Size(), false, nil)
+	if err != nil {
 		log.Fatalf("Failed to create upload: %s", err)
 	}
 
@@ -483,8 +482,8 @@ func ExampleClient_headers() {
 	}
 	defer f.Close()
 
-	u := tusgo.Upload{}
-	if _, err = cl.CreateUpload(&u, finfo.Size(), false, nil); err != nil {
+	u, _, err := cl.CreateUpload(finfo.Size(), false, nil)
+	if err != nil {
 		log.Fatalf("Failed to create upload: %s", err)
 	}
 	fmt.Printf("Location: %s\n", u.Location)

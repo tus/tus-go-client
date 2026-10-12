@@ -96,66 +96,57 @@ func (c *Client) WithContext(ctx context.Context) *Client {
 // the remote offset is set to [OffsetUnknown].
 //
 // The method returns [ErrUploadDoesNotExist] if no such upload has been found on the server.
-func (c *Client) GetUpload(u *Upload, location string) (response *http.Response, err error) {
-	if u == nil {
-		panic("u is nil")
-	}
+func (c *Client) GetUpload(location string) (Upload, *http.Response, error) {
+	res := Upload{Location: location}
 
-	var loc *url.URL
-	if loc, err = url.Parse(location); err != nil {
-		return
+	loc, err := url.Parse(location)
+	if err != nil {
+		return res, nil, fmt.Errorf("parse location: %w", err)
 	}
-	ref := c.BaseURL.ResolveReference(loc).String()
+	ref := c.BaseURL.ResolveReference(loc)
 
-	var req *http.Request
-	if req, err = c.createRequest(http.MethodHead, ref, nil); err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
+	req, err := c.createRequest(http.MethodHead, ref.String(), nil)
+	if err != nil {
+		return res, nil, fmt.Errorf("create request: %w", err)
 	}
-	if response, err = c.tusRequest(c.ctx, req); err != nil {
-		return
+	response, err := c.tusRequest(c.ctx, req)
+	if err != nil {
+		return res, response, fmt.Errorf("send request: %w", err)
 	}
 	defer response.Body.Close()
 
 	switch response.StatusCode {
 	case http.StatusOK:
-		u2 := Upload{}
-		u2.Location = location
-		u2.Partial = response.Header.Get("Upload-Concat") == "partial"
-
+		res.Partial = response.Header.Get("Upload-Concat") == "partial"
 		uploadOffset := response.Header.Get("Upload-Offset")
 		// Upload-Offset may not be present if final upload concatenation still in progress on server side
 		if uploadOffset == "" {
 			if response.Header.Get("Upload-Concat") != "final" {
-				err = newTusErrorWithErr(ErrProtocol, errors.New("lack of Upload-Offset required header in response"))
-				return
+				return res, response, newTusErrorWithErr(ErrProtocol, errors.New("lack of Upload-Offset required header in response"))
 			}
-			u2.RemoteOffset = OffsetUnknown
+			res.RemoteOffset = OffsetUnknown
 		} else {
-			if u2.RemoteOffset, err = strconv.ParseInt(uploadOffset, 10, 64); err != nil {
-				err = newTusErrorWithErr(ErrProtocol, fmt.Errorf("cannot parse Upload-Offset header %q: %w", uploadOffset, err))
-				return
+			if res.RemoteOffset, err = strconv.ParseInt(uploadOffset, 10, 64); err != nil {
+				return res, response, newTusErrorWithErr(ErrProtocol, fmt.Errorf("parse Upload-Offset header %q: %w", uploadOffset, err))
 			}
 		}
 		// Responses for final concatenated upload may contain Upload-Length header
 		if v := response.Header.Get("Upload-Length"); v != "" {
-			if u2.RemoteSize, err = strconv.ParseInt(v, 10, 64); err != nil {
-				err = newTusErrorWithErr(ErrProtocol, fmt.Errorf("cannot parse Upload-Length header %q: %w", v, err))
-				return
+			if res.RemoteSize, err = strconv.ParseInt(v, 10, 64); err != nil {
+				return res, response, newTusErrorWithErr(ErrProtocol, fmt.Errorf("parse Upload-Length header %q: %w", v, err))
 			}
 		}
 		if v := response.Header.Get("Upload-Metadata"); v != "" {
-			if u2.Metadata, err = DecodeMetadata(v); err != nil {
-				err = newTusErrorWithErr(ErrProtocol, fmt.Errorf("cannot parse Upload-Metadata header %q: %w", v, err))
-				return
+			if res.Metadata, err = DecodeMetadata(v); err != nil {
+				return res, response, newTusErrorWithErr(ErrProtocol, fmt.Errorf("parse Upload-Metadata header %q: %w", v, err))
 			}
 		}
-		*u = u2
+		return res, response, nil
 	case http.StatusNotFound, http.StatusGone, http.StatusForbidden:
-		err = newTusErrorWithResponse(ErrUploadDoesNotExist, response)
-	default:
-		err = newTusErrorWithResponse(ErrUnexpectedResponse, response)
+		return res, response, newTusErrorWithResponse(ErrUploadDoesNotExist, response)
 	}
-	return
+
+	return res, response, newTusErrorWithResponse(ErrUnexpectedResponse, response)
 }
 
 // CreateUpload creates an upload of the given size and metadata on the server and stores it in u. It returns the
@@ -170,17 +161,16 @@ func (c *Client) GetUpload(u *Upload, location string) (response *http.Response,
 //
 // The method returns [ErrUploadTooLarge] if the upload size exceeds [ServerCapabilities.MaxSize] the server is able to
 // accept.
-func (c *Client) CreateUpload(u *Upload, remoteSize int64, partial bool, meta map[string]string) (response *http.Response, err error) {
-	if u == nil {
-		panic("u is nil")
-	}
-	if err = c.ensureExtension("creation"); err != nil {
-		return
+func (c *Client) CreateUpload(remoteSize int64, partial bool, metadata map[string]string) (Upload, *http.Response, error) {
+	var res Upload
+
+	if err := c.ensureExtension("creation"); err != nil {
+		return res, nil, err
 	}
 
-	var req *http.Request
-	if req, err = c.createRequest(http.MethodPost, c.BaseURL.String(), nil); err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
+	req, err := c.createRequest(http.MethodPost, c.BaseURL.String(), nil)
+	if err != nil {
+		return res, nil, fmt.Errorf("create request: %w", err)
 	}
 
 	req.Header.Set("Content-Length", strconv.FormatInt(0, 10))
@@ -190,7 +180,7 @@ func (c *Client) CreateUpload(u *Upload, remoteSize int64, partial bool, meta ma
 	switch {
 	case remoteSize == SizeUnknown:
 		if err = c.ensureExtension("creation-defer-length"); err != nil {
-			return
+			return res, nil, err
 		}
 		req.Header.Set("Upload-Defer-Length", "1")
 	case remoteSize > 0:
@@ -199,42 +189,39 @@ func (c *Client) CreateUpload(u *Upload, remoteSize int64, partial bool, meta ma
 		panic(fmt.Sprintf("remoteSize is negative: %d", remoteSize))
 	}
 
-	if len(meta) > 0 {
+	if len(metadata) > 0 {
 		var m string
-		if m, err = EncodeMetadata(meta); err != nil {
-			return
+		if m, err = EncodeMetadata(metadata); err != nil {
+			return res, nil, fmt.Errorf("encode metadata: %w", err)
 		}
 		req.Header.Set("Upload-Metadata", m)
 	}
 
-	if response, err = c.tusRequest(c.ctx, req); err != nil {
-		return
+	response, err := c.tusRequest(c.ctx, req)
+	if err != nil {
+		return res, response, fmt.Errorf("send request: %w", err)
 	}
 	defer response.Body.Close()
 
 	switch response.StatusCode {
 	case http.StatusCreated:
-		u2 := Upload{}
-		u2.Location = response.Header.Get("Location")
-		u2.Metadata = meta
-		u2.Partial = partial
-		u2.RemoteSize = remoteSize
+		res.Location = response.Header.Get("Location")
+		res.Metadata = metadata
+		res.Partial = partial
+		res.RemoteSize = remoteSize
 		if v := response.Header.Get("Upload-Expires"); v != "" {
-			var t time.Time
-			if t, err = time.Parse(time.RFC1123, v); err != nil {
-				err = newTusErrorWithErr(ErrProtocol, fmt.Errorf("cannot parse Upload-Expires RFC1123 header %q: %w", v, err))
-				return
+			t, err := time.Parse(time.RFC1123, v)
+			if err != nil {
+				return res, response, newTusErrorWithErr(ErrProtocol, fmt.Errorf("parse RFC1123 datetime in Upload-Expires header %q: %w", v, err))
 			}
-			u2.UploadExpired = &t
+			res.UploadExpired = &t
 		}
-		*u = u2
+		return res, response, nil
 	case http.StatusRequestEntityTooLarge:
-		err = newTusErrorWithResponse(ErrUploadTooLarge, response)
-	default:
-		err = newTusErrorWithResponse(ErrUnexpectedResponse, response)
+		return res, response, newTusErrorWithResponse(ErrUploadTooLarge, response)
 	}
 
-	return
+	return res, response, newTusErrorWithResponse(ErrUnexpectedResponse, response)
 }
 
 // CreateUploadWithData creates an upload on the server and transfers data in the same HTTP request. The created
@@ -245,80 +232,81 @@ func (c *Client) CreateUpload(u *Upload, remoteSize int64, partial bool, meta ma
 //
 // The method returns [ErrZeroProgress] if the server did not accept any data by some reason, more likely when it is
 // busy and temporarily cannot accept the data. In that case, use [UploadStream] to transfer the remaining data.
-func (c *Client) CreateUploadWithData(u *Upload, data []byte, remoteSize int64, partial bool, meta map[string]string) (uploadedBytes int64, response *http.Response, err error) {
-	if err = c.ensureExtension("creation-with-upload"); err != nil {
-		return
+func (c *Client) CreateUploadWithData(data []byte, remoteSize int64, partial bool, metadata map[string]string) (int64, Upload, *http.Response, error) {
+	var res Upload
+
+	if err := c.ensureExtension("creation-with-upload"); err != nil {
+		return 0, res, nil, err
 	}
-	u2 := Upload{}
-	s := NewUploadStream(c, &u2)
+
+	s := NewUploadStream(c, &res)
 	s.ChunkSize = int64(len(data)) // Data must be uploaded in one request as single chunk
 	s.uploadMethod = http.MethodPost
 	headers := map[string]string{"Upload-Length": strconv.Itoa(int(remoteSize)), "Upload-Offset": ""}
 	if partial {
 		headers["Upload-Concat"] = "partial"
 	}
-	if len(meta) > 0 {
-		var m string
-		if m, err = EncodeMetadata(meta); err != nil {
-			return
+	if len(metadata) > 0 {
+		m, err := EncodeMetadata(metadata)
+		if err != nil {
+			return 0, res, nil, fmt.Errorf("encode metadata: %w", err)
 		}
 		headers["Upload-Metadata"] = m
 	}
-	u2.RemoteSize = remoteSize
-	u2.Partial = partial
-	u2.Metadata = meta
+	res.RemoteSize = remoteSize
+	res.Partial = partial
+	res.Metadata = metadata
 
-	uploadedBytes, response, err = s.doRequest(c.BaseURL.String(), data, nil, headers) // Upload in one request
+	uploadedBytes, response, err := s.doRequest(c.BaseURL.String(), data, nil, headers) // Upload in one request
+	res.RemoteOffset = uploadedBytes
+	if err != nil {
+		return uploadedBytes, res, response, fmt.Errorf("send request: %w", err)
+	}
+	res.Location = response.Header.Get("Location")
+
 	switch {
-	case err != nil:
-		return
 	case uploadedBytes == 0 && len(data) > 0:
-		err = newTusErrorWithErr(ErrZeroProgress, fmt.Errorf("offset=%d", u.RemoteOffset))
+		return uploadedBytes, res, response, newTusErrorWithErr(ErrZeroProgress, fmt.Errorf("offset=%d", res.RemoteOffset))
 	case uploadedBytes < 0:
-		err = newTusErrorWithErr(ErrProtocol, fmt.Errorf("server offset has gone backwards, offset=%d, transferredDataSize=%d", uploadedBytes, len(data)))
+		return uploadedBytes, res, response, newTusErrorWithErr(ErrProtocol, fmt.Errorf("server offset has gone backwards, offset=%d, transferredDataSize=%d", uploadedBytes, len(data)))
 	case uploadedBytes > int64(len(data)):
-		err = newTusErrorWithErr(ErrProtocol, fmt.Errorf("server offset has been advanced too far: offset=%d, transferredDataSize=%d", uploadedBytes, len(data)))
+		return uploadedBytes, res, response, newTusErrorWithErr(ErrProtocol, fmt.Errorf("server offset has been advanced too far: offset=%d, transferredDataSize=%d", uploadedBytes, len(data)))
 	}
 
-	u2.Location = response.Header.Get("Location")
-	u2.RemoteOffset = uploadedBytes
-	*u = u2
-
-	return
+	return uploadedBytes, res, response, nil
 }
 
 // DeleteUpload deletes the upload u from the server. It returns the server response and an error (if any).
 // The server must support the "termination" extension.
 //
 // The method returns [ErrUploadDoesNotExist] if no such upload has been found on the server.
-func (c *Client) DeleteUpload(u Upload) (response *http.Response, err error) {
-	if err = c.ensureExtension("termination"); err != nil {
-		return
+func (c *Client) DeleteUpload(u Upload) (*http.Response, error) {
+	if err := c.ensureExtension("termination"); err != nil {
+		return nil, err
 	}
 
-	var req *http.Request
-	var loc *url.URL
-	if loc, err = url.Parse(u.Location); err != nil {
-		return
+	loc, err := url.Parse(u.Location)
+	if err != nil {
+		return nil, fmt.Errorf("parse location: %w", err)
 	}
 	ref := c.BaseURL.ResolveReference(loc).String()
-	if req, err = c.createRequest(http.MethodDelete, ref, nil); err != nil {
+	req, err := c.createRequest(http.MethodDelete, ref, nil)
+	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
-	if response, err = c.tusRequest(c.ctx, req); err != nil {
-		return
+	response, err := c.tusRequest(c.ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("send request: %w", err)
 	}
 	defer response.Body.Close()
 
 	switch response.StatusCode {
 	case http.StatusNoContent:
+		return response, nil
 	case http.StatusNotFound, http.StatusGone, http.StatusForbidden:
-		err = newTusErrorWithResponse(ErrUploadDoesNotExist, response)
-	default:
-		err = newTusErrorWithResponse(ErrUnexpectedResponse, response)
+		return response, newTusErrorWithResponse(ErrUploadDoesNotExist, response)
 	}
-
-	return
+	return response, newTusErrorWithResponse(ErrUnexpectedResponse, response)
 }
 
 // ConcatenateUploads requests the server to concatenate the previously created partial uploads into a single final
@@ -327,56 +315,54 @@ func (c *Client) DeleteUpload(u Upload) (response *http.Response, err error) {
 //
 // The partial uploads are concatenated in the order they are given. Typically, they must be fully transferred to the
 // server beforehand, unless the server supports the "concatenation-unfinished" extension and accepts unfinished ones.
-func (c *Client) ConcatenateUploads(final *Upload, partials []Upload, meta map[string]string) (response *http.Response, err error) {
-	if final == nil {
-		panic("final is nil")
-	}
+func (c *Client) ConcatenateUploads(partials []Upload, meta map[string]string) (Upload, *http.Response, error) {
+	var res Upload
+
 	if len(partials) == 0 {
 		panic("must be at least one partial upload to concatenate")
 	}
-	if err = c.ensureExtension("concatenation"); err != nil {
-		return
+	if err := c.ensureExtension("concatenation"); err != nil {
+		return res, nil, err
 	}
 
-	var req *http.Request
-	if req, err = c.createRequest(http.MethodPost, c.BaseURL.String(), nil); err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
+	req, err := c.createRequest(http.MethodPost, c.BaseURL.String(), nil)
+	if err != nil {
+		return res, nil, fmt.Errorf("create request: %w", err)
 	}
 
 	locations := make([]string, 0)
 	for _, f := range partials {
 		if !f.Partial {
-			return nil, fmt.Errorf("upload %q is not partial", f.Location)
+			return res, nil, fmt.Errorf("upload %q is not partial", f.Location)
 		}
 		locations = append(locations, f.Location)
 	}
 	req.Header.Set("Upload-Concat", "final;"+strings.Join(locations, " "))
 
 	if len(meta) > 0 {
-		var m string
-		if m, err = EncodeMetadata(meta); err != nil {
-			return
+		m, err := EncodeMetadata(meta)
+		if err != nil {
+			return res, nil, fmt.Errorf("encode metadata: %w", err)
 		}
 		req.Header.Set("Upload-Metadata", m)
 	}
 
-	if response, err = c.tusRequest(c.ctx, req); err != nil {
-		return
+	response, err := c.tusRequest(c.ctx, req)
+	if err != nil {
+		return res, nil, fmt.Errorf("send request: %w", err)
 	}
 	defer response.Body.Close()
 
 	switch response.StatusCode {
 	case http.StatusCreated:
-		u2 := Upload{}
-		u2.Location = response.Header.Get("Location")
-		u2.Metadata = meta
-		*final = u2
+		res.Location = response.Header.Get("Location")
+		res.Metadata = meta
+		return res, response, nil
 	case http.StatusNotFound, http.StatusGone:
-		err = newTusErrorWithResponse(ErrUploadDoesNotExist, response)
-	default:
-		err = newTusErrorWithResponse(ErrUnexpectedResponse, response)
+		return res, response, newTusErrorWithResponse(ErrUploadDoesNotExist, response)
 	}
-	return
+
+	return res, response, newTusErrorWithResponse(ErrUnexpectedResponse, response)
 }
 
 // ConcatenateStreams requests the server to concatenate the streams into a single final upload, which is stored in final upload.
@@ -385,7 +371,7 @@ func (c *Client) ConcatenateUploads(final *Upload, partials []Upload, meta map[s
 //
 // If some streams are unfinished, the server is asked to concatenate them automatically once they will be finished.
 // The server must support the "concatenation-unfinished" extension for that.
-func (c *Client) ConcatenateStreams(final *Upload, streams []*UploadStream, meta map[string]string) (response *http.Response, err error) {
+func (c *Client) ConcatenateStreams(streams []*UploadStream, meta map[string]string) (Upload, *http.Response, error) {
 	if len(streams) == 0 {
 		panic("must be at least one stream to concatenate")
 	}
@@ -393,14 +379,14 @@ func (c *Client) ConcatenateStreams(final *Upload, streams []*UploadStream, meta
 	uploads := make([]Upload, 0)
 	for i, s := range streams {
 		if s.Tell() < s.Len() {
-			if err = c.ensureExtension("concatenation-unfinished"); err != nil {
-				return nil, fmt.Errorf("stream #%d is not finished: %w", i, err)
+			if err := c.ensureExtension("concatenation-unfinished"); err != nil {
+				return Upload{}, nil, fmt.Errorf("stream #%d is not finished: %w", i, err)
 			}
 		}
 		uploads = append(uploads, *s.Upload)
 	}
 
-	return c.ConcatenateUploads(final, uploads, meta)
+	return c.ConcatenateUploads(uploads, meta)
 }
 
 // UpdateCapabilities queries the server for its features and limits and stores them in the [Client.Capabilities] field.

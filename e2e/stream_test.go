@@ -18,11 +18,12 @@ var _ = Describe("UploadStream", func() {
 	var u tusgo.Upload
 
 	BeforeEach(func() {
+		var err error
+
 		srv = startServer(nil, nil)
 		cl = srv.NewClient()
 		data = randomData(dataSize)
-		u = tusgo.Upload{}
-		_, err := cl.CreateUpload(&u, dataSize, false, nil)
+		u, _, err = cl.CreateUpload(dataSize, false, nil)
 		Expect(err).NotTo(HaveOccurred())
 	})
 
@@ -46,8 +47,8 @@ var _ = Describe("UploadStream", func() {
 			Expect(s.Tell()).To(BeEquivalentTo(dataSize))
 			Expect(s.Dirty()).To(BeFalse())
 			Expect(srv.StoredData(u)).To(Equal(data))
-			got := tusgo.Upload{}
-			_, err = cl.GetUpload(&got, u.Location)
+
+			got, _, err := cl.GetUpload(u.Location)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(got.RemoteOffset).To(BeEquivalentTo(dataSize))
 		},
@@ -106,8 +107,7 @@ var _ = Describe("UploadStream", func() {
 
 		// Start over with only the location of the upload, as if the program has restarted
 		cl2 := srv.NewClient()
-		u2 := tusgo.Upload{}
-		_, err = cl2.GetUpload(&u2, u.Location)
+		u2, _, err := cl2.GetUpload(u.Location)
 		Expect(err).NotTo(HaveOccurred())
 		s2 := tusgo.NewUploadStream(cl2, &u2)
 		src := bytes.NewReader(data)
@@ -143,8 +143,7 @@ var _ = Describe("UploadStream", func() {
 	})
 
 	It("should transfer the data to an upload with deferred length", func() {
-		deferred := tusgo.Upload{}
-		_, err := cl.CreateUpload(&deferred, tusgo.SizeUnknown, false, nil)
+		deferred, _, err := cl.CreateUpload(tusgo.SizeUnknown, false, nil)
 		Expect(err).NotTo(HaveOccurred())
 
 		deferred.RemoteSize = dataSize

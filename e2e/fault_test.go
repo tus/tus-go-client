@@ -23,8 +23,7 @@ var _ = Describe("Fault recovery", func() {
 		GinkgoHelper()
 		srv := startServer(nil, mw)
 		cl := srv.NewClient()
-		u := tusgo.Upload{}
-		_, err := cl.CreateUpload(&u, dataSize, false, nil)
+		u, _, err := cl.CreateUpload(dataSize, false, nil)
 		Expect(err).NotTo(HaveOccurred())
 		s := tusgo.NewUploadStream(cl, &u)
 		s.ChunkSize = chunkSize
