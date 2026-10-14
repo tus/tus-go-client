@@ -2,7 +2,6 @@ package tusgo
 
 import (
 	"bytes"
-	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -29,7 +28,6 @@ func NewUploadStream(client *Client, upload *Upload) *UploadStream {
 		Upload:       upload,
 		client:       client,
 		uploadMethod: http.MethodPatch,
-		ctx:          client.ctx,
 	}
 }
 
@@ -82,10 +80,6 @@ type UploadStream struct {
 	// Set it to NoChunked to disable the chunking, which also disables the use of the dirty buffer. Default is 2 MiB.
 	ChunkSize int64
 
-	// LastResponse is a read-only field that keeps the last response this UploadStream has received from the server.
-	// It is useful, for example, to inspect the response that has caused an error.
-	LastResponse *http.Response
-
 	// SetUploadSize enables stream to send the data size to the server with the first request.
 	// Set it to true when transferring the data to uploads created without size (remoteSize has been set to SizeUnknown).
 	// Before the first request, Upload.RemoteSize must be set to the actual size of the upload.
@@ -113,18 +107,6 @@ type UploadStream struct {
 	rawChecksumHashName string
 	client              *Client
 	uploadMethod        string
-	ctx                 context.Context
-}
-
-// WithContext returns a copy of the stream that sends its requests with the given context. The copy is clean and has
-// no last response.
-func (us *UploadStream) WithContext(ctx context.Context) *UploadStream {
-	res := *us
-	res.LastResponse = nil
-	res.dirtyBuffer = nil
-	res.dirtyUnread = nil
-	res.ctx = ctx
-	return &res
 }
 
 // WithChecksumAlgorithm returns a copy of the stream that asks the server to verify the transferred data with the
@@ -136,7 +118,6 @@ func (us *UploadStream) WithContext(ctx context.Context) *UploadStream {
 // [ServerCapabilities.ChecksumAlgorithms].
 func (us *UploadStream) WithChecksumAlgorithm(name string) *UploadStream {
 	res := *us
-	res.LastResponse = nil
 	res.dirtyBuffer = nil
 	res.dirtyUnread = nil
 
@@ -172,16 +153,14 @@ func (us *UploadStream) ReadFrom(r io.Reader) (int64, error) {
 	// Server may confirm less data than has been read from r and sent, so send it until the server confirms all the data.
 	if us.ChunkSize == NoChunked {
 		// Streaming mode, pass the reader directly
-		advance, newOffset, response, err := us.uploadData(nil, counterRd, nil)
-		if response != nil {
-			us.LastResponse = response
-		}
+		advance, newOffset, resp, err := us.uploadData(nil, counterRd, nil)
+		defer closeResponseBody(resp)
 		if err != nil {
 			return counterRd.BytesRead, err
 		}
 		us.Upload.RemoteOffset = newOffset
 		if advance == 0 && counterRd.BytesRead > 0 {
-			return counterRd.BytesRead, newTusErrorWithErr(ErrZeroProgress, fmt.Errorf("offset=%d", us.Upload.RemoteOffset))
+			return counterRd.BytesRead, newTusError(ErrZeroProgress, resp, fmt.Errorf("offset=%d", us.Upload.RemoteOffset))
 		}
 		if int64(advance) < counterRd.BytesRead {
 			// We cannot retry the transfer in ReadFrom, because in general, the r is not seekable, so return an error to the caller.
@@ -216,10 +195,8 @@ func (us *UploadStream) Write(p []byte) (int, error) {
 
 	if us.ChunkSize == NoChunked {
 		// Streaming mode, pass the reader directly
-		advance, newOffset, response, err := us.uploadData(nil, bytes.NewReader(p), nil)
-		if response != nil {
-			us.LastResponse = response
-		}
+		advance, newOffset, resp, err := us.uploadData(nil, bytes.NewReader(p), nil)
+		defer closeResponseBody(resp)
 		if err != nil {
 			return advance, err
 		}
@@ -227,7 +204,7 @@ func (us *UploadStream) Write(p []byte) (int, error) {
 		if advance < len(p) && newOffset == us.Upload.RemoteSize {
 			return advance, io.ErrShortWrite // Upload is full, but there is still some data left in p.
 		} else if advance == 0 {
-			return 0, newTusErrorWithErr(ErrZeroProgress, fmt.Errorf("offset=%d", us.Upload.RemoteOffset))
+			return 0, newTusError(ErrZeroProgress, resp, fmt.Errorf("offset=%d", us.Upload.RemoteOffset))
 		}
 
 		return advance, nil
@@ -249,15 +226,14 @@ func (us *UploadStream) Write(p []byte) (int, error) {
 //
 // Call it before starting a transfer or after the stream has returned ErrOffsetsNotSynced. The data source is not
 // affected, so it has to be rewound to Tell separately before the transfer is resumed.
-func (us *UploadStream) Sync() (*http.Response, error) {
-	u, response, err := us.client.GetUpload(us.Upload.Location)
+func (us *UploadStream) Sync() error {
+	u, err := us.client.GetUpload(us.Upload.Location)
 	if err != nil {
-		return response, fmt.Errorf("get upload: %w", err)
+		return fmt.Errorf("get upload: %w", err)
 	}
 	us.Upload.RemoteOffset = u.RemoteOffset
-	us.LastResponse = response
 
-	return response, nil
+	return nil
 }
 
 // Seek moves the stream offset, i.e. Upload.RemoteOffset, to the given position, interpreted according to whence:
@@ -335,16 +311,16 @@ func (us *UploadStream) uploadChunked(r io.Reader) (int64, error) {
 			us.dirtyUnread = us.dirtyBuffer[:n]
 		}
 
-		advance, newOffset, response, err := us.uploadData(us.dirtyUnread, nil, nil)
-		if response != nil {
-			us.LastResponse = response
-		}
+		advance, newOffset, resp, err := us.uploadData(us.dirtyUnread, nil, nil)
 		if err != nil {
+			defer closeResponseBody(resp)
 			return uploaded, fmt.Errorf("upload chunk, offset=%d: %w", us.Upload.RemoteOffset, err)
 		}
 		if advance == 0 {
-			return uploaded, newTusErrorWithErr(ErrZeroProgress, fmt.Errorf("offset=%d", us.Upload.RemoteOffset))
+			defer closeResponseBody(resp)
+			return uploaded, newTusError(ErrZeroProgress, resp, fmt.Errorf("offset=%d", us.Upload.RemoteOffset))
 		}
+		closeResponseBody(resp)
 
 		us.dirtyUnread = us.dirtyUnread[advance:]
 		us.Upload.RemoteOffset = newOffset
@@ -370,7 +346,7 @@ func (us *UploadStream) uploadData(chunk []byte, stream io.Reader, extraHeaders 
 	if err != nil {
 		return 0, offset, nil, fmt.Errorf("parse location: %w", err)
 	}
-	u := us.client.BaseURL.ResolveReference(loc).String()
+	loc = us.client.endpoint.ResolveReference(loc)
 
 	// Limit the data source to the space left in the upload
 	remoteFreeSpace := int(us.Upload.RemoteSize - offset)
@@ -385,22 +361,22 @@ func (us *UploadStream) uploadData(chunk []byte, stream io.Reader, extraHeaders 
 		stream = io.LimitReader(stream, int64(remoteFreeSpace))
 	}
 
-	newOffset, response, err := us.doRequest(u, chunk, stream, extraHeaders)
+	newOffset, resp, err := us.doRequest(loc.String(), chunk, stream, extraHeaders)
 	advance := int(newOffset - offset)
 	if err != nil {
-		return advance, offset, response, fmt.Errorf("request: %w", err)
+		return advance, offset, resp, fmt.Errorf("request: %w", err)
 	}
 
 	switch {
 	case advance < 0:
-		return advance, newOffset, response, newTusErrorWithErr(ErrProtocol, fmt.Errorf("server offset has gone backwards, offset=%d, newOffset=%d", offset, newOffset))
+		return advance, newOffset, resp, newTusError(ErrProtocol, resp, fmt.Errorf("server offset has gone backwards, offset=%d, newOffset=%d", offset, newOffset))
 	case stream == nil && advance > len(chunk) || stream != nil && advance > remoteFreeSpace:
-		return advance, newOffset, response, newTusErrorWithErr(ErrProtocol, fmt.Errorf("server offset has been advanced too far: offset=%d, newOffset=%d, transferredDataSize=%d", offset, newOffset, len(chunk)))
+		return advance, newOffset, resp, newTusError(ErrProtocol, resp, fmt.Errorf("server offset has been advanced too far: offset=%d, newOffset=%d, transferredDataSize=%d", offset, newOffset, len(chunk)))
 	}
-	return advance, newOffset, response, nil
+	return advance, newOffset, resp, nil
 }
 
-func (us *UploadStream) doRequest(requestURL string, chunk []byte, stream io.Reader, extraHeaders map[string]string) (offset int64, response *http.Response, err error) {
+func (us *UploadStream) doRequest(requestURL string, chunk []byte, stream io.Reader, extraHeaders map[string]string) (offset int64, resp *http.Response, err error) {
 	if err = us.validate(); err != nil {
 		return
 	}
@@ -414,7 +390,7 @@ func (us *UploadStream) doRequest(requestURL string, chunk []byte, stream io.Rea
 		}
 	}
 	var req *http.Request
-	if req, err = us.client.createRequest(us.uploadMethod, requestURL, nil); err != nil {
+	if req, err = us.client.createRequest(us.uploadMethod, requestURL); err != nil {
 		return 0, nil, fmt.Errorf("create request: %w", err)
 	}
 
@@ -454,50 +430,46 @@ func (us *UploadStream) doRequest(requestURL string, chunk []byte, stream io.Rea
 		}
 	}
 
-	if us.ctx != nil {
-		req = req.WithContext(us.ctx)
+	if resp, err = us.client.tusRequest(req); err != nil {
+		return 0, resp, fmt.Errorf("request: %w", err)
 	}
-	if response, err = us.client.tusRequest(us.ctx, req); err != nil {
-		return 0, response, fmt.Errorf("request: %w", err)
-	}
-	defer response.Body.Close()
 
-	switch response.StatusCode {
+	switch resp.StatusCode {
 	case http.StatusCreated: // For "Creation With Upload" feature
 		if us.uploadMethod != http.MethodPost {
-			err = newTusErrorWithResponse(ErrUnexpectedResponse, response)
+			err = newTusError(ErrUnexpectedResponse, resp, nil)
 			return
 		}
 		fallthrough
 	case http.StatusNoContent:
-		if offset, err = strconv.ParseInt(response.Header.Get("Upload-Offset"), 10, 64); err != nil {
-			err = newTusErrorWithErr(ErrProtocol, fmt.Errorf("cannot parse Upload-Offset header %q: %w", response.Header.Get("Upload-Offset"), err))
+		if offset, err = strconv.ParseInt(resp.Header.Get("Upload-Offset"), 10, 64); err != nil {
+			err = newTusError(ErrProtocol, resp, fmt.Errorf("parse Upload-Offset header %q: %w", resp.Header.Get("Upload-Offset"), err))
 			return
 		}
-		if v := response.Header.Get("Upload-Expires"); v != "" {
+		if v := resp.Header.Get("Upload-Expires"); v != "" {
 			var t time.Time
 			if t, err = time.Parse(time.RFC1123, v); err != nil {
-				err = newTusErrorWithErr(ErrProtocol, fmt.Errorf("cannot parse Upload-Expires RFC1123 header %q: %w", v, err))
+				err = newTusError(ErrProtocol, resp, fmt.Errorf("parse RFC1123 datetime in Upload-Expires header %q: %w", v, err))
 				return
 			}
 			us.Upload.UploadExpired = &t
 		}
 	case http.StatusConflict:
-		err = newTusErrorWithResponse(ErrOffsetsNotSynced, response)
+		err = newTusError(ErrOffsetsNotSynced, resp, nil)
 	case http.StatusForbidden:
-		err = newTusErrorWithResponse(ErrCannotUpload, response)
+		err = newTusError(ErrCannotUpload, resp, nil)
 	case http.StatusNotFound, http.StatusGone:
-		err = newTusErrorWithResponse(ErrUploadDoesNotExist, response)
+		err = newTusError(ErrUploadDoesNotExist, resp, nil)
 	case http.StatusRequestEntityTooLarge:
-		err = newTusErrorWithResponse(ErrUploadTooLarge, response)
+		err = newTusError(ErrUploadTooLarge, resp, nil)
 	case 460: // Non-standard HTTP code '460 Checksum Mismatch'
 		if us.checksumHash != nil {
-			err = newTusErrorWithResponse(ErrChecksumMismatch, response)
+			err = newTusError(ErrChecksumMismatch, resp, nil)
 			return
 		}
 		fallthrough
 	default:
-		err = newTusErrorWithResponse(ErrUnexpectedResponse, response)
+		err = newTusError(ErrUnexpectedResponse, resp, nil)
 	}
 	return
 }

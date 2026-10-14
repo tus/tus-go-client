@@ -17,7 +17,7 @@ const (
 // Upload represents an upload on the server.
 type Upload struct {
 	// Location is the location of the upload on the server, either a path or a full URL. A path is resolved
-	// relative to Client.BaseURL.
+	// relative to Client.baseURL.
 	Location string
 
 	// RemoteSize is the size of the upload on the server in bytes. SizeUnknown means that the upload has been

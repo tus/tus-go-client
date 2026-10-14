@@ -3,6 +3,7 @@ package e2e
 import (
 	"bytes"
 	"io"
+	"net/http"
 
 	"github.com/bdragon300/tusgo"
 	. "github.com/onsi/ginkgo/v2"
@@ -23,7 +24,7 @@ var _ = Describe("UploadStream", func() {
 		srv = startServer(nil, nil)
 		cl = srv.NewClient()
 		data = randomData(dataSize)
-		u, _, err = cl.CreateUpload(dataSize, false, nil)
+		u, err = cl.CreateUpload(dataSize, false, nil)
 		Expect(err).NotTo(HaveOccurred())
 	})
 
@@ -48,7 +49,7 @@ var _ = Describe("UploadStream", func() {
 			Expect(s.Dirty()).To(BeFalse())
 			Expect(srv.StoredData(u)).To(Equal(data))
 
-			got, _, err := cl.GetUpload(u.Location)
+			got, err := cl.GetUpload(u.Location)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(got.RemoteOffset).To(BeEquivalentTo(dataSize))
 		},
@@ -107,7 +108,7 @@ var _ = Describe("UploadStream", func() {
 
 		// Start over with only the location of the upload, as if the program has restarted
 		cl2 := srv.NewClient()
-		u2, _, err := cl2.GetUpload(u.Location)
+		u2, err := cl2.GetUpload(u.Location)
 		Expect(err).NotTo(HaveOccurred())
 		s2 := tusgo.NewUploadStream(cl2, &u2)
 		src := bytes.NewReader(data)
@@ -130,7 +131,7 @@ var _ = Describe("UploadStream", func() {
 		_, err = s2.Write(data[:1000])
 		Expect(err).To(MatchError(tusgo.ErrOffsetsNotSynced))
 
-		_, err = s2.Sync()
+		err = s2.Sync()
 		Expect(err).NotTo(HaveOccurred())
 		Expect(s2.Tell()).To(BeEquivalentTo(1000))
 		src := bytes.NewReader(data)
@@ -143,7 +144,7 @@ var _ = Describe("UploadStream", func() {
 	})
 
 	It("should transfer the data to an upload with deferred length", func() {
-		deferred, _, err := cl.CreateUpload(tusgo.SizeUnknown, false, nil)
+		deferred, err := cl.CreateUpload(tusgo.SizeUnknown, false, nil)
 		Expect(err).NotTo(HaveOccurred())
 
 		deferred.RemoteSize = dataSize
@@ -157,11 +158,15 @@ var _ = Describe("UploadStream", func() {
 	})
 
 	It("should return error when writing to a deleted upload", func() {
-		_, err := cl.DeleteUpload(u)
+		err := cl.DeleteUpload(u)
 		Expect(err).NotTo(HaveOccurred())
 
 		_, err = tusgo.NewUploadStream(cl, &u).Write(data)
 
 		Expect(err).To(MatchError(tusgo.ErrUploadDoesNotExist))
+		Expect(errResponse(err)).To(And(
+			HaveHTTPStatus(http.StatusNotFound),
+			HaveHTTPBody(ContainSubstring("ERR_UPLOAD_NOT_FOUND")),
+		))
 	})
 })

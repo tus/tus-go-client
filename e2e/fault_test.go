@@ -23,7 +23,7 @@ var _ = Describe("Fault recovery", func() {
 		GinkgoHelper()
 		srv := startServer(nil, mw)
 		cl := srv.NewClient()
-		u, _, err := cl.CreateUpload(dataSize, false, nil)
+		u, err := cl.CreateUpload(dataSize, false, nil)
 		Expect(err).NotTo(HaveOccurred())
 		s := tusgo.NewUploadStream(cl, &u)
 		s.ChunkSize = chunkSize
@@ -56,7 +56,7 @@ var _ = Describe("Fault recovery", func() {
 			Expect(err).To(MatchError(io.ErrShortWrite))
 			Expect(s.Tell()).To(BeEquivalentTo(dataSize / 3))
 
-			_, err = s.Sync()
+			err = s.Sync()
 			Expect(err).NotTo(HaveOccurred())
 			_, err = src.Seek(s.Tell(), io.SeekStart)
 			Expect(err).NotTo(HaveOccurred())
@@ -81,7 +81,7 @@ var _ = Describe("Fault recovery", func() {
 			_, err = io.Copy(s, readerOnly(src))
 			Expect(err).To(MatchError(tusgo.ErrOffsetsNotSynced))
 
-			_, err = s.Sync()
+			err = s.Sync()
 			Expect(err).NotTo(HaveOccurred())
 			Expect(s.Tell()).To(BeEquivalentTo(3 * chunkSize))
 			s.ForceClean()
@@ -104,7 +104,7 @@ var _ = Describe("Fault recovery", func() {
 			_, err = s.Write(data[n:])
 			Expect(err).To(MatchError(tusgo.ErrOffsetsNotSynced))
 
-			_, err = s.Sync()
+			err = s.Sync()
 			Expect(err).NotTo(HaveOccurred())
 			Expect(s.Tell()).To(BeEquivalentTo(3 * chunkSize))
 			_, err = s.Write(data[s.Tell():])

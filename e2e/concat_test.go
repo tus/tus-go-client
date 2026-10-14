@@ -17,7 +17,7 @@ var _ = Describe("Concatenation", func() {
 	// createPartial creates a partial upload and transfers the first n bytes of data to it.
 	createPartial := func(data []byte, n int) *tusgo.UploadStream {
 		GinkgoHelper()
-		u, _, err := cl.CreateUpload(int64(len(data)), true, nil)
+		u, err := cl.CreateUpload(int64(len(data)), true, nil)
 		Expect(err).NotTo(HaveOccurred())
 		s := tusgo.NewUploadStream(cl, &u)
 		_, err = io.Copy(s, bytes.NewReader(data[:n]))
@@ -37,12 +37,12 @@ var _ = Describe("Concatenation", func() {
 			partials = append(partials, *createPartial(p, len(p)).Upload)
 		}
 
-		final, _, err := cl.ConcatenateUploads(partials, map[string]string{"k": "v"})
+		final, err := cl.ConcatenateUploads(partials, map[string]string{"k": "v"})
 
 		Expect(err).NotTo(HaveOccurred())
 		expected := bytes.Join(parts, nil)
 		Expect(srv.StoredData(final)).To(Equal(expected))
-		got, _, err := cl.GetUpload(final.Location)
+		got, err := cl.GetUpload(final.Location)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(got.RemoteOffset).To(BeEquivalentTo(len(expected)))
 		Expect(got.RemoteSize).To(BeEquivalentTo(len(expected)))
@@ -56,7 +56,7 @@ var _ = Describe("Concatenation", func() {
 			streams = append(streams, createPartial(p, len(p)))
 		}
 
-		final, _, err := cl.ConcatenateStreams(streams, nil)
+		final, err := cl.ConcatenateStreams(streams, nil)
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(srv.StoredData(final)).To(Equal(bytes.Join(parts, nil)))
@@ -65,7 +65,7 @@ var _ = Describe("Concatenation", func() {
 	It("should refuse to concatenate an unfinished stream, since tusd lacks concatenation-unfinished", func() {
 		streams := []*tusgo.UploadStream{createPartial(parts[0], len(parts[0])), createPartial(parts[2], 10)}
 
-		_, _, err := cl.ConcatenateStreams(streams, nil)
+		_, err := cl.ConcatenateStreams(streams, nil)
 
 		Expect(err).To(MatchError(tusgo.ErrUnsupportedFeature))
 	})
@@ -73,7 +73,7 @@ var _ = Describe("Concatenation", func() {
 	It("should return error if a partial upload is unfinished", func() {
 		partials := []tusgo.Upload{*createPartial(parts[0], len(parts[0])).Upload, *createPartial(parts[2], 10).Upload}
 
-		_, _, err := cl.ConcatenateUploads(partials, nil)
+		_, err := cl.ConcatenateUploads(partials, nil)
 
 		Expect(err).To(MatchError(tusgo.ErrUnexpectedResponse))
 	})
@@ -81,7 +81,7 @@ var _ = Describe("Concatenation", func() {
 	It("should refuse to write to the final upload", func() {
 		partial := createPartial(parts[0], len(parts[0]))
 
-		final, _, err := cl.ConcatenateUploads([]tusgo.Upload{*partial.Upload}, nil)
+		final, err := cl.ConcatenateUploads([]tusgo.Upload{*partial.Upload}, nil)
 		Expect(err).NotTo(HaveOccurred())
 
 		final.RemoteSize = int64(len(parts[0])) * 2

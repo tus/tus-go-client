@@ -1,36 +1,73 @@
 package tusgo
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"strings"
-	"unicode/utf8"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	"github.com/vitorsalgado/mocha/v3"
-	"github.com/vitorsalgado/mocha/v3/reply"
 )
+
+// closeTrackingBody wraps a response body and records whether it was closed
+type closeTrackingBody struct {
+	io.Reader
+	closed bool
+}
+
+func (b *closeTrackingBody) Read(p []byte) (int, error) {
+	if b.closed {
+		return 0, errors.New("read on closed body")
+	}
+	return b.Reader.Read(p)
+}
+
+func (b *closeTrackingBody) Close() error {
+	b.closed = true
+	return nil
+}
+
+// testResponse returns a response with the given status code and body; contentLength -1 means unknown length
+func testResponse(status int, body *closeTrackingBody, contentLength int64) *http.Response {
+	return &http.Response{StatusCode: status, Body: body, ContentLength: contentLength}
+}
 
 var _ = Describe("TusError", func() {
 	Context("Error", func() {
 		It("should join the sentinel message and the inner error", func() {
-			err := newTusErrorWithErr(ErrProtocol, errors.New("boom"))
+			err := newTusError(ErrProtocol, nil, errors.New("boom"))
 			Ω(err.Error()).Should(Equal("protocol error: boom"))
 		})
 		It("should keep the inner error message built by fmt.Errorf", func() {
-			err := newTusErrorWithErr(ErrProtocol, fmt.Errorf("cannot parse %q: %w", "abc", errors.New("bad syntax")))
+			err := newTusError(ErrProtocol, nil, fmt.Errorf("cannot parse %q: %w", "abc", errors.New("bad syntax")))
 			Ω(err.Error()).Should(Equal(`protocol error: cannot parse "abc": bad syntax`))
 		})
 		It("should render a message when a bare sentinel is used", func() {
 			Ω(ErrProtocol.Error()).Should(Equal("protocol error"))
 		})
+		It("should render a message when neither response nor inner error is given", func() {
+			Ω(newTusError(ErrProtocol, nil, nil).Error()).Should(Equal("protocol error"))
+		})
+		It("should include the status code and the content length of the response", func() {
+			err := newTusError(ErrUploadDoesNotExist, testResponse(http.StatusNotFound, &closeTrackingBody{Reader: strings.NewReader("no such upload")}, 14), nil)
+			Ω(err.Error()).Should(Equal("upload does not exist (HTTP 404; Content-Length=14)"))
+		})
+		It("should include the unknown content length of the response", func() {
+			err := newTusError(ErrUploadTooLarge, testResponse(http.StatusRequestEntityTooLarge, &closeTrackingBody{Reader: strings.NewReader("too large")}, -1), nil)
+			Ω(err.Error()).Should(Equal("upload is too large (HTTP 413; Content-Length=-1)"))
+		})
+		It("should not include the response body", func() {
+			err := newTusError(ErrUploadDoesNotExist, testResponse(http.StatusNotFound, &closeTrackingBody{Reader: strings.NewReader("no such upload")}, 14), nil)
+			Ω(err.Error()).ShouldNot(ContainSubstring("no such upload"))
+		})
+		It("should include both the response and the inner error", func() {
+			err := newTusError(ErrProtocol, testResponse(http.StatusOK, &closeTrackingBody{Reader: strings.NewReader("")}, 0), errors.New("boom"))
+			Ω(err.Error()).Should(Equal("protocol error (HTTP 200; Content-Length=0): boom"))
+		})
 		It("should be usable as a wrapped error message", func() {
-			err := fmt.Errorf("upload failed: %w", newTusErrorWithErr(ErrCannotUpload, errors.New("boom")))
+			err := fmt.Errorf("upload failed: %w", newTusError(ErrCannotUpload, nil, errors.New("boom")))
 			Ω(err.Error()).Should(Equal("upload failed: can not upload: boom"))
 		})
 	})
@@ -38,27 +75,41 @@ var _ = Describe("TusError", func() {
 	Context("Unwrap", func() {
 		It("should return the inner error", func() {
 			inner := errors.New("boom")
-			Ω(newTusErrorWithErr(ErrProtocol, inner).Unwrap()).Should(BeIdenticalTo(inner))
+			unwrapped := newTusError(ErrProtocol, nil, inner).Unwrap()
+			Ω(unwrapped).Should(MatchError(inner))
+			Ω(unwrapped.Error()).Should(Equal("boom"))
 		})
 		It("should return nil for a bare sentinel", func() {
 			Ω(ErrProtocol.Unwrap()).Should(BeNil())
+		})
+		It("should return nil if neither response nor inner error is given", func() {
+			Ω(newTusError(ErrProtocol, nil, nil).Unwrap()).Should(BeNil())
+		})
+		It("should return nil if the response body has been read successfully", func() {
+			err := newTusError(ErrProtocol, testResponse(http.StatusOK, &closeTrackingBody{Reader: strings.NewReader("body")}, 4), nil)
+			Ω(err.Unwrap()).Should(BeNil())
 		})
 	})
 
 	Context("errors.Is", func() {
 		It("should match the sentinel it was built from", func() {
-			var err error = newTusErrorWithErr(ErrProtocol, errors.New("boom"))
+			var err error = newTusError(ErrProtocol, nil, errors.New("boom"))
 			Ω(errors.Is(err, ErrProtocol)).Should(BeTrue())
 		})
 		It("should not match a different sentinel", func() {
-			var err error = newTusErrorWithErr(ErrProtocol, errors.New("boom"))
+			var err error = newTusError(ErrProtocol, nil, errors.New("boom"))
 			Ω(errors.Is(err, ErrCannotUpload)).Should(BeFalse())
 		})
 		It("should match regardless of the inner error the sentinel carries", func() {
-			a := newTusErrorWithErr(ErrUploadTooLarge, errors.New("first"))
-			b := newTusErrorWithErr(ErrUploadTooLarge, errors.New("second"))
+			a := newTusError(ErrUploadTooLarge, nil, errors.New("first"))
+			b := newTusError(ErrUploadTooLarge, nil, errors.New("second"))
 			Ω(errors.Is(a, b)).Should(BeTrue())
 			Ω(errors.Is(b, a)).Should(BeTrue())
+		})
+		It("should match regardless of the response the sentinel carries", func() {
+			var err error = newTusError(ErrOffsetsNotSynced, testResponse(http.StatusConflict, &closeTrackingBody{Reader: strings.NewReader("offset mismatch")}, 15), nil)
+			Ω(errors.Is(err, ErrOffsetsNotSynced)).Should(BeTrue())
+			Ω(errors.Is(err, ErrCannotUpload)).Should(BeFalse())
 		})
 		It("should match a bare sentinel against itself", func() {
 			Ω(errors.Is(ErrProtocol, ErrProtocol)).Should(BeTrue())
@@ -68,49 +119,51 @@ var _ = Describe("TusError", func() {
 		})
 		It("should match the inner error", func() {
 			inner := errors.New("boom")
-			var err error = newTusErrorWithErr(ErrProtocol, inner)
+			var err error = newTusError(ErrProtocol, nil, inner)
 			Ω(errors.Is(err, inner)).Should(BeTrue())
 		})
 		It("should match an error wrapped deeper in the inner chain", func() {
 			inner := errors.New("boom")
-			var err error = newTusErrorWithErr(ErrProtocol, fmt.Errorf("context: %w", inner))
+			var err error = newTusError(ErrProtocol, nil, fmt.Errorf("context: %w", inner))
 			Ω(errors.Is(err, inner)).Should(BeTrue())
 		})
 		It("should match both sentinels when one TusError carries another", func() {
-			var err error = newTusErrorWithErr(ErrProtocol, ErrCannotUpload)
+			var err error = newTusError(ErrProtocol, nil, ErrCannotUpload)
 			Ω(errors.Is(err, ErrProtocol)).Should(BeTrue())
 			Ω(errors.Is(err, ErrCannotUpload)).Should(BeTrue())
 		})
 		It("should survive being wrapped by fmt.Errorf", func() {
-			err := fmt.Errorf("upload failed: %w", newTusErrorWithErr(ErrUploadDoesNotExist, errors.New("boom")))
+			err := fmt.Errorf("upload failed: %w", newTusError(ErrUploadDoesNotExist, nil, errors.New("boom")))
 			Ω(errors.Is(err, ErrUploadDoesNotExist)).Should(BeTrue())
 			Ω(errors.Is(err, ErrProtocol)).Should(BeFalse())
 		})
 		It("should not match an unrelated error", func() {
-			var err error = newTusErrorWithErr(ErrProtocol, errors.New("boom"))
+			var err error = newTusError(ErrProtocol, nil, errors.New("boom"))
 			Ω(errors.Is(err, io.EOF)).Should(BeFalse())
 		})
 	})
 
 	Context("errors.As", func() {
-		It("should extract a TusError with its message and inner error", func() {
+		It("should extract a TusError with its message, inner error and response", func() {
 			inner := errors.New("boom")
-			var err error = newTusErrorWithErr(ErrProtocol, inner)
+			resp := testResponse(http.StatusOK, &closeTrackingBody{Reader: strings.NewReader("")}, 0)
+			var err error = newTusError(ErrProtocol, resp, inner)
 
 			var target TusError
 			Ω(errors.As(err, &target)).Should(BeTrue())
 			Ω(target.msg).Should(Equal("protocol error"))
-			Ω(target.inner).Should(BeIdenticalTo(inner))
+			Ω(target.inner).Should(MatchError(inner))
+			Ω(target.Response()).Should(HaveHTTPStatus(http.StatusOK))
 		})
 		It("should extract a TusError wrapped by fmt.Errorf", func() {
-			err := fmt.Errorf("upload failed: %w", newTusErrorWithErr(ErrChecksumMismatch, errors.New("boom")))
+			err := fmt.Errorf("upload failed: %w", newTusError(ErrChecksumMismatch, nil, errors.New("boom")))
 
 			var target TusError
 			Ω(errors.As(err, &target)).Should(BeTrue())
 			Ω(target.msg).Should(Equal("checksum mismatch"))
 		})
 		It("should extract the outermost TusError of a nested chain", func() {
-			var err error = newTusErrorWithErr(ErrProtocol, ErrCannotUpload)
+			var err error = newTusError(ErrProtocol, nil, ErrCannotUpload)
 
 			var target TusError
 			Ω(errors.As(err, &target)).Should(BeTrue())
@@ -122,161 +175,113 @@ var _ = Describe("TusError", func() {
 		})
 	})
 
-	Context("newTusErrorWithErr", func() {
+	Context("newTusError", func() {
 		It("should not modify the sentinel it was built from", func() {
-			_ = newTusErrorWithErr(ErrProtocol, errors.New("boom"))
-			Ω(ErrProtocol.inner).Should(BeNil())
+			_ = newTusError(ErrUploadDoesNotExist, testResponse(http.StatusNotFound, &closeTrackingBody{Reader: strings.NewReader("no such upload")}, 14), errors.New("boom"))
+			Ω(ErrUploadDoesNotExist.inner).Should(BeNil())
+			Ω(ErrUploadDoesNotExist.resp).Should(BeNil())
 		})
-		It("should replace the inner error of an already contextualized error", func() {
-			first := newTusErrorWithErr(ErrProtocol, errors.New("first"))
-			second := newTusErrorWithErr(first, errors.New("second"))
+		It("should join the inner error to the inner error of an already contextualized error", func() {
+			first := newTusError(ErrProtocol, nil, errors.New("first"))
+			second := newTusError(first, nil, errors.New("second"))
 
-			Ω(second.Error()).Should(Equal("protocol error: second"))
+			Ω(second.Error()).Should(Equal("protocol error: first\nsecond"))
 			Ω(first.Error()).Should(Equal("protocol error: first"))
 		})
 	})
 
-	Context("newTusErrorWithResponse", func() {
-		var testClient *Client
-		var srvMock *mocha.Mocha
-
-		// tusResponse makes a request to the mock server the same way the Client does and returns the response
-		tusResponse := func(location string) *http.Response {
-			req, err := http.NewRequest(http.MethodGet, srvMock.URL()+location, nil)
-			Ω(err).Should(Succeed())
-			resp, err := testClient.tusRequest(context.Background(), req)
-			Ω(err).Should(Succeed())
-			return resp
-		}
-
-		BeforeEach(func() {
-			srvMock = mocha.New(GinkgoT())
-			srvMock.Start()
-			testURL, _ := url.Parse(srvMock.URL())
-			testClient = NewClient(http.DefaultClient, testURL)
-			testClient.Capabilities = &ServerCapabilities{ProtocolVersions: []string{"1.0.0"}}
+	Context("Response", func() {
+		It("should return nil if no response is given", func() {
+			Ω(newTusError(ErrProtocol, nil, errors.New("boom")).Response()).Should(BeNil())
 		})
-		AfterEach(func() {
-			if srvMock != nil {
-				Ω(srvMock.Close()).Should(Succeed())
-				srvMock.AssertCalled(GinkgoT())
-			}
+		It("should return nil for a bare sentinel", func() {
+			Ω(ErrProtocol.Response()).Should(BeNil())
 		})
+		It("should return a copy of the given response with the body read into a buffer", func() {
+			body := &closeTrackingBody{Reader: strings.NewReader("no such upload")}
+			resp := testResponse(http.StatusNotFound, body, 14)
+			resp.Header = http.Header{"X-Foo": {"bar"}}
 
-		It("should include the status code and the response body", func() {
-			srvMock.AddMocks(tRequest(http.MethodGet, "/foo", nil).
-				Reply(tReply(reply.Status(http.StatusNotFound)).Body([]byte("no such upload"))),
-			)
-
-			err := newTusErrorWithResponse(ErrUploadDoesNotExist, tusResponse("/foo"))
-			Ω(err.Error()).Should(Equal("upload does not exist: HTTP 404: body (14 bytes): no such upload"))
+			err := newTusError(ErrUploadDoesNotExist, resp, nil)
+			Ω(err.Response()).ShouldNot(BeIdenticalTo(resp))
+			Ω(err.Response()).Should(And(
+				HaveHTTPStatus(http.StatusNotFound),
+				HaveHTTPHeaderWithValue("X-Foo", "bar"),
+				HaveHTTPBody([]byte("no such upload")),
+			))
+			Ω(err.Response().ContentLength).Should(BeEquivalentTo(14))
 		})
-		It("should report an empty body", func() {
-			srvMock.AddMocks(tRequest(http.MethodGet, "/foo", nil).
-				Reply(tReply(reply.Status(http.StatusNotFound))),
-			)
+		It("should leave the original response body to the caller", func() {
+			body := &closeTrackingBody{Reader: strings.NewReader("no such upload")}
+			resp := testResponse(http.StatusNotFound, body, 14)
 
-			err := newTusErrorWithResponse(ErrUploadDoesNotExist, tusResponse("/foo"))
-			Ω(err.Error()).Should(Equal("upload does not exist: HTTP 404: empty body"))
+			_ = newTusError(ErrUploadDoesNotExist, resp, nil)
+			Ω(resp.Body).Should(BeIdenticalTo(body))
+			Ω(body.closed).Should(BeFalse())
 		})
-		It("should keep a body untruncated", func() {
-			body := strings.Repeat("x", 255)
-			srvMock.AddMocks(tRequest(http.MethodGet, "/foo", nil).
-				Reply(tReply(reply.Status(http.StatusRequestEntityTooLarge)).Body([]byte(body))),
-			)
+		It("should keep an empty body", func() {
+			body := &closeTrackingBody{Reader: strings.NewReader("")}
+			resp := testResponse(http.StatusNotFound, body, 0)
 
-			err := newTusErrorWithResponse(ErrUploadTooLarge, tusResponse("/foo"))
-			Ω(err.Error()).Should(Equal("upload is too large: HTTP 413: body (255 bytes): " + body))
+			err := newTusError(ErrUploadDoesNotExist, resp, nil)
+			Ω(err.Unwrap()).Should(BeNil())
+			Ω(err.Response()).Should(HaveHTTPBody([]byte{}))
+			Ω(body.closed).Should(BeFalse())
 		})
-		It("should keep a body untruncated if empty content-length", func() {
-			body := strings.Repeat("x", 255)
-			srvMock.AddMocks(tRequest(http.MethodGet, "/foo", nil).
-				Reply(tReply(reply.Status(http.StatusRequestEntityTooLarge)).Body([]byte(body)).Header("Content-Length", "")),
-			)
+		It("should keep a body up to the read limit untruncated", func() {
+			data := strings.Repeat("x", bodyReadLimit)
+			body := &closeTrackingBody{Reader: strings.NewReader(data)}
+			resp := testResponse(http.StatusRequestEntityTooLarge, body, int64(len(data)))
 
-			err := newTusErrorWithResponse(ErrUploadTooLarge, tusResponse("/foo"))
-			Ω(err.Error()).Should(Equal("upload is too large: HTTP 413: body (? bytes): " + body))
+			err := newTusError(ErrUploadTooLarge, resp, nil)
+			Ω(err.Unwrap()).Should(BeNil())
+			Ω(err.Response()).Should(HaveHTTPBody([]byte(data)))
 		})
-		It("should truncate a body longer than the read limit", func() {
-			srvMock.AddMocks(tRequest(http.MethodGet, "/foo", nil).
-				Reply(tReply(reply.Status(http.StatusRequestEntityTooLarge)).Body([]byte(strings.Repeat("x", 300)))),
-			)
+		It("should truncate a body longer than the read limit and leave the rest in the original body", func() {
+			body := &closeTrackingBody{Reader: strings.NewReader(strings.Repeat("x", bodyReadLimit) + strings.Repeat("y", 100))}
+			resp := testResponse(http.StatusRequestEntityTooLarge, body, -1)
 
-			err := newTusErrorWithResponse(ErrUploadTooLarge, tusResponse("/foo"))
-			Ω(err.Error()).Should(Equal("upload is too large: HTTP 413: body (300 bytes): " + strings.Repeat("x", 256) + "... (truncated)"))
+			err := newTusError(ErrUploadTooLarge, resp, nil)
+			Ω(err.Unwrap()).Should(BeNil())
+			Ω(err.Response()).Should(HaveHTTPBody([]byte(strings.Repeat("x", bodyReadLimit))))
+			Ω(body.closed).Should(BeFalse())
+			Ω(resp).Should(HaveHTTPBody([]byte(strings.Repeat("y", 100))))
 		})
-		It("should truncate a body longer than the read limit if empty content-length", func() {
-			srvMock.AddMocks(tRequest(http.MethodGet, "/foo", nil).
-				Reply(tReply(reply.Status(http.StatusRequestEntityTooLarge)).Body([]byte(strings.Repeat("x", 300))).Header("Content-Length", "")),
-			)
-
-			err := newTusErrorWithResponse(ErrUploadTooLarge, tusResponse("/foo"))
-			Ω(err.Error()).Should(Equal("upload is too large: HTTP 413: body (? bytes): " + strings.Repeat("x", 256) + "... (truncated)"))
-		})
-		It("should write a binary body to the message as raw bytes", func() {
-			// NUL, DEL, an invalid UTF-8 sequence and other non-printable bytes.
-			body := []byte{0x89, 0x50, 0x1A, 0x00, 0xFF, 0xFE, 0x01, 0x7F}
-			srvMock.AddMocks(tRequest(http.MethodGet, "/foo", nil).
-				Reply(tReply(reply.Status(http.StatusRequestEntityTooLarge)).Body(body)),
-			)
-
-			err := newTusErrorWithResponse(ErrUploadTooLarge, tusResponse("/foo"))
-			Ω(err.Error()).Should(Equal("upload is too large: HTTP 413: body (8 bytes): [137 80 26 0 255 254 1 127]"))
-			Ω(utf8.ValidString(err.Error())).Should(BeTrue())
-		})
-		It("should only include the part of the body that has not been read yet", func() {
-			srvMock.AddMocks(tRequest(http.MethodGet, "/foo", nil).
-				Reply(tReply(reply.Status(http.StatusNotFound)).Body([]byte("no such upload"))),
-			)
-			resp := tusResponse("/foo")
+		It("should only keep the part of the body that has not been read yet", func() {
+			body := &closeTrackingBody{Reader: strings.NewReader("no such upload")}
+			resp := testResponse(http.StatusNotFound, body, 14)
 			Ω(io.ReadFull(resp.Body, make([]byte, len("no such ")))).Should(Equal(len("no such ")))
 
-			err := newTusErrorWithResponse(ErrUploadDoesNotExist, resp)
-			Ω(err.Error()).Should(Equal("upload does not exist: HTTP 404: body (14 bytes): upload"))
+			err := newTusError(ErrUploadDoesNotExist, resp, nil)
+			Ω(err.Response()).Should(HaveHTTPBody([]byte("upload")))
 		})
 		It("should report a body that cannot be read", func() {
-			srvMock.AddMocks(tRequest(http.MethodGet, "/foo", nil).
-				Reply(tReply(reply.Status(http.StatusInternalServerError)).Body([]byte("boom"))),
-			)
-			// Take the raw response, so that the body is a real network stream rather than the buffer tusRequest makes
-			req, err := http.NewRequest(http.MethodGet, srvMock.URL()+"/foo", nil)
-			Ω(err).Should(Succeed())
-			req.Header.Set("Tus-Resumable", testClient.ProtocolVersion)
-			resp, err := http.DefaultClient.Do(req)
-			Ω(err).Should(Succeed())
-			Ω(resp.Body.Close()).Should(Succeed())
+			body := &closeTrackingBody{Reader: strings.NewReader("boom")}
+			Ω(body.Close()).Should(Succeed())
+			resp := testResponse(http.StatusInternalServerError, body, 4)
 
-			tusErr := newTusErrorWithResponse(ErrUnexpectedResponse, resp)
-			Ω(tusErr).Should(And(
+			err := newTusError(ErrUnexpectedResponse, resp, nil)
+			Ω(err).Should(And(
 				MatchError(ErrUnexpectedResponse),
-				MatchError(ContainSubstring("unexpected HTTP response code: HTTP 500: read body: ")),
-				MatchError(ContainSubstring("read on closed response body")),
+				MatchError("unexpected HTTP response code (HTTP 500; Content-Length=4): read response body: read on closed body"),
 			))
-			Ω(tusErr.Error()).ShouldNot(ContainSubstring("boom"))
+			Ω(err.Response()).ShouldNot(BeIdenticalTo(resp))
+			Ω(err.Response()).Should(HaveHTTPStatus(http.StatusInternalServerError))
+			Ω(err.Response()).Should(HaveHTTPBody([]byte{}))
+			Ω(resp.Body).Should(BeIdenticalTo(body))
 		})
-		It("should report a nil response", func() {
-			srvMock.AddMocks(tRequest(http.MethodGet, "/foo", nil).Reply(tReply(reply.OK())))
-			tusResponse("/foo") // Keep the mock expectation satisfied
+		It("should report a body that cannot be read along with the inner error", func() {
+			body := &closeTrackingBody{Reader: strings.NewReader("boom")}
+			Ω(body.Close()).Should(Succeed())
+			resp := testResponse(http.StatusOK, body, 4)
+			inner := errors.New("bad header")
 
-			err := newTusErrorWithResponse(ErrProtocol, nil)
-			Ω(err.Error()).Should(Equal("protocol error: response is nil"))
-		})
-		It("should stay matchable by its sentinel", func() {
-			srvMock.AddMocks(tRequest(http.MethodGet, "/foo", nil).
-				Reply(tReply(reply.Status(http.StatusConflict)).Body([]byte("offset mismatch"))),
-			)
-
-			var err error = newTusErrorWithResponse(ErrOffsetsNotSynced, tusResponse("/foo"))
-			Ω(errors.Is(err, ErrOffsetsNotSynced)).Should(BeTrue())
-			Ω(errors.Is(err, ErrCannotUpload)).Should(BeFalse())
-		})
-		It("should not modify the sentinel it was built from", func() {
-			srvMock.AddMocks(tRequest(http.MethodGet, "/foo", nil).
-				Reply(tReply(reply.Status(http.StatusNotFound)).Body([]byte("no such upload"))),
-			)
-
-			_ = newTusErrorWithResponse(ErrUploadDoesNotExist, tusResponse("/foo"))
-			Ω(ErrUploadDoesNotExist.inner).Should(BeNil())
+			err := newTusError(ErrProtocol, resp, inner)
+			Ω(err).Should(And(
+				MatchError(ErrProtocol),
+				MatchError(inner),
+				MatchError("protocol error (HTTP 200; Content-Length=4): read response body: read on closed body\nbad header"),
+			))
 		})
 	})
 })
