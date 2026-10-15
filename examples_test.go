@@ -398,9 +398,6 @@ func ExampleUploadStream_WithChecksumAlgorithm_streamed() {
 		log.Fatalf("Failed to parse URL: %s", err)
 	}
 	cl := tusgo.NewClient(baseURL)
-	if _, err = cl.UpdateCapabilities(); err != nil {
-		log.Fatalf("Failed to get server capabilities: %s", err)
-	}
 
 	f, finfo, err := OpenFile("/tmp/file.txt")
 	if err != nil {
@@ -446,9 +443,6 @@ func Example_transferWithSpeedControl() {
 		log.Fatalf("Failed to parse URL: %s", err)
 	}
 	cl := tusgo.NewClient(baseURL)
-	if _, err = cl.UpdateCapabilities(); err != nil {
-		log.Fatalf("Failed to get server capabilities: %s", err)
-	}
 
 	f, finfo, err := OpenFile("/tmp/file.txt")
 	if err != nil {

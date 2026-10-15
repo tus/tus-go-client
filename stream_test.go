@@ -103,9 +103,7 @@ var _ = Describe("UploadStream", func() {
 		srvMock.Start()
 		testURL, _ = url.Parse(srvMock.URL())
 		testClient = NewClient(testURL)
-		testClient.Capabilities = &ServerCapabilities{
-			ProtocolVersions: []string{"1.0.0"},
-		}
+		testClient.advertisedExtensions = []string{}
 		emptyHeaders = []string{"Upload-Concat", "Upload-Defer-Length", "Upload-Length", "Upload-Metadata", "Upload-Checksum"}
 	})
 	AfterEach(func() {
@@ -482,7 +480,7 @@ var _ = Describe("UploadStream", func() {
 		)
 		DescribeTable("upload data with defer length",
 			func(copyCb func(s *UploadStream, data []byte) (int64, error)) {
-				testClient.Capabilities.Extensions = append(testClient.Capabilities.Extensions, "creation-defer-length")
+				testClient.advertisedExtensions = append(testClient.advertisedExtensions, "creation-defer-length")
 				replies := []*reply.StdReply{
 					tReply(reply.NoContent()), tReply(reply.NoContent()), tReply(reply.NoContent()), tReply(reply.NoContent()),
 				}
@@ -512,7 +510,7 @@ var _ = Describe("UploadStream", func() {
 		Context("upload data by chunks with checksum", func() {
 			DescribeTable("should set checksum in request header",
 				func(copyCb func(s *UploadStream, data []byte) (int64, error)) {
-					testClient.Capabilities.Extensions = append(testClient.Capabilities.Extensions, "checksum")
+					testClient.advertisedExtensions = append(testClient.advertisedExtensions, "checksum")
 					replies := []*reply.StdReply{
 						tReply(reply.NoContent()), tReply(reply.NoContent()), tReply(reply.NoContent()), tReply(reply.NoContent()),
 					}
@@ -542,7 +540,7 @@ var _ = Describe("UploadStream", func() {
 		Context("upload data no chunked with checksum", func() {
 			DescribeTable("should upload in one shot and set checksum in request trailer",
 				func(copyCb func(s *UploadStream, data []byte) (int64, error)) {
-					testClient.Capabilities.Extensions = append(testClient.Capabilities.Extensions, "checksum", "checksum-trailer")
+					testClient.advertisedExtensions = append(testClient.advertisedExtensions, "checksum", "checksum-trailer")
 					replies := []*reply.StdReply{tReply(reply.NoContent())}
 					up := mockTusUploader{replies: replies, buf: bytes.NewBuffer(make([]byte, 0))}
 					srvMock.AddMocks(up.makeRequest(http.MethodPatch, "/foo/bar", emptyHeaders).ReplyFunction(up.handler()))
@@ -567,7 +565,7 @@ var _ = Describe("UploadStream", func() {
 		Context("expired upload", func() {
 			DescribeTable("should set UploadExpired",
 				func(copyCb func(s *UploadStream, data []byte) (int64, error)) {
-					testClient.Capabilities.Extensions = append(testClient.Capabilities.Extensions, "expiration")
+					testClient.advertisedExtensions = append(testClient.advertisedExtensions, "expiration")
 					rpl := tReply(reply.NoContent()).Header("Upload-Expires", "Wed, 25 Jun 2014 16:00:00 GMT")
 					replies := []*reply.StdReply{rpl, rpl, rpl, rpl}
 					up := mockTusUploader{replies: replies, buf: bytes.NewBuffer(make([]byte, 0))}
@@ -801,7 +799,7 @@ var _ = Describe("UploadStream", func() {
 		)
 		When("server returned 460 Checksum Mismatch and checksum is used", func() {
 			It("should return ErrChecksumMismatch", func() {
-				testClient.Capabilities.Extensions = append(testClient.Capabilities.Extensions, "checksum")
+				testClient.advertisedExtensions = append(testClient.advertisedExtensions, "checksum")
 				replies := []*reply.StdReply{tReply(reply.Status(460))}
 				up := mockTusUploader{replies: replies, buf: bytes.NewBuffer(make([]byte, 0))}
 				eh := []string{"Upload-Concat", "Upload-Defer-Length", "Upload-Length", "Upload-Metadata"}
@@ -928,7 +926,7 @@ var _ = Describe("UploadStream", func() {
 		})
 		When("upload with checksum and no chunked, but checksum-trailer extension is not active", func() {
 			It("should return error", func() {
-				testClient.Capabilities.Extensions = append(testClient.Capabilities.Extensions, "checksum")
+				testClient.advertisedExtensions = append(testClient.advertisedExtensions, "checksum")
 				u := Upload{Location: "/foo/bar", RemoteSize: 1024}
 				s := NewUploadStream(testClient, &u).WithChecksumAlgorithm("sha1")
 				s.ChunkSize = NoChunked

@@ -12,7 +12,7 @@
 // The protocol also defines a number of extensions -- optional features that customize this process:
 // deleting an upload, concatenating several uploads into a single one or verifying the transferred data with a
 // checksum, etc. A server supports any subset of them, so the features backed by an extension fail with
-// [ErrUnsupportedFeature] unless the server announces it, see [Client.Capabilities].
+// [ErrUnsupportedFeature] unless the server announces it, see [Client.capabilities].
 package tusgo
 
 import (
@@ -22,8 +22,10 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -38,6 +40,7 @@ func NewClient(endpoint *url.URL) *Client {
 		ProtocolVersion: DefaultProtocolVersion,
 		ExtraHeaders:    make(http.Header),
 		endpoint:        endpoint,
+		mu:              &sync.Mutex{},
 	}
 }
 
@@ -53,9 +56,6 @@ func NewClient(endpoint *url.URL) *Client {
 type Client struct {
 	// ProtocolVersion is the TUS protocol version sent in the requests. By default, it's equal to [DefaultProtocolVersion].
 	ProtocolVersion string
-
-	// Capabilities are the features and limits of the server. Use [Client.UpdateCapabilities] to query them from the server.
-	Capabilities *ServerCapabilities
 
 	// ExtraHeaders are the additional HTTP headers sent with every request to the server.
 	// They may be used for authentication, cache control, etc.
@@ -73,7 +73,9 @@ type Client struct {
 	// This field is ignored if DoRequest is set.
 	Client *http.Client
 
-	endpoint *url.URL
+	endpoint             *url.URL
+	advertisedExtensions []string
+	mu                   *sync.Mutex
 }
 
 // DoRequestFunc is the callback type for sending a TUS request to the server and returning the response.
@@ -100,7 +102,7 @@ func (c *Client) GetUpload(location string) (Upload, error) {
 	resp, err := c.tusRequest(req)
 	defer closeResponseBody(resp)
 	if err != nil {
-		return res, fmt.Errorf("send request: %w", err)
+		return res, fmt.Errorf("tus request: %w", err)
 	}
 
 	switch resp.StatusCode {
@@ -188,7 +190,7 @@ func (c *Client) CreateUpload(remoteSize int64, partial bool, metadata map[strin
 	resp, err := c.tusRequest(req)
 	defer closeResponseBody(resp)
 	if err != nil {
-		return res, fmt.Errorf("send request: %w", err)
+		return res, fmt.Errorf("tus request: %w", err)
 	}
 
 	switch resp.StatusCode {
@@ -249,7 +251,7 @@ func (c *Client) CreateUploadWithData(data []byte, remoteSize int64, partial boo
 	res.RemoteOffset = uploadedBytes
 	defer closeResponseBody(resp)
 	if err != nil {
-		return uploadedBytes, res, fmt.Errorf("send request: %w", err)
+		return uploadedBytes, res, fmt.Errorf("tus request: %w", err)
 	}
 	res.Location = resp.Header.Get("Location")
 
@@ -286,7 +288,7 @@ func (c *Client) DeleteUpload(location string) error {
 	resp, err := c.tusRequest(req)
 	defer closeResponseBody(resp)
 	if err != nil {
-		return fmt.Errorf("send request: %w", err)
+		return fmt.Errorf("tus request: %w", err)
 	}
 
 	switch resp.StatusCode {
@@ -338,7 +340,7 @@ func (c *Client) ConcatenateUploads(partials []Upload, metadata map[string]strin
 	resp, err := c.tusRequest(req)
 	defer closeResponseBody(resp)
 	if err != nil {
-		return res, fmt.Errorf("send request: %w", err)
+		return res, fmt.Errorf("tus request: %w", err)
 	}
 
 	switch resp.StatusCode {
@@ -378,40 +380,44 @@ func (c *Client) ConcatenateStreams(streams []*UploadStream, metadata map[string
 	return c.ConcatenateUploads(uploads, metadata)
 }
 
-// UpdateCapabilities queries the server for its features and limits and stores them in the [Client.Capabilities] field.
-func (c *Client) UpdateCapabilities() (resp *http.Response, err error) {
-	var req *http.Request
-	if req, err = c.createRequest(http.MethodOptions, c.endpoint.String()); err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
+// FetchCapabilities queries the server for its capabilities. See [ServerCapabilities] for the details.
+func (c *Client) FetchCapabilities() (ServerCapabilities, error) {
+	return c.fetchCapabilities()
+}
+
+func (c *Client) fetchCapabilities() (ServerCapabilities, error) {
+	var res ServerCapabilities
+
+	req, err := c.createRequest(http.MethodOptions, c.endpoint.String())
+	if err != nil {
+		return res, fmt.Errorf("create request: %w", err)
 	}
-	resp, err = c.tusRequest(req)
+	resp, err := c.tusRequest(req)
 	defer closeResponseBody(resp)
 	if err != nil {
-		return
+		return res, fmt.Errorf("tus request: %w", err)
 	}
 
 	switch resp.StatusCode {
 	case http.StatusNoContent, http.StatusOK:
-		c.Capabilities = &ServerCapabilities{}
 		if v := resp.Header.Get("Tus-Max-Size"); v != "" {
-			if c.Capabilities.MaxSize, err = strconv.ParseInt(v, 10, 64); err != nil {
-				err = newTusError(ErrProtocol, resp, fmt.Errorf("cannot parse Tus-Max-Size integer value %q: %w", v, err))
-				return
+			if res.MaxSize, err = strconv.ParseInt(v, 10, 64); err != nil {
+				return res, newTusError(ErrProtocol, resp, fmt.Errorf("parse Tus-Max-Size integer value %q: %w", v, err))
 			}
 		}
 		if v := resp.Header.Get("Tus-Extension"); v != "" {
-			c.Capabilities.Extensions = strings.Split(v, ",")
+			res.Extensions = strings.Split(v, ",")
 		}
 		if v := resp.Header.Get("Tus-Version"); v != "" {
-			c.Capabilities.ProtocolVersions = strings.Split(v, ",")
+			res.ProtocolVersions = strings.Split(v, ",")
 		}
 		if v := resp.Header.Get("Tus-Checksum-Algorithm"); v != "" {
-			c.Capabilities.ChecksumAlgorithms = strings.Split(v, ",")
+			res.ChecksumAlgorithms = strings.Split(v, ",")
 		}
-	default:
-		err = newTusError(ErrUnexpectedResponse, resp, nil)
+		return res, nil
 	}
-	return
+
+	return res, newTusError(ErrUnexpectedResponse, resp, nil)
 }
 
 func (c *Client) tusRequest(req *http.Request) (*http.Response, error) {
@@ -441,17 +447,24 @@ func (c *Client) tusRequest(req *http.Request) (*http.Response, error) {
 }
 
 func (c *Client) ensureExtension(extension string) error {
-	if c.Capabilities == nil {
-		if _, err := c.UpdateCapabilities(); err != nil {
-			return fmt.Errorf("obtain server capabilities: %w", err)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.advertisedExtensions == nil {
+		caps, err := c.fetchCapabilities()
+		if err != nil {
+			return fmt.Errorf("fetch capabilities: %w", err)
+		}
+		c.advertisedExtensions = caps.Extensions
+		if c.advertisedExtensions == nil {
+			c.advertisedExtensions = make([]string, 0)
 		}
 	}
-	for _, e := range c.Capabilities.Extensions {
-		if extension == e {
-			return nil
-		}
+	if !slices.Contains(c.advertisedExtensions, extension) {
+		return newTusError(ErrUnsupportedFeature, nil, errors.New(extension))
 	}
-	return newTusError(ErrUnsupportedFeature, nil, errors.New(extension))
+
+	return nil
 }
 
 func (c *Client) createRequest(method, url string) (*http.Request, error) {

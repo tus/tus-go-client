@@ -20,10 +20,10 @@ var _ = Describe("Client", func() {
 			srv := startServer(func(cfg *handler.Config) { cfg.MaxSize = 1024 }, nil)
 			cl := srv.NewClient()
 
-			_, err := cl.UpdateCapabilities()
+			caps, err := cl.FetchCapabilities()
 
 			Expect(err).NotTo(HaveOccurred())
-			Expect(cl.Capabilities).To(Equal(&tusgo.ServerCapabilities{
+			Expect(caps).To(Equal(tusgo.ServerCapabilities{
 				Extensions: []string{
 					"creation", "creation-with-upload", "termination", "concatenation", "creation-defer-length",
 				},
@@ -62,10 +62,10 @@ var _ = Describe("Client", func() {
 			srv := startServer(nil, nil)
 			cl := tusgo.NewClient(srv.BaseURL)
 
-			_, err := cl.UpdateCapabilities()
+			caps, err := cl.FetchCapabilities()
 
 			Expect(err).NotTo(HaveOccurred())
-			Expect(cl.Capabilities.ProtocolVersions).To(Equal([]string{"1.0.0"}))
+			Expect(caps.ProtocolVersions).To(Equal([]string{"1.0.0"}))
 		})
 
 		It("should send all requests, including the stream ones, via DoRequest", func() {
