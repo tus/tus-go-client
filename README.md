@@ -78,7 +78,10 @@ func main() {
 	}
 	defer f.Close()
 
-	s := tusgo.NewUploadStream(cl, &u)
+	s, err := tusgo.NewUploadStream(cl, u)
+	if err != nil {
+		log.Fatalf("Failed to create upload stream: %s", err)
+	}
 
 	// Align the stream and file offsets with the offset reported by the server
 	if err = s.Sync(); err != nil {

@@ -1005,14 +1005,14 @@ var _ = Describe("Client", func() {
 			})
 		})
 	})
-	Context("ConcatenateUploads", func() {
+	Context("ConcatenatePartialUploads", func() {
 		Context("happy path", func() {
 			BeforeEach(func() {
 				testClient.advertisedExtensions = append(testClient.advertisedExtensions, "concatenation")
 			})
 			It("should close the response body", func() {
 				tExpectBodyClosed(testClient, http.StatusCreated, http.Header{"Location": {"/foo/baz"}}, func() error {
-					_, err := testClient.ConcatenateUploads([]Upload{{Location: "/foo/bar", Partial: true}}, nil)
+					_, err := testClient.ConcatenatePartialUploads([]string{"/foo/bar"}, nil)
 					return err
 				})
 			})
@@ -1026,13 +1026,11 @@ var _ = Describe("Client", func() {
 				)
 				testClient.DoRequest = spy.DoRequest
 				testClient.ExtraHeaders = extraHeaders
-				f1 := Upload{Location: "/foo/bar", RemoteSize: 256, RemoteOffset: 256, Partial: true}
-				f2 := Upload{Location: "/foo/baz", RemoteSize: 512, RemoteOffset: 512, Partial: true}
 
-				f, err := testClient.ConcatenateUploads([]Upload{f1, f2}, nil)
+				loc, err := testClient.ConcatenatePartialUploads([]string{"/foo/bar", "/foo/baz"}, nil)
 				Ω(err).Should(Succeed())
 				Ω(spy.calls).Should(Equal([]doRequestCall{{http.MethodPost, srvMock.URL()}}))
-				Ω(f).Should(Equal(Upload{Location: "/foo/bar/baz"}))
+				Ω(loc).Should(Equal("/foo/bar/baz"))
 			})
 			It("should send ExtraHeaders and leave them untouched", func() {
 				eh := []string{"Upload-Defer-Length", "Upload-Length", "Upload-Metadata", "Upload-Checksum", "Upload-Offset"}
@@ -1042,13 +1040,11 @@ var _ = Describe("Client", func() {
 					Reply(tReply(reply.Created()).Header("Location", "/foo/bar/baz")),
 				)
 				testClient.ExtraHeaders = extraHeaders
-				f1 := Upload{Location: "/foo/bar", RemoteSize: 256, RemoteOffset: 256, Partial: true}
-				f2 := Upload{Location: "/foo/baz", RemoteSize: 512, RemoteOffset: 512, Partial: true}
 
-				f, err := testClient.ConcatenateUploads([]Upload{f1, f2}, nil)
+				loc, err := testClient.ConcatenatePartialUploads([]string{"/foo/bar", "/foo/baz"}, nil)
 				Ω(err).Should(Succeed())
 				Ω(testClient.ExtraHeaders).Should(Equal(http.Header{"X-Extra": {"extra"}}))
-				Ω(f).Should(Equal(Upload{Location: "/foo/bar/baz"}))
+				Ω(loc).Should(Equal("/foo/bar/baz"))
 			})
 			When("send several uploads, no metadata", func() {
 				It("should make a request", func() {
@@ -1057,15 +1053,10 @@ var _ = Describe("Client", func() {
 						Header("Upload-Concat", expect.ToEqual("final;/foo/bar /foo/baz")).
 						Reply(tReply(reply.Created()).Header("Location", "/foo/bar/baz")),
 					)
-					f1 := Upload{Location: "/foo/bar", RemoteSize: 256, RemoteOffset: 256, Partial: true}
-					f2 := Upload{Location: "/foo/baz", RemoteSize: 512, RemoteOffset: 512, Partial: true}
 
-					f, err := testClient.ConcatenateUploads([]Upload{f1, f2}, nil)
+					loc, err := testClient.ConcatenatePartialUploads([]string{"/foo/bar", "/foo/baz"}, nil)
 					Ω(err).Should(Succeed())
-					Ω(f).Should(Equal(Upload{
-						Location: "/foo/bar/baz",
-						Partial:  false,
-					}))
+					Ω(loc).Should(Equal("/foo/bar/baz"))
 				})
 			})
 			When("send several uploads, with metadata", func() {
@@ -1083,58 +1074,62 @@ var _ = Describe("Client", func() {
 						})).
 						Reply(tReply(reply.Created()).Header("Location", "/foo/bar/baz")),
 					)
-					f1 := Upload{Location: "/foo/bar", RemoteSize: 256, RemoteOffset: 256, Partial: true}
-					f2 := Upload{Location: "/foo/baz", RemoteSize: 512, RemoteOffset: 512, Partial: true}
 
-					f, err := testClient.ConcatenateUploads([]Upload{f1, f2}, md)
+					loc, err := testClient.ConcatenatePartialUploads([]string{"/foo/bar", "/foo/baz"}, md)
 					Ω(err).Should(Succeed())
-					Ω(f).Should(Equal(Upload{
-						Location: "/foo/bar/baz",
-						Partial:  false,
-						Metadata: md,
-					}))
+					Ω(loc).Should(Equal("/foo/bar/baz"))
 				})
 			})
 		})
+		DescribeTable("should accept any of concatenation extensions",
+			func(extensions []string) {
+				testClient.advertisedExtensions = extensions
+				eh := []string{"Upload-Defer-Length", "Upload-Length", "Upload-Metadata", "Upload-Checksum", "Upload-Offset"}
+				srvMock.AddMocks(tRequest(http.MethodPost, "/", eh).
+					Header("Upload-Concat", expect.ToEqual("final;/foo/bar /foo/baz")).
+					Reply(tReply(reply.Created()).Header("Location", "/foo/bar/baz")),
+				)
+
+				loc, err := testClient.ConcatenatePartialUploads([]string{"/foo/bar", "/foo/baz"}, nil)
+				Ω(err).Should(Succeed())
+				Ω(loc).Should(Equal("/foo/bar/baz"))
+			},
+			Entry("concatenation", []string{"concatenation"}),
+			Entry("concatenation-unfinished", []string{"concatenation-unfinished"}),
+			Entry("both", []string{"concatenation", "concatenation-unfinished"}),
+		)
 		Context("error path", func() {
 			It("should keep the response body in the error and close the original body", func() {
 				testClient.advertisedExtensions = append(testClient.advertisedExtensions, "concatenation")
 				tExpectBodyKeptInError(testClient, http.StatusNotFound, nil, ErrUploadDoesNotExist, func() error {
-					_, err := testClient.ConcatenateUploads([]Upload{{Location: "/foo/bar", Partial: true}}, nil)
+					_, err := testClient.ConcatenatePartialUploads([]string{"/foo/bar"}, nil)
 					return err
 				})
 			})
-			When("uploads list is empty", func() {
-				It("should return error", func() {
-					testClient.advertisedExtensions = append(testClient.advertisedExtensions, "concatenation")
+			When("locations list is empty", func() {
+				DescribeTable("should return error without making a request",
+					func(locations []string) {
+						testClient.advertisedExtensions = append(testClient.advertisedExtensions, "concatenation")
+						testClient.DoRequest = spy.DoRequest
 
-					f, err := testClient.ConcatenateUploads(nil, nil)
-					Ω(err).Should(MatchError("partial uploads list is empty"))
-					Ω(f).Should(Equal(Upload{}))
-				})
+						loc, err := testClient.ConcatenatePartialUploads(locations, nil)
+						Ω(err).Should(MatchError("locations list is empty"))
+						Ω(loc).Should(BeEmpty())
+						Ω(spy.calls).Should(BeEmpty())
+					},
+					Entry("nil", nil),
+					Entry("empty slice", []string{}),
+				)
 			})
-			When("no concatenation extension", func() {
+			When("no concatenation extensions", func() {
 				It("should return error", func() {
-					f1 := Upload{Location: "/foo/bar", RemoteSize: 256, RemoteOffset: 256, Partial: true}
-					f2 := Upload{Location: "/foo/baz", RemoteSize: 512, RemoteOffset: 512, Partial: true}
-
-					f, err := testClient.ConcatenateUploads([]Upload{f1, f2}, nil)
+					loc, err := testClient.ConcatenatePartialUploads([]string{"/foo/bar", "/foo/baz"}, nil)
 					Ω(tErrResponse(err)).Should(BeNil())
-					Ω(err).Should(MatchError(ContainSubstring("unsupported feature: concatenation")))
-					Ω(f).Should(Equal(Upload{}))
-				})
-			})
-			When("some uploads are not partial", func() {
-				It("should return error", func() {
-					testClient.advertisedExtensions = append(testClient.advertisedExtensions, "concatenation")
-					f1 := Upload{Location: "/foo/bar", RemoteSize: 256, RemoteOffset: 256, Partial: true}
-					f2 := Upload{Location: "/foo/baz", RemoteSize: 512, RemoteOffset: 512, Partial: false}
-					f3 := Upload{Location: "/foo/baa", RemoteSize: 512, RemoteOffset: 512, Partial: true}
-
-					f, err := testClient.ConcatenateUploads([]Upload{f1, f2, f3}, nil)
-					Ω(tErrResponse(err)).Should(BeNil())
-					Ω(err).Should(MatchError(ContainSubstring("upload \"/foo/baz\" is not partial")))
-					Ω(f).Should(Equal(Upload{}))
+					Ω(err).Should(And(
+						MatchError(ErrUnsupportedFeature),
+						MatchError(ContainSubstring("either concatenation or concatenation-unfinished")),
+					))
+					Ω(loc).Should(BeEmpty())
 				})
 			})
 			When("http error or unexpected code", func() {
@@ -1145,16 +1140,14 @@ var _ = Describe("Client", func() {
 						srvMock.AddMocks(tRequest(http.MethodPost, "/", eh).
 							Header("Upload-Concat", expect.ToEqual("final;/foo/bar /foo/baz")).
 							Reply(reply.Status(status)))
-						f1 := Upload{Location: "/foo/bar", RemoteSize: 256, RemoteOffset: 256, Partial: true}
-						f2 := Upload{Location: "/foo/baz", RemoteSize: 512, RemoteOffset: 512, Partial: true}
 
-						f, err := testClient.ConcatenateUploads([]Upload{f1, f2}, nil)
+						loc, err := testClient.ConcatenatePartialUploads([]string{"/foo/bar", "/foo/baz"}, nil)
 						Ω(tErrResponse(err)).Should(HaveHTTPStatus(status))
 						Ω(err).Should(And(
 							MatchError(expectErr),
 							MatchError(ContainSubstring(expectErrMsg)),
 						))
-						Ω(f).Should(Equal(Upload{}))
+						Ω(loc).Should(BeEmpty())
 					},
 					Entry("404", http.StatusNotFound, ErrUploadDoesNotExist, "upload does not exist (HTTP 404;"),
 					Entry("410", http.StatusGone, ErrUploadDoesNotExist, "upload does not exist (HTTP 410;"),
@@ -1162,119 +1155,6 @@ var _ = Describe("Client", func() {
 					Entry("400", http.StatusBadRequest, ErrUnexpectedResponse, "unexpected HTTP response code (HTTP 400;"),
 					Entry("200", http.StatusOK, ErrUnexpectedResponse, "unexpected HTTP response code (HTTP 200;"),
 				)
-			})
-		})
-	})
-	Context("ConcatenateStreams", func() {
-		Context("happy path", func() {
-			BeforeEach(func() {
-				testClient.advertisedExtensions = append(testClient.advertisedExtensions, "concatenation", "concatenation-unfinished")
-			})
-			It("should send the request via DoRequest along with ExtraHeaders", func() {
-				eh := []string{"Upload-Defer-Length", "Upload-Length", "Upload-Metadata", "Upload-Checksum", "Upload-Offset"}
-				srvMock.AddMocks(tRequest(http.MethodPost, "/", eh).
-					Header("X-Custom", expect.ToEqual("custom")).
-					Header("X-Extra", expect.ToEqual("extra")).
-					Header("Upload-Concat", expect.ToEqual("final;/foo/bar /foo/baz")).
-					Reply(tReply(reply.Created()).Header("Location", "/foo/bar/baz")),
-				)
-				testClient.DoRequest = spy.DoRequest
-				testClient.ExtraHeaders = extraHeaders
-				f1 := Upload{Location: "/foo/bar", RemoteSize: 256, RemoteOffset: 256, Partial: true}
-				s1 := NewUploadStream(testClient, &f1)
-				f2 := Upload{Location: "/foo/baz", RemoteSize: 512, RemoteOffset: 512, Partial: true}
-				s2 := NewUploadStream(testClient, &f2)
-
-				f, err := testClient.ConcatenateStreams([]*UploadStream{s1, s2}, nil)
-				Ω(err).Should(Succeed())
-				Ω(spy.calls).Should(Equal([]doRequestCall{{http.MethodPost, srvMock.URL()}}))
-				Ω(f).Should(Equal(Upload{Location: "/foo/bar/baz"}))
-			})
-			It("should send ExtraHeaders and leave them untouched", func() {
-				eh := []string{"Upload-Defer-Length", "Upload-Length", "Upload-Metadata", "Upload-Checksum", "Upload-Offset"}
-				srvMock.AddMocks(tRequest(http.MethodPost, "/", eh).
-					Header("X-Extra", expect.ToEqual("extra")).
-					Header("Upload-Concat", expect.ToEqual("final;/foo/bar /foo/baz")).
-					Reply(tReply(reply.Created()).Header("Location", "/foo/bar/baz")),
-				)
-				testClient.ExtraHeaders = extraHeaders
-				f1 := Upload{Location: "/foo/bar", RemoteSize: 256, RemoteOffset: 256, Partial: true}
-				s1 := NewUploadStream(testClient, &f1)
-				f2 := Upload{Location: "/foo/baz", RemoteSize: 512, RemoteOffset: 512, Partial: true}
-				s2 := NewUploadStream(testClient, &f2)
-
-				f, err := testClient.ConcatenateStreams([]*UploadStream{s1, s2}, nil)
-				Ω(err).Should(Succeed())
-				Ω(testClient.ExtraHeaders).Should(Equal(http.Header{"X-Extra": {"extra"}}))
-				Ω(f).Should(Equal(Upload{Location: "/foo/bar/baz"}))
-			})
-			Specify("all streams are finished", func() {
-				eh := []string{"Upload-Defer-Length", "Upload-Length", "Upload-Metadata", "Upload-Checksum", "Upload-Offset"}
-				srvMock.AddMocks(tRequest(http.MethodPost, "/", eh).
-					Header("Upload-Concat", expect.ToEqual("final;/foo/bar /foo/baz")).
-					Reply(tReply(reply.Created()).Header("Location", "/foo/bar/baz")),
-				)
-				f1 := Upload{Location: "/foo/bar", RemoteSize: 256, RemoteOffset: 256, Partial: true}
-				s1 := NewUploadStream(testClient, &f1)
-				f2 := Upload{Location: "/foo/baz", RemoteSize: 512, RemoteOffset: 512, Partial: true}
-				s2 := NewUploadStream(testClient, &f2)
-
-				f, err := testClient.ConcatenateStreams([]*UploadStream{s1, s2}, nil)
-				Ω(err).Should(Succeed())
-				Ω(f).Should(Equal(Upload{
-					Location: "/foo/bar/baz",
-					Partial:  false,
-				}))
-			})
-			Specify("some streams are not finished", func() {
-				eh := []string{"Upload-Defer-Length", "Upload-Length", "Upload-Metadata", "Upload-Checksum", "Upload-Offset"}
-				srvMock.AddMocks(tRequest(http.MethodPost, "/", eh).
-					Header("Upload-Concat", expect.ToEqual("final;/foo/bar /foo/baz")).
-					Reply(tReply(reply.Created()).Header("Location", "/foo/bar/baz")),
-				)
-				f1 := Upload{Location: "/foo/bar", RemoteSize: 256, RemoteOffset: 64, Partial: true}
-				s1 := NewUploadStream(testClient, &f1)
-				f2 := Upload{Location: "/foo/baz", RemoteSize: 512, RemoteOffset: 128, Partial: true}
-				s2 := NewUploadStream(testClient, &f2)
-
-				f, err := testClient.ConcatenateStreams([]*UploadStream{s1, s2}, nil)
-				Ω(err).Should(Succeed())
-				Ω(f).Should(Equal(Upload{
-					Location: "/foo/bar/baz",
-					Partial:  false,
-				}))
-			})
-		})
-		Context("error path", func() {
-			When("streams list is empty", func() {
-				DescribeTable("should return error without making a request",
-					func(streams []*UploadStream) {
-						testClient.advertisedExtensions = append(testClient.advertisedExtensions, "concatenation", "concatenation-unfinished")
-						testClient.DoRequest = spy.DoRequest
-
-						f, err := testClient.ConcatenateStreams(streams, nil)
-						Ω(err).Should(MatchError("streams list is empty"))
-						Ω(f).Should(Equal(Upload{}))
-						Ω(spy.calls).Should(BeEmpty())
-					},
-					Entry("nil", nil),
-					Entry("empty slice", []*UploadStream{}),
-				)
-			})
-			When("some streams are not finished and no 'concatenation-unfinished' extension", func() {
-				It("should return error", func() {
-					testClient.advertisedExtensions = append(testClient.advertisedExtensions, "concatenation")
-					f1 := Upload{Location: "/foo/bar", RemoteSize: 256, RemoteOffset: 64, Partial: true}
-					s1 := NewUploadStream(testClient, &f1)
-					f2 := Upload{Location: "/foo/baz", RemoteSize: 512, RemoteOffset: 128, Partial: true}
-					s2 := NewUploadStream(testClient, &f2)
-
-					_, err := testClient.ConcatenateStreams([]*UploadStream{s1, s2}, nil)
-					Ω(tErrResponse(err)).Should(BeNil())
-					Ω(err).Should(And(
-						MatchError(ErrUnsupportedFeature), MatchError(ContainSubstring("unsupported feature: concatenation-unfinished")),
-					))
-				})
 			})
 		})
 	})

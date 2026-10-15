@@ -229,9 +229,11 @@ func (c *Client) CreateUploadWithData(data []byte, remoteSize int64, partial boo
 		return 0, res, err
 	}
 
-	s := NewUploadStream(c, &res)
+	s, err := NewUploadStream(c, res)
+	if err != nil {
+		return 0, res, fmt.Errorf("create upload stream: %w", err)
+	}
 	s.ChunkSize = int64(len(data)) // Data must be uploaded in one request as single chunk
-	s.uploadMethod = http.MethodPost
 	headers := map[string]string{"Upload-Length": strconv.Itoa(int(remoteSize)), "Upload-Offset": ""}
 	if partial {
 		headers["Upload-Concat"] = "partial"
@@ -247,11 +249,12 @@ func (c *Client) CreateUploadWithData(data []byte, remoteSize int64, partial boo
 	res.Partial = partial
 	res.Metadata = metadata
 
-	uploadedBytes, resp, err := s.doRequest(c.endpoint.String(), data, nil, headers) // Upload in one request
+	uploadedBytes, expires, resp, err := s.doRequest(http.MethodPost, c.endpoint.String(), data, nil, 0, headers) // Upload in one request
 	res.RemoteOffset = uploadedBytes
+	res.UploadExpired = expires
 	defer closeResponseBody(resp)
 	if err != nil {
-		return uploadedBytes, res, fmt.Errorf("tus request: %w", err)
+		return uploadedBytes, res, fmt.Errorf("request: %w", err)
 	}
 	res.Location = resp.Header.Get("Location")
 
@@ -300,39 +303,48 @@ func (c *Client) DeleteUpload(location string) error {
 	return newTusError(ErrUnexpectedResponse, resp, nil)
 }
 
-// ConcatenateUploads requests the server to concatenate the *finished* "partial" uploads into a single final
-// upload, which is returned from method. Optional metadata is attached to the final upload.
-// The server must advertise the "concatenation" extension.
+// ConcatenatePartialUploads creates a "final" upload whose data is the concatenation of the "partial" uploads at
+// partialLocations, in the given order, and returns its location. The optional metadata is attached to the final
+// upload. The metadata of the partial uploads, if any, is discarded. The final upload does not accept any data.
 //
-// The partial uploads are concatenated in the order they are given.
-func (c *Client) ConcatenateUploads(partials []Upload, metadata map[string]string) (Upload, error) {
-	var res Upload
-
-	if len(partials) == 0 {
-		return res, fmt.Errorf("partial uploads list is empty")
+// Partial uploads are typically used to transfer the data in parallel. The approach is following: create several
+// "partial" uploads on the server, transfer in parallel the data split by chunks equal to these uploads,
+// and then concatenate them into a single "final" upload.
+//
+// The same "partial" upload may be used in multiple concatenations and may be used multiple times in the same
+// concatenation. Also, the server may delete the partial uploads after the concatenation. All of this depends
+// on server settings.
+//
+// If all partial uploads are full, the server may start the concatenation immediately. In this case, only
+// the "concatenation" extension is required to be advertised by the server.
+//
+// If transferring to any of the partial uploads is unfinished, the server starts the concatenation automatically
+// once all of them are finished. In this case, the server must advertise the "concatenation-unfinished" extension.
+//
+// If server does not support "concatenation" nor "concatenation-unfinished" extension, the method returns [ErrUnsupportedFeature].
+//
+// The method returns [ErrUploadDoesNotExist] if any of the partial uploads has not been found on the server.
+func (c *Client) ConcatenatePartialUploads(partialLocations []string, metadata map[string]string) (string, error) {
+	if len(partialLocations) == 0 {
+		return "", fmt.Errorf("locations list is empty")
 	}
-	if err := c.ensureExtension("concatenation"); err != nil {
-		return res, err
+
+	err1 := c.ensureExtension("concatenation")
+	err2 := c.ensureExtension("concatenation-unfinished")
+	if err1 != nil && err2 != nil {
+		return "", newTusError(ErrUnsupportedFeature, nil, fmt.Errorf("server should support either concatenation or concatenation-unfinished extension"))
 	}
 
 	req, err := c.createRequest(http.MethodPost, c.endpoint.String())
 	if err != nil {
-		return res, fmt.Errorf("create request: %w", err)
+		return "", fmt.Errorf("create request: %w", err)
 	}
 
-	locations := make([]string, 0)
-	for _, f := range partials {
-		if !f.Partial {
-			return res, fmt.Errorf("upload %q is not partial", f.Location)
-		}
-		locations = append(locations, f.Location)
-	}
-	req.Header.Set("Upload-Concat", "final;"+strings.Join(locations, " "))
-
+	req.Header.Set("Upload-Concat", "final;"+strings.Join(partialLocations, " "))
 	if len(metadata) > 0 {
 		m, err := EncodeMetadata(metadata)
 		if err != nil {
-			return res, fmt.Errorf("encode metadata: %w", err)
+			return "", fmt.Errorf("encode metadata: %w", err)
 		}
 		req.Header.Set("Upload-Metadata", m)
 	}
@@ -340,44 +352,21 @@ func (c *Client) ConcatenateUploads(partials []Upload, metadata map[string]strin
 	resp, err := c.tusRequest(req)
 	defer closeResponseBody(resp)
 	if err != nil {
-		return res, fmt.Errorf("tus request: %w", err)
+		return "", fmt.Errorf("tus request: %w", err)
 	}
 
 	switch resp.StatusCode {
 	case http.StatusCreated:
-		res.Location = resp.Header.Get("Location")
-		res.Metadata = metadata
-		return res, nil
-	case http.StatusNotFound, http.StatusGone:
-		return res, newTusError(ErrUploadDoesNotExist, resp, nil)
-	}
-
-	return res, newTusError(ErrUnexpectedResponse, resp, nil)
-}
-
-// ConcatenateStreams requests the server to concatenate the streams, finished or not, into a single final upload,
-// which is returned from the method. Optional metadata is attached to the final upload.
-//
-// If all streams are finished at the moment, then functions the same as [Client.ConcatenateUploads].
-//
-// If some streams are unfinished, the server is asked to concatenate them automatically once they will be finished.
-// The server must advertise the "concatenation-unfinished" extension for that.
-func (c *Client) ConcatenateStreams(streams []*UploadStream, metadata map[string]string) (Upload, error) {
-	if len(streams) == 0 {
-		return Upload{}, fmt.Errorf("streams list is empty")
-	}
-
-	uploads := make([]Upload, 0)
-	for i, s := range streams {
-		if s.Tell() < s.Len() {
-			if err := c.ensureExtension("concatenation-unfinished"); err != nil {
-				return Upload{}, fmt.Errorf("stream #%d is not finished: %w", i, err)
-			}
+		location := resp.Header.Get("Location")
+		if location == "" {
+			return "", newTusError(ErrProtocol, resp, errors.New("empty location header"))
 		}
-		uploads = append(uploads, *s.Upload)
+		return location, nil
+	case http.StatusNotFound, http.StatusGone:
+		return "", newTusError(ErrUploadDoesNotExist, resp, nil)
 	}
 
-	return c.ConcatenateUploads(uploads, metadata)
+	return "", newTusError(ErrUnexpectedResponse, resp, nil)
 }
 
 // FetchCapabilities queries the server for its capabilities. See [ServerCapabilities] for the details.

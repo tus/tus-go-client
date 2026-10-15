@@ -18,16 +18,17 @@ var _ = Describe("Fault recovery", func() {
 
 	var data []byte
 
-	// setup starts the server with the given middleware and creates an upload of dataSize on it.
-	setup := func(mw middleware) (*tusServer, *tusgo.UploadStream) {
+	// setup starts the server with the given middleware, creates an upload of dataSize on it and returns the stream
+	// for the upload and its location.
+	setup := func(mw middleware) (*tusServer, *tusgo.UploadStream, string) {
 		GinkgoHelper()
 		srv := startServer(nil, mw)
 		cl := srv.NewClient()
 		u, err := cl.CreateUpload(dataSize, false, nil)
 		Expect(err).NotTo(HaveOccurred())
-		s := tusgo.NewUploadStream(cl, &u)
+		s := newStream(cl, u)
 		s.ChunkSize = chunkSize
-		return srv, s
+		return srv, s, u.Location
 	}
 
 	BeforeEach(func() {
@@ -38,17 +39,17 @@ var _ = Describe("Fault recovery", func() {
 		It("should resend the rest of the chunk in chunked mode", func() {
 			patches := &requestCounter{method: http.MethodPatch}
 			fault := injectFault(http.MethodPatch, 3, acceptOnly(chunkSize/3))
-			srv, s := setup(func(next http.Handler) http.Handler { return patches.Middleware(fault(next)) })
+			srv, s, loc := setup(func(next http.Handler) http.Handler { return patches.Middleware(fault(next)) })
 
 			_, err := io.Copy(s, readerOnly(bytes.NewReader(data)))
 
 			Expect(err).NotTo(HaveOccurred())
-			Expect(srv.StoredData(*s.Upload)).To(Equal(data))
+			Expect(srv.StoredData(loc)).To(Equal(data))
 			Expect(patches.count.Load()).To(BeEquivalentTo(dataSize/chunkSize + 1))
 		})
 
 		It("should return io.ErrShortWrite in not chunked mode and resume after Sync", func() {
-			srv, s := setup(injectFault(http.MethodPatch, 1, acceptOnly(dataSize/3)))
+			srv, s, loc := setup(injectFault(http.MethodPatch, 1, acceptOnly(dataSize/3)))
 			s.ChunkSize = tusgo.NoChunked
 			src := bytes.NewReader(data)
 
@@ -63,13 +64,13 @@ var _ = Describe("Fault recovery", func() {
 			_, err = io.Copy(s, src)
 
 			Expect(err).NotTo(HaveOccurred())
-			Expect(srv.StoredData(*s.Upload)).To(Equal(data))
+			Expect(srv.StoredData(loc)).To(Equal(data))
 		})
 	})
 
 	Context("connection breaks after the server has committed the chunk", func() {
 		It("should report the offsets out of sync on ReadFrom retry and resume after Sync", func() {
-			srv, s := setup(injectFault(http.MethodPatch, 3, dropResponse()))
+			srv, s, loc := setup(injectFault(http.MethodPatch, 3, dropResponse()))
 			src := bytes.NewReader(data)
 
 			_, err := io.Copy(s, readerOnly(src))
@@ -90,11 +91,11 @@ var _ = Describe("Fault recovery", func() {
 			_, err = io.Copy(s, src)
 
 			Expect(err).NotTo(HaveOccurred())
-			Expect(srv.StoredData(*s.Upload)).To(Equal(data))
+			Expect(srv.StoredData(loc)).To(Equal(data))
 		})
 
 		It("should report the offsets out of sync on Write retry and resume after Sync", func() {
-			srv, s := setup(injectFault(http.MethodPatch, 3, dropResponse()))
+			srv, s, loc := setup(injectFault(http.MethodPatch, 3, dropResponse()))
 
 			n, err := s.Write(data)
 			Expect(err).To(HaveOccurred())
@@ -110,7 +111,7 @@ var _ = Describe("Fault recovery", func() {
 			_, err = s.Write(data[s.Tell():])
 
 			Expect(err).NotTo(HaveOccurred())
-			Expect(srv.StoredData(*s.Upload)).To(Equal(data))
+			Expect(srv.StoredData(loc)).To(Equal(data))
 		})
 	})
 })

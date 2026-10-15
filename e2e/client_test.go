@@ -51,7 +51,7 @@ var _ = Describe("Client", func() {
 			Expect(err).NotTo(HaveOccurred())
 			u.Partial = true
 
-			_, err = cl.ConcatenateUploads([]tusgo.Upload{u}, nil)
+			_, err = cl.ConcatenatePartialUploads([]string{u.Location}, nil)
 
 			Expect(err).To(MatchError(tusgo.ErrUnsupportedFeature))
 		})
@@ -79,7 +79,7 @@ var _ = Describe("Client", func() {
 
 			u, err := cl.CreateUpload(1000, false, nil)
 			Expect(err).NotTo(HaveOccurred())
-			s := tusgo.NewUploadStream(cl, &u)
+			s := newStream(cl, u)
 			Expect(s.Sync()).To(Succeed())
 			_, err = s.Write(randomData(1000))
 
@@ -99,7 +99,7 @@ var _ = Describe("Client", func() {
 			streamCl.DoRequest = func(req *http.Request) (*http.Response, error) {
 				return srv.Client().Do(req.WithContext(ctx))
 			}
-			_, err = tusgo.NewUploadStream(streamCl, &u).Write(randomData(1000))
+			_, err = newStream(streamCl, u).Write(randomData(1000))
 
 			Expect(err).To(MatchError(context.Canceled))
 			got, err := cl.GetUpload(u.Location)
@@ -203,7 +203,7 @@ var _ = Describe("Client", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(n).To(BeEquivalentTo(len(data)))
 			Expect(u.RemoteOffset).To(BeEquivalentTo(len(data)))
-			Expect(srv.StoredData(u)).To(Equal(data))
+			Expect(srv.StoredData(u.Location)).To(Equal(data))
 			got, err := cl.GetUpload(u.Location)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(got.RemoteOffset).To(BeEquivalentTo(len(data)))
@@ -215,11 +215,11 @@ var _ = Describe("Client", func() {
 
 			_, u, err := cl.CreateUploadWithData(data[:300], int64(len(data)), false, nil)
 			Expect(err).NotTo(HaveOccurred())
-			s := tusgo.NewUploadStream(cl, &u)
+			s := newStream(cl, u)
 			_, err = io.Copy(s, bytes.NewReader(data[s.Tell():]))
 
 			Expect(err).NotTo(HaveOccurred())
-			Expect(srv.StoredData(u)).To(Equal(data))
+			Expect(srv.StoredData(u.Location)).To(Equal(data))
 		})
 	})
 })
