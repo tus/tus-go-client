@@ -1,7 +1,7 @@
 package tusgo
 
 import (
-	"context"
+	"errors"
 	"io"
 	"math/rand"
 	"net/http"
@@ -9,11 +9,12 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	"github.com/onsi/gomega/types"
 	"github.com/vitorsalgado/mocha/v3"
 	"github.com/vitorsalgado/mocha/v3/expect"
 	"github.com/vitorsalgado/mocha/v3/reply"
@@ -33,51 +34,94 @@ func tReply(startReply *reply.StdReply) *reply.StdReply {
 	return startReply.Header("Tus-Resumable", "1.0.0")
 }
 
-// closeTrackingBody wraps a response body and records whether it was closed
-type closeTrackingBody struct {
-	io.ReadCloser
-	closed bool
-}
-
-func (b *closeTrackingBody) Close() error {
-	b.closed = true
-	return b.ReadCloser.Close()
-}
-
-// closeTrackingTransport replaces each response body with closeTrackingBody and remembers the last one
-type closeTrackingTransport struct {
-	lastBody *closeTrackingBody
-}
-
-func (t *closeTrackingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	resp, err := http.DefaultTransport.RoundTrip(req)
-	if err != nil {
-		return nil, err
+// tErrResponse returns the response kept by the TusError found in err chain, or nil
+func tErrResponse(err error) *http.Response {
+	var te TusError
+	if errors.As(err, &te) {
+		return te.Response()
 	}
-	t.lastBody = &closeTrackingBody{ReadCloser: resp.Body}
-	resp.Body = t.lastBody
-	return resp, nil
+	return nil
 }
 
-type getRequestCall struct {
-	method    string
-	url       string
-	tusClient *Client
+// countingTransport counts the requests made through it
+type countingTransport struct {
+	requests int
 }
 
-// getRequestSpy provides a GetRequestFunc that records its calls and sets the X-Custom header in every request
-type getRequestSpy struct {
-	calls []getRequestCall
+func (t *countingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	t.requests++
+	return http.DefaultTransport.RoundTrip(req)
 }
 
-func (s *getRequestSpy) GetRequest(method, url string, body io.Reader, tusClient *Client, _ *http.Client) (*http.Request, error) {
-	s.calls = append(s.calls, getRequestCall{method: method, url: url, tusClient: tusClient})
-	req, err := http.NewRequest(method, url, body)
-	if err != nil {
-		return nil, err
-	}
+// doRequestCounter provides a DoRequestFunc that counts its calls, safe for concurrent use
+type doRequestCounter struct {
+	requests atomic.Int32
+}
+
+func (c *doRequestCounter) DoRequest(req *http.Request) (*http.Response, error) {
+	c.requests.Add(1)
+	return http.DefaultClient.Do(req)
+}
+
+type doRequestCall struct {
+	method string
+	url    string
+}
+
+// doRequestSpy provides a DoRequestFunc that records its calls and sets the X-Custom header in every request
+type doRequestSpy struct {
+	calls []doRequestCall
+}
+
+func (s *doRequestSpy) DoRequest(req *http.Request) (*http.Response, error) {
+	s.calls = append(s.calls, doRequestCall{method: req.Method, url: req.URL.String()})
 	req.Header.Set("X-Custom", "custom")
-	return req, nil
+	return http.DefaultClient.Do(req)
+}
+
+// fakeResponder provides a DoRequestFunc that replies with the given status, headers and body without making a real
+// request, and records the response bodies to check whether they have been closed
+type fakeResponder struct {
+	status int
+	header http.Header
+	body   string
+	bodies []*closeTrackingBody
+}
+
+func (f *fakeResponder) DoRequest(req *http.Request) (*http.Response, error) {
+	if req.Body != nil {
+		_, _ = io.Copy(io.Discard, req.Body)
+	}
+	b := &closeTrackingBody{Reader: strings.NewReader(f.body)}
+	f.bodies = append(f.bodies, b)
+	return &http.Response{StatusCode: f.status, Header: f.header.Clone(), Body: b, ContentLength: int64(len(f.body)), Request: req}, nil
+}
+
+// tExpectBodyKeptInError makes the client reply to the request made in call with a fake response with body, and checks
+// that the returned error is expectErr, the response kept by the error contains the body, and the original body is closed
+func tExpectBodyKeptInError(c *Client, status int, header http.Header, expectErr error, call func() error) {
+	GinkgoHelper()
+	responder := &fakeResponder{status: status, header: header, body: "server says"}
+	c.DoRequest = responder.DoRequest
+
+	err := call()
+	Ω(err).Should(MatchError(expectErr))
+	Ω(err).ShouldNot(MatchError(ContainSubstring("read response body")))
+	Ω(tErrResponse(err)).Should(And(HaveHTTPStatus(status), HaveHTTPBody([]byte("server says"))))
+	Ω(responder.bodies).Should(HaveLen(1))
+	Ω(responder.bodies[0].closed).Should(BeTrue())
+}
+
+// tExpectBodyClosed makes the client reply to the request made in call with a fake successful response with body, and
+// checks that call succeeds and the body is closed
+func tExpectBodyClosed(c *Client, status int, header http.Header, call func() error) {
+	GinkgoHelper()
+	responder := &fakeResponder{status: status, header: header, body: "server says"}
+	c.DoRequest = responder.DoRequest
+
+	Ω(call()).Should(Succeed())
+	Ω(responder.bodies).Should(HaveLen(1))
+	Ω(responder.bodies[0].closed).Should(BeTrue())
 }
 
 var _ = Describe("Client", func() {
@@ -85,19 +129,17 @@ var _ = Describe("Client", func() {
 	var testURL *url.URL
 	var srvMock *mocha.Mocha
 	var tusHeaders []string
-	var spy *getRequestSpy
+	var spy *doRequestSpy
 	var extraHeaders http.Header
 
 	BeforeEach(func() {
 		srvMock = mocha.New(GinkgoT())
 		srvMock.Start()
 		testURL, _ = url.Parse(srvMock.URL())
-		testClient = NewClient(http.DefaultClient, testURL)
-		testClient.Capabilities = &ServerCapabilities{
-			ProtocolVersions: []string{"1.0.0"},
-		}
+		testClient = NewClient(testURL)
+		testClient.advertisedExtensions = []string{}
 		tusHeaders = []string{"Upload-Concat", "Upload-Defer-Length", "Upload-Length", "Upload-Metadata", "Upload-Checksum", "Upload-Offset"}
-		spy = &getRequestSpy{}
+		spy = &doRequestSpy{}
 		extraHeaders = http.Header{"X-Extra": {"extra"}}
 	})
 	AfterEach(func() {
@@ -109,19 +151,13 @@ var _ = Describe("Client", func() {
 	Context("NewClient", func() {
 		It("should correct set initial values", func() {
 			Ω(testClient.ProtocolVersion).Should(Equal("1.0.0"))
-			Ω(testClient.GetRequest).Should(BeNil())
+			Ω(testClient.DoRequest).Should(BeNil())
+			Ω(testClient.Client).Should(BeNil())
 			Ω(testClient.ExtraHeaders).Should(Equal(http.Header{}))
-			Ω(testClient.BaseURL).Should(Equal(testURL))
-			Ω(testClient.ctx).Should(BeNil())
+			Ω(testClient.endpoint).Should(Equal(testURL))
 		})
-	})
-	Context("WithContext", func() {
-		It("should set context and return a copy of Client", func() {
-			ctx := context.Background()
-			res := testClient.WithContext(ctx)
-
-			Ω(res).ShouldNot(BeIdenticalTo(testClient))
-			Ω(res.ctx).Should(Equal(ctx))
+		It("should panic if endpoint is nil", func() {
+			Ω(func() { NewClient(nil) }).Should(PanicWith("endpoint is nil"))
 		})
 	})
 	Context("tusRequest", func() {
@@ -130,7 +166,7 @@ var _ = Describe("Client", func() {
 				srvMock.AddMocks(tRequest(http.MethodGet, "/foo", tusHeaders).Reply(tReply(reply.OK()).Body([]byte("test"))))
 				req, err := http.NewRequest(http.MethodGet, srvMock.URL()+"/foo", nil)
 				Ω(err).Should(Succeed())
-				resp, err := testClient.tusRequest(context.Background(), req)
+				resp, err := testClient.tusRequest(req)
 				Ω(err).Should(Succeed())
 				Ω(resp).ShouldNot(BeNil())
 				Ω(resp).Should(HaveHTTPBody([]byte("test")))
@@ -145,72 +181,105 @@ var _ = Describe("Client", func() {
 					req, err := http.NewRequest(http.MethodOptions, srvMock.URL()+"/foo", nil)
 					Ω(err).Should(Succeed())
 
-					Ω(testClient.tusRequest(context.Background(), req)).ShouldNot(BeNil())
+					Ω(testClient.tusRequest(req)).ShouldNot(BeNil())
 				})
 			})
-			It("should use context", func() {
-				ctx, cancel := context.WithCancel(context.Background())
-				cancel()
+			It("should keep Tus-Resumable header if it is already set", func() {
+				srvMock.AddMocks(mocha.Request().
+					URL(expect.URLPath("/foo")).Method(http.MethodGet).
+					Header("Tus-Resumable", expect.ToEqual("0.2.2")).
+					Reply(tReply(reply.OK())),
+				)
+				req, err := http.NewRequest(http.MethodGet, srvMock.URL()+"/foo", nil)
+				Ω(err).Should(Succeed())
+				req.Header.Set("Tus-Resumable", "0.2.2")
+
+				Ω(testClient.tusRequest(req)).ShouldNot(BeNil())
+			})
+			It("should use http.DefaultClient if neither DoRequest nor Client is set", func() {
+				srvMock.AddMocks(tRequest(http.MethodGet, "/foo", tusHeaders).Reply(tReply(reply.OK())))
 				req, err := http.NewRequest(http.MethodGet, srvMock.URL()+"/foo", nil)
 				Ω(err).Should(Succeed())
 
-				_, err = testClient.tusRequest(ctx, req)
-				Ω(err).Should(MatchError(context.Canceled))
+				Ω(testClient.tusRequest(req)).Should(HaveHTTPStatus(http.StatusOK))
 			})
-			DescribeTable("should read the body into returned response and close the original body",
-				func(status int, errMatcher types.GomegaMatcher) {
-					srvMock.AddMocks(tRequest(http.MethodGet, "/foo", tusHeaders).
-						Reply(tReply(reply.Status(status)).Body([]byte("test"))),
-					)
-					transport := &closeTrackingTransport{}
-					testClient = NewClient(&http.Client{Transport: transport}, testURL)
-					req, err := http.NewRequest(http.MethodGet, srvMock.URL()+"/foo", nil)
-					Ω(err).Should(Succeed())
+			It("should use Client if DoRequest is not set", func() {
+				srvMock.AddMocks(tRequest(http.MethodGet, "/foo", tusHeaders).Reply(tReply(reply.OK())))
+				transport := &countingTransport{}
+				testClient.Client = &http.Client{Transport: transport}
+				req, err := http.NewRequest(http.MethodGet, srvMock.URL()+"/foo", nil)
+				Ω(err).Should(Succeed())
 
-					resp, err := testClient.tusRequest(context.Background(), req)
-					Ω(err).Should(errMatcher)
-					Ω(resp).ShouldNot(BeNil())
-					Ω(transport.lastBody).ShouldNot(BeNil())
-					Ω(transport.lastBody.closed).Should(BeTrue())
-					Ω(resp.Body).ShouldNot(BeIdenticalTo(transport.lastBody))
-					Ω(resp).Should(HaveHTTPBody([]byte("test")))
-				},
-				Entry("200", http.StatusOK, Succeed()),
-				Entry("412", http.StatusPreconditionFailed, MatchError(ErrProtocol)),
-			)
+				Ω(testClient.tusRequest(req)).Should(HaveHTTPStatus(http.StatusOK))
+				Ω(transport.requests).Should(Equal(1))
+			})
+			It("should use DoRequest and ignore Client if both are set", func() {
+				srvMock.AddMocks(tRequest(http.MethodGet, "/foo", tusHeaders).
+					Header("X-Custom", expect.ToEqual("custom")).
+					Reply(tReply(reply.OK())),
+				)
+				transport := &countingTransport{}
+				testClient.Client = &http.Client{Transport: transport}
+				testClient.DoRequest = spy.DoRequest
+				req, err := http.NewRequest(http.MethodGet, srvMock.URL()+"/foo", nil)
+				Ω(err).Should(Succeed())
+
+				Ω(testClient.tusRequest(req)).Should(HaveHTTPStatus(http.StatusOK))
+				Ω(spy.calls).Should(Equal([]doRequestCall{{http.MethodGet, srvMock.URL() + "/foo"}}))
+				Ω(transport.requests).Should(Equal(0))
+			})
 		})
 		Context("error path", func() {
 			It("should process http 412 unknown versions", func() {
 				srvMock.AddMocks(tRequest(http.MethodGet, "/foo", tusHeaders).
 					Reply(reply.Status(http.StatusPreconditionFailed).
-						Header("Tus-Version", "1.0.1,0.9.0")),
+						Header("Tus-Version", "1.0.1,0.9.0").
+						Body([]byte("test"))),
 				)
 				req, err := http.NewRequest(http.MethodGet, srvMock.URL()+"/foo", nil)
 				Ω(err).Should(Succeed())
 
-				_, err = testClient.tusRequest(context.Background(), req)
+				_, err = testClient.tusRequest(req)
 				Ω(err).Should(And(
 					MatchError(ErrProtocol),
-					MatchError(ContainSubstring("protocol error: request protocol version \"1.0.0\", server supported versions are \"1.0.1,0.9.0\"")),
+					MatchError(ContainSubstring("protocol error (HTTP 412;")),
+					MatchError(ContainSubstring("server does not support protocol version \"1.0.0\", supported versions: 1.0.1,0.9.0")),
 				))
+				Ω(tErrResponse(err)).Should(And(HaveHTTPStatus(http.StatusPreconditionFailed), HaveHTTPBody([]byte("test"))))
+			})
+			It("should return error returned by DoRequest", func() {
+				doErr := errors.New("boom")
+				testClient.DoRequest = func(*http.Request) (*http.Response, error) { return nil, doErr }
+				req, err := http.NewRequest(http.MethodGet, srvMock.URL()+"/foo", nil)
+				Ω(err).Should(Succeed())
+
+				resp, err := testClient.tusRequest(req)
+				Ω(err).Should(MatchError(doErr))
+				Ω(resp).Should(BeNil())
 			})
 		})
 	})
 	Context("GetUpload", func() {
 		Context("happy path", func() {
-			It("should use GetRequest and ignore ExtraHeaders", func() {
+			It("should close the response body", func() {
+				tExpectBodyClosed(testClient, http.StatusOK, http.Header{"Upload-Offset": {"0"}}, func() error {
+					_, err := testClient.GetUpload("/foo/bar")
+					return err
+				})
+			})
+			It("should send the request via DoRequest along with ExtraHeaders", func() {
 				srvMock.AddMocks(tRequest(http.MethodHead, "/foo/bar", tusHeaders).
 					Header("X-Custom", expect.ToEqual("custom")).
-					Header("X-Extra", expect.ToBeEmpty()).
+					Header("X-Extra", expect.ToEqual("extra")).
 					Reply(tReply(reply.OK()).
 						Header("Upload-Offset", "64")),
 				)
-				testClient.GetRequest = spy.GetRequest
+				testClient.DoRequest = spy.DoRequest
 				testClient.ExtraHeaders = extraHeaders
-				f := Upload{}
 
-				Ω(testClient.GetUpload(&f, "/foo/bar")).ShouldNot(BeNil())
-				Ω(spy.calls).Should(Equal([]getRequestCall{{http.MethodHead, srvMock.URL() + "/foo/bar", testClient}}))
+				f, err := testClient.GetUpload("/foo/bar")
+				Ω(err).Should(Succeed())
+				Ω(spy.calls).Should(Equal([]doRequestCall{{http.MethodHead, srvMock.URL() + "/foo/bar"}}))
 				Ω(f).Should(Equal(Upload{Location: "/foo/bar", RemoteOffset: 64}))
 			})
 			It("should send ExtraHeaders and leave them untouched", func() {
@@ -220,9 +289,9 @@ var _ = Describe("Client", func() {
 						Header("Upload-Offset", "64")),
 				)
 				testClient.ExtraHeaders = extraHeaders
-				f := Upload{}
 
-				Ω(testClient.GetUpload(&f, "/foo/bar")).ShouldNot(BeNil())
+				f, err := testClient.GetUpload("/foo/bar")
+				Ω(err).Should(Succeed())
 				Ω(testClient.ExtraHeaders).Should(Equal(http.Header{"X-Extra": {"extra"}}))
 				Ω(f).Should(Equal(Upload{Location: "/foo/bar", RemoteOffset: 64}))
 			})
@@ -232,9 +301,9 @@ var _ = Describe("Client", func() {
 						Reply(tReply(reply.OK()).
 							Header("Upload-Offset", "64")),
 					)
-					f := Upload{}
 
-					Ω(testClient.GetUpload(&f, "/foo/bar")).ShouldNot(BeNil())
+					f, err := testClient.GetUpload("/foo/bar")
+					Ω(err).Should(Succeed())
 					Ω(f).Should(Equal(Upload{
 						Location:     "/foo/bar",
 						RemoteOffset: 64,
@@ -242,24 +311,27 @@ var _ = Describe("Client", func() {
 				})
 			})
 			When("upload with metadata", func() {
-				It("should parse metadata", func() {
-					srvMock.AddMocks(tRequest(http.MethodHead, "/foo/bar", tusHeaders).
-						Reply(tReply(reply.OK()).
-							Header("Upload-Offset", "64").
-							Header("Upload-Metadata", "key1 dmFsdWUx,key2 Jl4lJCIJ")),
-					)
-					f := Upload{}
+				DescribeTable("should parse metadata",
+					func(metadata string, expectMetadata map[string]string) {
+						srvMock.AddMocks(tRequest(http.MethodHead, "/foo/bar", tusHeaders).
+							Reply(tReply(reply.OK()).
+								Header("Upload-Offset", "64").
+								Header("Upload-Metadata", metadata)),
+						)
 
-					Ω(testClient.GetUpload(&f, "/foo/bar")).ShouldNot(BeNil())
-					Ω(f).Should(Equal(Upload{
-						Location:     "/foo/bar",
-						RemoteOffset: 64,
-						Metadata: map[string]string{
-							"key1": "value1",
-							"key2": "&^%$\"\t",
-						},
-					}))
-				})
+						f, err := testClient.GetUpload("/foo/bar")
+						Ω(err).Should(Succeed())
+						Ω(f).Should(Equal(Upload{
+							Location:     "/foo/bar",
+							RemoteOffset: 64,
+							Metadata:     expectMetadata,
+						}))
+					},
+					Entry("items with values", "key1 dmFsdWUx,key2 Jl4lJCIJ",
+						map[string]string{"key1": "value1", "key2": "&^%$\"\t"}),
+					Entry("items with empty value, with or without the separating space", "key1 dmFsdWUx,key2 ,key3",
+						map[string]string{"key1": "value1", "key2": "", "key3": ""}),
+				)
 			})
 			When("partial upload", func() {
 				It("should get upload info", func() {
@@ -268,9 +340,9 @@ var _ = Describe("Client", func() {
 							Header("Upload-Concat", "partial").
 							Header("Upload-Offset", "64")),
 					)
-					f := Upload{}
 
-					Ω(testClient.GetUpload(&f, "/foo/bar")).ShouldNot(BeNil())
+					f, err := testClient.GetUpload("/foo/bar")
+					Ω(err).Should(Succeed())
 					Ω(f).Should(Equal(Upload{
 						Location:     "/foo/bar",
 						RemoteOffset: 64,
@@ -286,9 +358,9 @@ var _ = Describe("Client", func() {
 							Header("Upload-Offset", "64").
 							Header("Upload-Length", "1024")),
 					)
-					f := Upload{}
 
-					Ω(testClient.GetUpload(&f, "/foo/bar")).ShouldNot(BeNil())
+					f, err := testClient.GetUpload("/foo/bar")
+					Ω(err).Should(Succeed())
 					Ω(f).Should(Equal(Upload{
 						Location:     "/foo/bar",
 						RemoteOffset: 64,
@@ -303,9 +375,9 @@ var _ = Describe("Client", func() {
 								Header("Upload-Concat", "final").
 								Header("Upload-Length", "1024")),
 						)
-						f := Upload{}
 
-						Ω(testClient.GetUpload(&f, "/foo/bar")).ShouldNot(BeNil())
+						f, err := testClient.GetUpload("/foo/bar")
+						Ω(err).Should(Succeed())
 						Ω(f).Should(Equal(Upload{
 							Location:     "/foo/bar",
 							Partial:      false,
@@ -317,30 +389,33 @@ var _ = Describe("Client", func() {
 			})
 		})
 		Context("error path", func() {
-			When("f is nil", func() {
-				It("should panic", func() {
-					Ω(func() { _, _ = testClient.GetUpload(nil, "/foo/bar") }).Should(Panic())
-				})
-			})
+			DescribeTable("should keep the response body in the error and close the original body",
+				func(status int, header http.Header, expectErr error) {
+					tExpectBodyKeptInError(testClient, status, header, expectErr, func() error {
+						_, err := testClient.GetUpload("/foo/bar")
+						return err
+					})
+				},
+				Entry("http error", http.StatusNotFound, nil, ErrUploadDoesNotExist),
+				Entry("malformed header", http.StatusOK, http.Header{"Upload-Offset": {"asdf"}}, ErrProtocol),
+			)
 			When("http error or unexpected code", func() {
 				DescribeTable("should return error",
 					func(status int, expectErr error, expectMsg string) {
 						srvMock.AddMocks(tRequest(http.MethodHead, "/foo/bar", tusHeaders).Reply(reply.Status(status)))
-						f := Upload{}
 
-						resp, err := testClient.GetUpload(&f, "/foo/bar")
+						_, err := testClient.GetUpload("/foo/bar")
 						Ω(err).Should(And(
 							MatchError(expectErr),
-							MatchError(expectMsg),
+							MatchError(ContainSubstring(expectMsg)),
 						))
-						Ω(resp).ShouldNot(BeNil())
-						Ω(f).Should(Equal(Upload{}))
+						Ω(tErrResponse(err)).Should(HaveHTTPStatus(status))
 					},
-					Entry("404", http.StatusNotFound, ErrUploadDoesNotExist, "upload does not exist: HTTP 404: empty body"),
-					Entry("410", http.StatusGone, ErrUploadDoesNotExist, "upload does not exist: HTTP 410: empty body"),
-					Entry("403", http.StatusForbidden, ErrUploadDoesNotExist, "upload does not exist: HTTP 403: empty body"),
-					Entry("400", http.StatusBadRequest, ErrUnexpectedResponse, "unexpected HTTP response code: HTTP 400: empty body"),
-					Entry("201", http.StatusCreated, ErrUnexpectedResponse, "unexpected HTTP response code: HTTP 201: empty body"),
+					Entry("404", http.StatusNotFound, ErrUploadDoesNotExist, "upload does not exist (HTTP 404;"),
+					Entry("410", http.StatusGone, ErrUploadDoesNotExist, "upload does not exist (HTTP 410;"),
+					Entry("403", http.StatusForbidden, ErrUploadDoesNotExist, "upload does not exist (HTTP 403;"),
+					Entry("400", http.StatusBadRequest, ErrUnexpectedResponse, "unexpected HTTP response code (HTTP 400;"),
+					Entry("201", http.StatusCreated, ErrUnexpectedResponse, "unexpected HTTP response code (HTTP 201;"),
 				)
 			})
 			When("corrupted numeric header value", func() {
@@ -351,22 +426,20 @@ var _ = Describe("Client", func() {
 							r = r.Header(h, v)
 						}
 						srvMock.AddMocks(tRequest(http.MethodHead, "/foo/bar", tusHeaders).Reply(r))
-						f := Upload{}
 
-						resp, err := testClient.GetUpload(&f, "/foo/bar")
-						Ω(resp).ShouldNot(BeNil())
+						_, err := testClient.GetUpload("/foo/bar")
+						Ω(tErrResponse(err)).Should(HaveHTTPStatus(http.StatusOK))
 						Ω(err).Should(And(
 							MatchError(ErrProtocol),
-							MatchError("protocol error: cannot parse "+testHeader+" header \"asdf\": strconv.ParseInt: parsing \"asdf\": invalid syntax"),
+							MatchError(ContainSubstring(": parse "+testHeader+" header \"asdf\": strconv.ParseInt: parsing \"asdf\": invalid syntax")),
 						))
-						Ω(f).Should(Equal(Upload{}))
 					},
 					Entry("Upload-Offset", "Upload-Offset", map[string]string{"Upload-Offset": "asdf"}),
 					Entry("Upload-Length", "Upload-Length", map[string]string{"Upload-Length": "asdf", "Upload-Offset": "123"}),
 				)
 			})
 			When("corrupted metadata header value", func() {
-				DescribeTable("should return protocol error and leave upload untouched",
+				DescribeTable("should return protocol error",
 					func(metadata, expectMsg string) {
 						srvMock.AddMocks(tRequest(http.MethodHead, "/foo/bar", tusHeaders).
 							Reply(tReply(reply.OK()).
@@ -374,29 +447,15 @@ var _ = Describe("Client", func() {
 								Header("Upload-Length", "1024").
 								Header("Upload-Metadata", metadata)),
 						)
-						f := Upload{
-							Location:     "/old/location",
-							RemoteSize:   2048,
-							RemoteOffset: 128,
-							Metadata:     map[string]string{"key": "value"},
-							Partial:      true,
-						}
 
-						resp, err := testClient.GetUpload(&f, "/foo/bar")
-						Ω(resp).ShouldNot(BeNil())
+						_, err := testClient.GetUpload("/foo/bar")
+						Ω(tErrResponse(err)).Should(HaveHTTPStatus(http.StatusOK))
 						Ω(err).Should(And(
 							MatchError(ErrProtocol),
-							MatchError("protocol error: cannot parse Upload-Metadata header \""+metadata+"\": "+expectMsg),
+							MatchError(ContainSubstring(": parse Upload-Metadata header \""+metadata+"\": "+expectMsg)),
 						))
-						Ω(f).Should(Equal(Upload{
-							Location:     "/old/location",
-							RemoteSize:   2048,
-							RemoteOffset: 128,
-							Metadata:     map[string]string{"key": "value"},
-							Partial:      true,
-						}))
 					},
-					Entry("item without value", "key1 dmFsdWUx,key2", "metadata item \"key2\" has bad format"),
+					Entry("item without key", "key1 dmFsdWUx, dmFsdWUy", "metadata item \" dmFsdWUy\" has bad format"),
 					Entry("invalid base64 value", "key1 dmFsdWUx,key2 !!!!", "illegal base64 data at input byte 0"),
 				)
 			})
@@ -405,24 +464,30 @@ var _ = Describe("Client", func() {
 	Context("CreateUpload", func() {
 		Context("happy path", func() {
 			BeforeEach(func() {
-				testClient.Capabilities.Extensions = append(testClient.Capabilities.Extensions, "creation")
+				testClient.advertisedExtensions = append(testClient.advertisedExtensions, "creation")
 			})
-			It("should use GetRequest and ignore ExtraHeaders", func() {
+			It("should close the response body", func() {
+				tExpectBodyClosed(testClient, http.StatusCreated, http.Header{"Location": {"/foo/bar"}}, func() error {
+					_, err := testClient.CreateUpload(1024, false, nil)
+					return err
+				})
+			})
+			It("should send the request via DoRequest along with ExtraHeaders", func() {
 				eh := []string{"Upload-Concat", "Upload-Defer-Length", "Upload-Metadata", "Upload-Checksum", "Upload-Offset"}
 				srvMock.AddMocks(tRequest(http.MethodPost, "/", eh).
 					Header("X-Custom", expect.ToEqual("custom")).
-					Header("X-Extra", expect.ToBeEmpty()).
+					Header("X-Extra", expect.ToEqual("extra")).
 					Header("Content-Length", expect.ToEqual("0")).
 					Header("Upload-Length", expect.ToEqual("1024")).
 					Reply(tReply(reply.Created()).
 						Header("Location", "/foo/bar")),
 				)
-				testClient.GetRequest = spy.GetRequest
+				testClient.DoRequest = spy.DoRequest
 				testClient.ExtraHeaders = extraHeaders
-				f := Upload{}
 
-				Ω(testClient.CreateUpload(&f, 1024, false, nil)).ShouldNot(BeNil())
-				Ω(spy.calls).Should(Equal([]getRequestCall{{http.MethodPost, srvMock.URL(), testClient}}))
+				f, err := testClient.CreateUpload(1024, false, nil)
+				Ω(err).Should(Succeed())
+				Ω(spy.calls).Should(Equal([]doRequestCall{{http.MethodPost, srvMock.URL()}}))
 				Ω(f).Should(Equal(Upload{RemoteSize: 1024, Location: "/foo/bar"}))
 			})
 			It("should send ExtraHeaders and leave them untouched", func() {
@@ -435,9 +500,9 @@ var _ = Describe("Client", func() {
 						Header("Location", "/foo/bar")),
 				)
 				testClient.ExtraHeaders = extraHeaders
-				f := Upload{}
 
-				Ω(testClient.CreateUpload(&f, 1024, false, nil)).ShouldNot(BeNil())
+				f, err := testClient.CreateUpload(1024, false, nil)
+				Ω(err).Should(Succeed())
 				Ω(testClient.ExtraHeaders).Should(Equal(http.Header{"X-Extra": {"extra"}}))
 				Ω(f).Should(Equal(Upload{RemoteSize: 1024, Location: "/foo/bar"}))
 			})
@@ -450,9 +515,9 @@ var _ = Describe("Client", func() {
 						Reply(tReply(reply.Created()).
 							Header("Location", "/foo/bar")),
 					)
-					f := Upload{}
 
-					Ω(testClient.CreateUpload(&f, 1024, false, nil)).ShouldNot(BeNil())
+					f, err := testClient.CreateUpload(1024, false, nil)
+					Ω(err).Should(Succeed())
 					Ω(f).Should(Equal(Upload{
 						RemoteSize: 1024,
 						Location:   "/foo/bar",
@@ -476,9 +541,9 @@ var _ = Describe("Client", func() {
 						Reply(tReply(reply.Created()).
 							Header("Location", "/foo/bar")),
 					)
-					f := Upload{}
 
-					Ω(testClient.CreateUpload(&f, 1024, false, md)).ShouldNot(BeNil())
+					f, err := testClient.CreateUpload(1024, false, md)
+					Ω(err).Should(Succeed())
 					Ω(f).Should(Equal(Upload{
 						RemoteSize: 1024,
 						Location:   "/foo/bar",
@@ -504,9 +569,9 @@ var _ = Describe("Client", func() {
 						Reply(tReply(reply.Created()).
 							Header("Location", "/foo/bar")),
 					)
-					f := Upload{}
 
-					Ω(testClient.CreateUpload(&f, 1024, true, md)).ShouldNot(BeNil())
+					f, err := testClient.CreateUpload(1024, true, md)
+					Ω(err).Should(Succeed())
 					Ω(f).Should(Equal(Upload{
 						RemoteSize: 1024,
 						Location:   "/foo/bar",
@@ -517,7 +582,7 @@ var _ = Describe("Client", func() {
 			})
 			When("partial upload with defer size, with metadata", func() {
 				It("should encode metadata and create upload", func() {
-					testClient.Capabilities.Extensions = append(testClient.Capabilities.Extensions, "creation-defer-length")
+					testClient.advertisedExtensions = append(testClient.advertisedExtensions, "creation-defer-length")
 					eh := []string{"Upload-Length", "Upload-Checksum", "Upload-Offset"}
 					md := map[string]string{
 						"key1": "value1",
@@ -534,9 +599,9 @@ var _ = Describe("Client", func() {
 						Reply(tReply(reply.Created()).
 							Header("Location", "/foo/bar")),
 					)
-					f := Upload{}
 
-					Ω(testClient.CreateUpload(&f, SizeUnknown, true, md)).ShouldNot(BeNil())
+					f, err := testClient.CreateUpload(SizeUnknown, true, md)
+					Ω(err).Should(Succeed())
 					Ω(f).Should(Equal(Upload{
 						RemoteSize: SizeUnknown,
 						Location:   "/foo/bar",
@@ -547,68 +612,67 @@ var _ = Describe("Client", func() {
 			})
 		})
 		Context("error path", func() {
-			When("f is nil", func() {
-				It("should panic", func() {
-					Ω(func() { _, _ = testClient.CreateUpload(nil, 1024, false, nil) }).Should(Panic())
-				})
-			})
+			DescribeTable("should keep the response body in the error and close the original body",
+				func(status int, expectErr error) {
+					testClient.advertisedExtensions = append(testClient.advertisedExtensions, "creation")
+					tExpectBodyKeptInError(testClient, status, nil, expectErr, func() error {
+						_, err := testClient.CreateUpload(1024, false, nil)
+						return err
+					})
+				},
+				Entry("http error", http.StatusRequestEntityTooLarge, ErrUploadTooLarge),
+				Entry("unsupported protocol version", http.StatusPreconditionFailed, ErrProtocol),
+			)
 			Specify("no creation extension", func() {
-				f := Upload{}
-				_, err := testClient.CreateUpload(&f, 1024, false, nil)
+				_, err := testClient.CreateUpload(1024, false, nil)
 				Ω(err).Should(And(
 					MatchError(ErrUnsupportedFeature), MatchError(ContainSubstring("unsupported feature: creation")),
 				))
 			})
 			Specify("no creation-defer-length extension and trying to create defer size upload", func() {
-				testClient.Capabilities.Extensions = append(testClient.Capabilities.Extensions, "creation")
-				f := Upload{}
-				_, err := testClient.CreateUpload(&f, SizeUnknown, false, nil)
+				testClient.advertisedExtensions = append(testClient.advertisedExtensions, "creation")
+				_, err := testClient.CreateUpload(SizeUnknown, false, nil)
 				Ω(err).Should(And(
 					MatchError(ErrUnsupportedFeature), MatchError(ContainSubstring("unsupported feature: creation-defer-length")),
 				))
 			})
 			When("upload size is negative", func() {
 				It("should panic", func() {
-					testClient.Capabilities.Extensions = append(testClient.Capabilities.Extensions, "creation")
-					f := Upload{}
-					Ω(func() { _, _ = testClient.CreateUpload(&f, -2, false, nil) }).Should(Panic())
+					testClient.advertisedExtensions = append(testClient.advertisedExtensions, "creation")
+					Ω(func() { _, _ = testClient.CreateUpload(-2, false, nil) }).Should(Panic())
 				})
 			})
 			Specify("metadata key contains a space", func() {
-				testClient.Capabilities.Extensions = append(testClient.Capabilities.Extensions, "creation")
+				testClient.advertisedExtensions = append(testClient.advertisedExtensions, "creation")
 				md := map[string]string{
 					"key 1": "value1",
 					"key2":  "&^%$\"\t",
 				}
-				f := Upload{}
-				_, err := testClient.CreateUpload(&f, 1024, false, md)
+				_, err := testClient.CreateUpload(1024, false, md)
 				Ω(err).Should(MatchError(ContainSubstring("key \"key 1\" contains spaces")))
 			})
 			When("http error or unexpected code", func() {
 				DescribeTable("should return error",
 					func(status int, expectErr error, expectErrMsg string) {
 						eh := []string{"Upload-Concat", "Upload-Defer-Length", "Upload-Metadata", "Upload-Checksum", "Upload-Offset"}
-						testClient.Capabilities.Extensions = append(testClient.Capabilities.Extensions, "creation")
+						testClient.advertisedExtensions = append(testClient.advertisedExtensions, "creation")
 						srvMock.AddMocks(tRequest(http.MethodPost, "/", eh).
 							Header("Content-Length", expect.ToEqual("0")).
 							Header("Upload-Length", expect.ToEqual("1024")).
 							Reply(reply.Status(status)))
-						f := Upload{}
-
-						resp, err := testClient.CreateUpload(&f, 1024, false, nil)
-						Ω(resp).ShouldNot(BeNil())
+						_, err := testClient.CreateUpload(1024, false, nil)
+						Ω(tErrResponse(err)).Should(HaveHTTPStatus(status))
 						Ω(err).Should(And(
 							MatchError(expectErr),
 							MatchError(ContainSubstring(expectErrMsg)),
 						))
-						Ω(f).Should(Equal(Upload{RemoteSize: 0}))
 					},
-					Entry("413", http.StatusRequestEntityTooLarge, ErrUploadTooLarge, "upload is too large: HTTP 413: empty body"),
-					Entry("404", http.StatusNotFound, ErrUnexpectedResponse, "unexpected HTTP response code: HTTP 404: empty body"),
-					Entry("410", http.StatusGone, ErrUnexpectedResponse, "unexpected HTTP response code: HTTP 410: empty body"),
-					Entry("403", http.StatusForbidden, ErrUnexpectedResponse, "unexpected HTTP response code: HTTP 403: empty body"),
-					Entry("400", http.StatusBadRequest, ErrUnexpectedResponse, "unexpected HTTP response code: HTTP 400: empty body"),
-					Entry("200", http.StatusOK, ErrUnexpectedResponse, "unexpected HTTP response code: HTTP 200: empty body"),
+					Entry("413", http.StatusRequestEntityTooLarge, ErrUploadTooLarge, "upload is too large (HTTP 413;"),
+					Entry("404", http.StatusNotFound, ErrUnexpectedResponse, "unexpected HTTP response code (HTTP 404;"),
+					Entry("410", http.StatusGone, ErrUnexpectedResponse, "unexpected HTTP response code (HTTP 410;"),
+					Entry("403", http.StatusForbidden, ErrUnexpectedResponse, "unexpected HTTP response code (HTTP 403;"),
+					Entry("400", http.StatusBadRequest, ErrUnexpectedResponse, "unexpected HTTP response code (HTTP 400;"),
+					Entry("200", http.StatusOK, ErrUnexpectedResponse, "unexpected HTTP response code (HTTP 200;"),
 				)
 			})
 		})
@@ -616,14 +680,20 @@ var _ = Describe("Client", func() {
 	Context("CreateUploadWithData", func() {
 		Context("happy path", func() {
 			BeforeEach(func() {
-				testClient.Capabilities.Extensions = append(testClient.Capabilities.Extensions, "creation", "creation-with-upload")
+				testClient.advertisedExtensions = append(testClient.advertisedExtensions, "creation", "creation-with-upload")
 			})
-			It("should use GetRequest and ignore ExtraHeaders", func() {
+			It("should close the response body", func() {
+				tExpectBodyClosed(testClient, http.StatusCreated, http.Header{"Location": {"/foo/bar"}, "Upload-Offset": {"10"}}, func() error {
+					_, _, err := testClient.CreateUploadWithData(make([]byte, 10), 1024, false, nil)
+					return err
+				})
+			})
+			It("should send the request via DoRequest along with ExtraHeaders", func() {
 				eh := []string{"Upload-Concat", "Upload-Defer-Length", "Upload-Metadata", "Upload-Checksum", "Upload-Offset"}
 				d, _ := io.ReadAll(io.LimitReader(rand.New(rand.NewSource(time.Now().UnixNano())), 512))
 				srvMock.AddMocks(tRequest(http.MethodPost, "/", eh).
 					Header("X-Custom", expect.ToEqual("custom")).
-					Header("X-Extra", expect.ToBeEmpty()).
+					Header("X-Extra", expect.ToEqual("extra")).
 					Header("Content-Length", expect.ToEqual("512")).
 					Header("Upload-Length", expect.ToEqual("1024")).
 					Header("Content-Type", expect.ToEqual("application/offset+octet-stream")).
@@ -632,15 +702,13 @@ var _ = Describe("Client", func() {
 						Header("Location", "/foo/bar").
 						Header("Upload-Offset", "512")),
 				)
-				testClient.GetRequest = spy.GetRequest
+				testClient.DoRequest = spy.DoRequest
 				testClient.ExtraHeaders = extraHeaders
-				u := Upload{}
 
-				bytes, resp, err := testClient.CreateUploadWithData(&u, d, 1024, false, nil)
+				bytes, u, err := testClient.CreateUploadWithData(d, 1024, false, nil)
 				Ω(bytes).Should(BeEquivalentTo(512))
-				Ω(resp).ShouldNot(BeNil())
 				Ω(err).Should(Succeed())
-				Ω(spy.calls).Should(Equal([]getRequestCall{{http.MethodPost, srvMock.URL(), testClient}}))
+				Ω(spy.calls).Should(Equal([]doRequestCall{{http.MethodPost, srvMock.URL()}}))
 				Ω(u).Should(Equal(Upload{RemoteSize: 1024, Location: "/foo/bar", RemoteOffset: 512}))
 			})
 			It("should send ExtraHeaders and leave them untouched", func() {
@@ -657,11 +725,9 @@ var _ = Describe("Client", func() {
 						Header("Upload-Offset", "512")),
 				)
 				testClient.ExtraHeaders = extraHeaders
-				u := Upload{}
 
-				bytes, resp, err := testClient.CreateUploadWithData(&u, d, 1024, false, nil)
+				bytes, u, err := testClient.CreateUploadWithData(d, 1024, false, nil)
 				Ω(bytes).Should(BeEquivalentTo(512))
-				Ω(resp).ShouldNot(BeNil())
 				Ω(err).Should(Succeed())
 				Ω(testClient.ExtraHeaders).Should(Equal(http.Header{"X-Extra": {"extra"}}))
 				Ω(u).Should(Equal(Upload{RemoteSize: 1024, Location: "/foo/bar", RemoteOffset: 512}))
@@ -680,11 +746,9 @@ var _ = Describe("Client", func() {
 								Header("Location", "/foo/bar").
 								Header("Upload-Offset", strconv.Itoa(dataLen))),
 						)
-						u := Upload{}
 
-						bytes, resp, err := testClient.CreateUploadWithData(&u, d, 1024, false, nil)
+						bytes, u, err := testClient.CreateUploadWithData(d, 1024, false, nil)
 						Ω(bytes).Should(BeEquivalentTo(dataLen))
-						Ω(resp).ShouldNot(BeNil())
 						Ω(err).Should(Succeed())
 						Ω(u).Should(Equal(Upload{
 							RemoteSize:   1024,
@@ -714,11 +778,9 @@ var _ = Describe("Client", func() {
 							Header("Location", "/foo/bar").
 							Header("Upload-Offset", "512")),
 					)
-					u := Upload{}
 
-					bytes, resp, err := testClient.CreateUploadWithData(&u, d, 1024, false, md)
+					bytes, u, err := testClient.CreateUploadWithData(d, 1024, false, md)
 					Ω(bytes).Should(BeEquivalentTo(512))
-					Ω(resp).ShouldNot(BeNil())
 					Ω(err).Should(Succeed())
 					Ω(u).Should(Equal(Upload{
 						RemoteSize:   1024,
@@ -742,11 +804,9 @@ var _ = Describe("Client", func() {
 							Header("Location", "/foo/bar").
 							Header("Upload-Offset", "1024")),
 					)
-					u := Upload{}
 
-					bytes, resp, err := testClient.CreateUploadWithData(&u, d, 1024, true, nil)
+					bytes, u, err := testClient.CreateUploadWithData(d, 1024, true, nil)
 					Ω(bytes).Should(BeEquivalentTo(1024))
-					Ω(resp).ShouldNot(BeNil())
 					Ω(err).Should(Succeed())
 					Ω(u).Should(Equal(Upload{
 						RemoteSize:   1024,
@@ -758,19 +818,30 @@ var _ = Describe("Client", func() {
 			})
 		})
 		Context("error path", func() {
+			DescribeTable("should keep the response body in the error and close the original body",
+				func(status int, header http.Header, expectErr error) {
+					testClient.advertisedExtensions = append(testClient.advertisedExtensions, "creation", "creation-with-upload")
+					tExpectBodyKeptInError(testClient, status, header, expectErr, func() error {
+						_, _, err := testClient.CreateUploadWithData(make([]byte, 10), 1024, false, nil)
+						return err
+					})
+				},
+				Entry("http error", http.StatusConflict, nil, ErrOffsetsNotSynced),
+				Entry("zero progress", http.StatusCreated, http.Header{"Upload-Offset": {"0"}}, ErrZeroProgress),
+				Entry("offset advanced too far", http.StatusCreated, http.Header{"Upload-Offset": {"50"}}, ErrProtocol),
+			)
 			Specify("no 'creation-with-upload' extension", func() {
-				testClient.Capabilities.Extensions = append(testClient.Capabilities.Extensions, "creation")
-				f := Upload{Location: "/foo/bar"}
-				bytes, resp, err := testClient.CreateUploadWithData(&f, make([]byte, 10), 1024, false, nil)
+				testClient.advertisedExtensions = append(testClient.advertisedExtensions, "creation")
+				bytes, _, err := testClient.CreateUploadWithData(make([]byte, 10), 1024, false, nil)
 				Ω(bytes).Should(BeEquivalentTo(0))
-				Ω(resp).Should(BeNil())
+				Ω(tErrResponse(err)).Should(BeNil())
 				Ω(err).Should(And(
 					MatchError(ErrUnsupportedFeature), MatchError(ContainSubstring("unsupported feature: creation-with-upload")),
 				))
 			})
 			DescribeTable("http errors handling",
 				func(expectStatus int, expectErr error, expectErrMsg string) {
-					testClient.Capabilities.Extensions = append(testClient.Capabilities.Extensions, "creation", "creation-with-upload")
+					testClient.advertisedExtensions = append(testClient.advertisedExtensions, "creation", "creation-with-upload")
 					d, _ := io.ReadAll(io.LimitReader(rand.New(rand.NewSource(time.Now().UnixNano())), 1024))
 					eh := []string{"Upload-Defer-Length", "Upload-Metadata", "Upload-Checksum", "Upload-Offset"}
 					srvMock.AddMocks(tRequest(http.MethodPost, "/", eh).
@@ -782,30 +853,27 @@ var _ = Describe("Client", func() {
 						Reply(tReply(reply.Status(expectStatus))),
 					)
 
-					u := Upload{}
-
-					bytes, resp, err := testClient.CreateUploadWithData(&u, d, 1024, true, nil)
+					bytes, _, err := testClient.CreateUploadWithData(d, 1024, true, nil)
 					Ω(bytes).Should(BeEquivalentTo(0))
-					Ω(resp.StatusCode).Should(Equal(expectStatus))
+					Ω(tErrResponse(err).StatusCode).Should(Equal(expectStatus))
 					Ω(err).Should(And(
 						MatchError(expectErr),
 						MatchError(ContainSubstring(expectErrMsg)),
 					))
-					Ω(u).Should(Equal(Upload{}))
 				},
-				Entry("409", http.StatusConflict, ErrOffsetsNotSynced, "client stream and server offsets are not synced: HTTP 409: empty body"),
-				Entry("403", http.StatusForbidden, ErrCannotUpload, "can not upload: HTTP 403: empty body"),
-				Entry("410", http.StatusGone, ErrUploadDoesNotExist, "upload does not exist: HTTP 410: empty body"),
-				Entry("404", http.StatusNotFound, ErrUploadDoesNotExist, "upload does not exist: HTTP 404: empty body"),
-				Entry("413", http.StatusRequestEntityTooLarge, ErrUploadTooLarge, "upload is too large: HTTP 413: empty body"),
-				Entry("460", 460, ErrUnexpectedResponse, "unexpected HTTP response code: HTTP 460: empty body"),
-				Entry("401", http.StatusUnauthorized, ErrUnexpectedResponse, "unexpected HTTP response code: HTTP 401: empty body"),
-				Entry("400", http.StatusBadRequest, ErrUnexpectedResponse, "unexpected HTTP response code: HTTP 400: empty body"),
-				Entry("200", http.StatusOK, ErrUnexpectedResponse, "unexpected HTTP response code: HTTP 200: empty body"),
+				Entry("409", http.StatusConflict, ErrOffsetsNotSynced, "client stream and server offsets are not synced (HTTP 409;"),
+				Entry("403", http.StatusForbidden, ErrCannotUpload, "can not upload (HTTP 403;"),
+				Entry("410", http.StatusGone, ErrUploadDoesNotExist, "upload does not exist (HTTP 410;"),
+				Entry("404", http.StatusNotFound, ErrUploadDoesNotExist, "upload does not exist (HTTP 404;"),
+				Entry("413", http.StatusRequestEntityTooLarge, ErrUploadTooLarge, "upload is too large (HTTP 413;"),
+				Entry("460", 460, ErrUnexpectedResponse, "unexpected HTTP response code (HTTP 460;"),
+				Entry("401", http.StatusUnauthorized, ErrUnexpectedResponse, "unexpected HTTP response code (HTTP 401;"),
+				Entry("400", http.StatusBadRequest, ErrUnexpectedResponse, "unexpected HTTP response code (HTTP 400;"),
+				Entry("200", http.StatusOK, ErrUnexpectedResponse, "unexpected HTTP response code (HTTP 200;"),
 			)
 			When("server creates upload but does not advance the offset", func() {
 				It("should return ErrZeroProgress and the created upload", func() {
-					testClient.Capabilities.Extensions = append(testClient.Capabilities.Extensions, "creation", "creation-with-upload")
+					testClient.advertisedExtensions = append(testClient.advertisedExtensions, "creation", "creation-with-upload")
 					d, _ := io.ReadAll(io.LimitReader(rand.New(rand.NewSource(time.Now().UnixNano())), 512))
 					eh := []string{"Upload-Concat", "Upload-Defer-Length", "Upload-Metadata", "Upload-Checksum", "Upload-Offset"}
 					srvMock.AddMocks(tRequest(http.MethodPost, "/", eh).
@@ -817,11 +885,10 @@ var _ = Describe("Client", func() {
 							Header("Location", "/foo/bar").
 							Header("Upload-Offset", "0")),
 					)
-					u := Upload{}
 
-					bytes, resp, err := testClient.CreateUploadWithData(&u, d, 1024, false, nil)
+					bytes, u, err := testClient.CreateUploadWithData(d, 1024, false, nil)
 					Ω(bytes).Should(BeEquivalentTo(0))
-					Ω(resp.StatusCode).Should(Equal(http.StatusCreated))
+					Ω(tErrResponse(err).StatusCode).Should(Equal(http.StatusCreated))
 					Ω(err).Should(And(
 						MatchError(ErrZeroProgress),
 						MatchError(ContainSubstring("offset=0")),
@@ -834,48 +901,84 @@ var _ = Describe("Client", func() {
 					}))
 				})
 			})
+			When("server advances the offset to an invalid value", func() {
+				DescribeTable("should return protocol error",
+					func(offset int64, expectMsg string) {
+						testClient.advertisedExtensions = append(testClient.advertisedExtensions, "creation", "creation-with-upload")
+						d, _ := io.ReadAll(io.LimitReader(rand.New(rand.NewSource(time.Now().UnixNano())), 512))
+						eh := []string{"Upload-Concat", "Upload-Defer-Length", "Upload-Metadata", "Upload-Checksum", "Upload-Offset"}
+						srvMock.AddMocks(tRequest(http.MethodPost, "/", eh).
+							Header("Content-Length", expect.ToEqual("512")).
+							Header("Upload-Length", expect.ToEqual("1024")).
+							Header("Content-Type", expect.ToEqual("application/offset+octet-stream")).
+							Body(expect.ToEqual(d)).
+							Reply(tReply(reply.Created()).
+								Header("Location", "/foo/bar").
+								Header("Upload-Offset", strconv.FormatInt(offset, 10))),
+						)
+
+						bytes, u, err := testClient.CreateUploadWithData(d, 1024, false, nil)
+						Ω(bytes).Should(Equal(offset))
+						Ω(tErrResponse(err)).Should(HaveHTTPStatus(http.StatusCreated))
+						Ω(err).Should(And(
+							MatchError(ErrProtocol),
+							MatchError(ContainSubstring(expectMsg)),
+						))
+						Ω(u.Location).Should(Equal("/foo/bar"))
+					},
+					Entry("below zero", int64(-1), "server offset has gone backwards, offset=-1, transferredDataSize=512"),
+					Entry("more than data size", int64(513), "server offset has been advanced too far: offset=513, transferredDataSize=512"),
+					Entry("more than data size, but within upload size", int64(1024), "server offset has been advanced too far: offset=1024, transferredDataSize=512"),
+				)
+			})
 		})
 	})
 	Context("DeleteUpload", func() {
 		Context("happy path", func() {
 			BeforeEach(func() {
-				testClient.Capabilities.Extensions = append(testClient.Capabilities.Extensions, "termination")
+				testClient.advertisedExtensions = append(testClient.advertisedExtensions, "termination")
 			})
-			It("should use GetRequest and ignore ExtraHeaders", func() {
+			It("should close the response body", func() {
+				tExpectBodyClosed(testClient, http.StatusNoContent, nil, func() error {
+					return testClient.DeleteUpload("/foo/bar")
+				})
+			})
+			It("should send the request via DoRequest along with ExtraHeaders", func() {
 				srvMock.AddMocks(tRequest(http.MethodDelete, "/foo/bar", tusHeaders).
 					Header("X-Custom", expect.ToEqual("custom")).
-					Header("X-Extra", expect.ToBeEmpty()).
+					Header("X-Extra", expect.ToEqual("extra")).
 					Reply(tReply(reply.NoContent())))
-				testClient.GetRequest = spy.GetRequest
+				testClient.DoRequest = spy.DoRequest
 				testClient.ExtraHeaders = extraHeaders
-				f := Upload{Location: "/foo/bar"}
 
-				Ω(testClient.DeleteUpload(f)).ShouldNot(BeNil())
-				Ω(spy.calls).Should(Equal([]getRequestCall{{http.MethodDelete, srvMock.URL() + "/foo/bar", testClient}}))
+				Ω(testClient.DeleteUpload("/foo/bar")).Should(Succeed())
+				Ω(spy.calls).Should(Equal([]doRequestCall{{http.MethodDelete, srvMock.URL() + "/foo/bar"}}))
 			})
 			It("should send ExtraHeaders and leave them untouched", func() {
 				srvMock.AddMocks(tRequest(http.MethodDelete, "/foo/bar", tusHeaders).
 					Header("X-Extra", expect.ToEqual("extra")).
 					Reply(tReply(reply.NoContent())))
 				testClient.ExtraHeaders = extraHeaders
-				f := Upload{Location: "/foo/bar"}
 
-				Ω(testClient.DeleteUpload(f)).ShouldNot(BeNil())
+				Ω(testClient.DeleteUpload("/foo/bar")).Should(Succeed())
 				Ω(testClient.ExtraHeaders).Should(Equal(http.Header{"X-Extra": {"extra"}}))
 			})
 			Specify("make a request", func() {
 				srvMock.AddMocks(
 					tRequest(http.MethodDelete, "/foo/bar", tusHeaders).
 						Reply(tReply(reply.NoContent())))
-				f := Upload{Location: "/foo/bar"}
-				Ω(testClient.DeleteUpload(f)).ShouldNot(BeNil())
-				Ω(f).Should(Equal(Upload{Location: "/foo/bar"}))
+				Ω(testClient.DeleteUpload("/foo/bar")).Should(Succeed())
 			})
 		})
 		Context("error path", func() {
+			It("should keep the response body in the error and close the original body", func() {
+				testClient.advertisedExtensions = append(testClient.advertisedExtensions, "termination")
+				tExpectBodyKeptInError(testClient, http.StatusNotFound, nil, ErrUploadDoesNotExist, func() error {
+					return testClient.DeleteUpload("/foo/bar")
+				})
+			})
 			Specify("no termination extension", func() {
-				f := Upload{Location: "/foo/bar"}
-				_, err := testClient.DeleteUpload(f)
+				err := testClient.DeleteUpload("/foo/bar")
 				Ω(err).Should(And(
 					MatchError(ErrUnsupportedFeature), MatchError(ContainSubstring("unsupported feature: termination")),
 				))
@@ -883,49 +986,51 @@ var _ = Describe("Client", func() {
 			When("http error or unexpected code", func() {
 				DescribeTable("should return error",
 					func(status int, expectErr error, expectErrMsg string) {
-						testClient.Capabilities.Extensions = append(testClient.Capabilities.Extensions, "termination")
+						testClient.advertisedExtensions = append(testClient.advertisedExtensions, "termination")
 						srvMock.AddMocks(tRequest(http.MethodDelete, "/foo/bar", tusHeaders).Reply(reply.Status(status)))
-						f := Upload{Location: "/foo/bar"}
 
-						resp, err := testClient.DeleteUpload(f)
-						Ω(resp).ShouldNot(BeNil())
+						err := testClient.DeleteUpload("/foo/bar")
+						Ω(tErrResponse(err)).Should(HaveHTTPStatus(status))
 						Ω(err).Should(And(
 							MatchError(expectErr), MatchError(ContainSubstring(expectErrMsg)),
 						))
-						Ω(f).Should(Equal(Upload{Location: "/foo/bar"}))
 					},
-					Entry("413", http.StatusRequestEntityTooLarge, ErrUnexpectedResponse, "unexpected HTTP response code: HTTP 413: empty body"),
-					Entry("404", http.StatusNotFound, ErrUploadDoesNotExist, "upload does not exist: HTTP 404: empty body"),
-					Entry("410", http.StatusGone, ErrUploadDoesNotExist, "upload does not exist: HTTP 410: empty body"),
-					Entry("403", http.StatusForbidden, ErrUploadDoesNotExist, "upload does not exist: HTTP 403: empty body"),
-					Entry("400", http.StatusBadRequest, ErrUnexpectedResponse, "unexpected HTTP response code: HTTP 400: empty body"),
-					Entry("200", http.StatusOK, ErrUnexpectedResponse, "unexpected HTTP response code: HTTP 200: empty body"),
+					Entry("413", http.StatusRequestEntityTooLarge, ErrUnexpectedResponse, "unexpected HTTP response code (HTTP 413;"),
+					Entry("404", http.StatusNotFound, ErrUploadDoesNotExist, "upload does not exist (HTTP 404;"),
+					Entry("410", http.StatusGone, ErrUploadDoesNotExist, "upload does not exist (HTTP 410;"),
+					Entry("403", http.StatusForbidden, ErrUploadDoesNotExist, "upload does not exist (HTTP 403;"),
+					Entry("400", http.StatusBadRequest, ErrUnexpectedResponse, "unexpected HTTP response code (HTTP 400;"),
+					Entry("200", http.StatusOK, ErrUnexpectedResponse, "unexpected HTTP response code (HTTP 200;"),
 				)
 			})
 		})
 	})
-	Context("ConcatenateUploads", func() {
+	Context("ConcatenatePartialUploads", func() {
 		Context("happy path", func() {
 			BeforeEach(func() {
-				testClient.Capabilities.Extensions = append(testClient.Capabilities.Extensions, "concatenation")
+				testClient.advertisedExtensions = append(testClient.advertisedExtensions, "concatenation")
 			})
-			It("should use GetRequest and ignore ExtraHeaders", func() {
+			It("should close the response body", func() {
+				tExpectBodyClosed(testClient, http.StatusCreated, http.Header{"Location": {"/foo/baz"}}, func() error {
+					_, err := testClient.ConcatenatePartialUploads([]string{"/foo/bar"}, nil)
+					return err
+				})
+			})
+			It("should send the request via DoRequest along with ExtraHeaders", func() {
 				eh := []string{"Upload-Defer-Length", "Upload-Length", "Upload-Metadata", "Upload-Checksum", "Upload-Offset"}
 				srvMock.AddMocks(tRequest(http.MethodPost, "/", eh).
 					Header("X-Custom", expect.ToEqual("custom")).
-					Header("X-Extra", expect.ToBeEmpty()).
+					Header("X-Extra", expect.ToEqual("extra")).
 					Header("Upload-Concat", expect.ToEqual("final;/foo/bar /foo/baz")).
 					Reply(tReply(reply.Created()).Header("Location", "/foo/bar/baz")),
 				)
-				testClient.GetRequest = spy.GetRequest
+				testClient.DoRequest = spy.DoRequest
 				testClient.ExtraHeaders = extraHeaders
-				f1 := Upload{Location: "/foo/bar", RemoteSize: 256, RemoteOffset: 256, Partial: true}
-				f2 := Upload{Location: "/foo/baz", RemoteSize: 512, RemoteOffset: 512, Partial: true}
-				f := Upload{}
 
-				Ω(testClient.ConcatenateUploads(&f, []Upload{f1, f2}, nil)).ShouldNot(BeNil())
-				Ω(spy.calls).Should(Equal([]getRequestCall{{http.MethodPost, srvMock.URL(), testClient}}))
-				Ω(f).Should(Equal(Upload{Location: "/foo/bar/baz"}))
+				loc, err := testClient.ConcatenatePartialUploads([]string{"/foo/bar", "/foo/baz"}, nil)
+				Ω(err).Should(Succeed())
+				Ω(spy.calls).Should(Equal([]doRequestCall{{http.MethodPost, srvMock.URL()}}))
+				Ω(loc).Should(Equal("/foo/bar/baz"))
 			})
 			It("should send ExtraHeaders and leave them untouched", func() {
 				eh := []string{"Upload-Defer-Length", "Upload-Length", "Upload-Metadata", "Upload-Checksum", "Upload-Offset"}
@@ -935,13 +1040,11 @@ var _ = Describe("Client", func() {
 					Reply(tReply(reply.Created()).Header("Location", "/foo/bar/baz")),
 				)
 				testClient.ExtraHeaders = extraHeaders
-				f1 := Upload{Location: "/foo/bar", RemoteSize: 256, RemoteOffset: 256, Partial: true}
-				f2 := Upload{Location: "/foo/baz", RemoteSize: 512, RemoteOffset: 512, Partial: true}
-				f := Upload{}
 
-				Ω(testClient.ConcatenateUploads(&f, []Upload{f1, f2}, nil)).ShouldNot(BeNil())
+				loc, err := testClient.ConcatenatePartialUploads([]string{"/foo/bar", "/foo/baz"}, nil)
+				Ω(err).Should(Succeed())
 				Ω(testClient.ExtraHeaders).Should(Equal(http.Header{"X-Extra": {"extra"}}))
-				Ω(f).Should(Equal(Upload{Location: "/foo/bar/baz"}))
+				Ω(loc).Should(Equal("/foo/bar/baz"))
 			})
 			When("send several uploads, no metadata", func() {
 				It("should make a request", func() {
@@ -950,15 +1053,10 @@ var _ = Describe("Client", func() {
 						Header("Upload-Concat", expect.ToEqual("final;/foo/bar /foo/baz")).
 						Reply(tReply(reply.Created()).Header("Location", "/foo/bar/baz")),
 					)
-					f1 := Upload{Location: "/foo/bar", RemoteSize: 256, RemoteOffset: 256, Partial: true}
-					f2 := Upload{Location: "/foo/baz", RemoteSize: 512, RemoteOffset: 512, Partial: true}
-					f := Upload{}
 
-					Ω(testClient.ConcatenateUploads(&f, []Upload{f1, f2}, nil)).ShouldNot(BeNil())
-					Ω(f).Should(Equal(Upload{
-						Location: "/foo/bar/baz",
-						Partial:  false,
-					}))
+					loc, err := testClient.ConcatenatePartialUploads([]string{"/foo/bar", "/foo/baz"}, nil)
+					Ω(err).Should(Succeed())
+					Ω(loc).Should(Equal("/foo/bar/baz"))
 				})
 			})
 			When("send several uploads, with metadata", func() {
@@ -976,216 +1074,114 @@ var _ = Describe("Client", func() {
 						})).
 						Reply(tReply(reply.Created()).Header("Location", "/foo/bar/baz")),
 					)
-					f1 := Upload{Location: "/foo/bar", RemoteSize: 256, RemoteOffset: 256, Partial: true}
-					f2 := Upload{Location: "/foo/baz", RemoteSize: 512, RemoteOffset: 512, Partial: true}
-					f := Upload{}
 
-					Ω(testClient.ConcatenateUploads(&f, []Upload{f1, f2}, md)).ShouldNot(BeNil())
-					Ω(f).Should(Equal(Upload{
-						Location: "/foo/bar/baz",
-						Partial:  false,
-						Metadata: md,
-					}))
+					loc, err := testClient.ConcatenatePartialUploads([]string{"/foo/bar", "/foo/baz"}, md)
+					Ω(err).Should(Succeed())
+					Ω(loc).Should(Equal("/foo/bar/baz"))
 				})
 			})
 		})
+		DescribeTable("should accept any of concatenation extensions",
+			func(extensions []string) {
+				testClient.advertisedExtensions = extensions
+				eh := []string{"Upload-Defer-Length", "Upload-Length", "Upload-Metadata", "Upload-Checksum", "Upload-Offset"}
+				srvMock.AddMocks(tRequest(http.MethodPost, "/", eh).
+					Header("Upload-Concat", expect.ToEqual("final;/foo/bar /foo/baz")).
+					Reply(tReply(reply.Created()).Header("Location", "/foo/bar/baz")),
+				)
+
+				loc, err := testClient.ConcatenatePartialUploads([]string{"/foo/bar", "/foo/baz"}, nil)
+				Ω(err).Should(Succeed())
+				Ω(loc).Should(Equal("/foo/bar/baz"))
+			},
+			Entry("concatenation", []string{"concatenation"}),
+			Entry("concatenation-unfinished", []string{"concatenation-unfinished"}),
+			Entry("both", []string{"concatenation", "concatenation-unfinished"}),
+		)
 		Context("error path", func() {
-			When("final is nil", func() {
-				It("should panic", func() {
-					testClient.Capabilities.Extensions = append(testClient.Capabilities.Extensions, "concatenation")
-					f1 := Upload{Location: "/foo/bar", RemoteSize: 256, RemoteOffset: 256, Partial: true}
-					f2 := Upload{Location: "/foo/baz", RemoteSize: 512, RemoteOffset: 512, Partial: true}
-					Ω(func() { _, _ = testClient.ConcatenateUploads(nil, []Upload{f1, f2}, nil) }).Should(Panic())
+			It("should keep the response body in the error and close the original body", func() {
+				testClient.advertisedExtensions = append(testClient.advertisedExtensions, "concatenation")
+				tExpectBodyKeptInError(testClient, http.StatusNotFound, nil, ErrUploadDoesNotExist, func() error {
+					_, err := testClient.ConcatenatePartialUploads([]string{"/foo/bar"}, nil)
+					return err
 				})
 			})
-			When("uploads list is empty", func() {
-				It("should panic", func() {
-					testClient.Capabilities.Extensions = append(testClient.Capabilities.Extensions, "concatenation")
-					f := Upload{}
-					Ω(func() { _, _ = testClient.ConcatenateUploads(&f, nil, nil) }).Should(Panic())
-					Ω(f).Should(Equal(Upload{}))
-				})
+			When("locations list is empty", func() {
+				DescribeTable("should return error without making a request",
+					func(locations []string) {
+						testClient.advertisedExtensions = append(testClient.advertisedExtensions, "concatenation")
+						testClient.DoRequest = spy.DoRequest
+
+						loc, err := testClient.ConcatenatePartialUploads(locations, nil)
+						Ω(err).Should(MatchError("locations list is empty"))
+						Ω(loc).Should(BeEmpty())
+						Ω(spy.calls).Should(BeEmpty())
+					},
+					Entry("nil", nil),
+					Entry("empty slice", []string{}),
+				)
 			})
-			When("no concatenation extension", func() {
+			When("no concatenation extensions", func() {
 				It("should return error", func() {
-					f1 := Upload{Location: "/foo/bar", RemoteSize: 256, RemoteOffset: 256, Partial: true}
-					f2 := Upload{Location: "/foo/baz", RemoteSize: 512, RemoteOffset: 512, Partial: true}
-					f := Upload{}
-					resp, err := testClient.ConcatenateUploads(&f, []Upload{f1, f2}, nil)
-					Ω(resp).Should(BeNil())
-					Ω(err).Should(MatchError(ContainSubstring("unsupported feature: concatenation")))
-					Ω(f).Should(Equal(Upload{}))
-				})
-			})
-			When("some uploads are not partial", func() {
-				It("should return error", func() {
-					testClient.Capabilities.Extensions = append(testClient.Capabilities.Extensions, "concatenation")
-					f1 := Upload{Location: "/foo/bar", RemoteSize: 256, RemoteOffset: 256, Partial: true}
-					f2 := Upload{Location: "/foo/baz", RemoteSize: 512, RemoteOffset: 512, Partial: false}
-					f3 := Upload{Location: "/foo/baa", RemoteSize: 512, RemoteOffset: 512, Partial: true}
-					f := Upload{}
-					resp, err := testClient.ConcatenateUploads(&f, []Upload{f1, f2, f3}, nil)
-					Ω(resp).Should(BeNil())
-					Ω(err).Should(MatchError(ContainSubstring("upload \"/foo/baz\" is not partial")))
-					Ω(f).Should(Equal(Upload{}))
+					loc, err := testClient.ConcatenatePartialUploads([]string{"/foo/bar", "/foo/baz"}, nil)
+					Ω(tErrResponse(err)).Should(BeNil())
+					Ω(err).Should(And(
+						MatchError(ErrUnsupportedFeature),
+						MatchError(ContainSubstring("either concatenation or concatenation-unfinished")),
+					))
+					Ω(loc).Should(BeEmpty())
 				})
 			})
 			When("http error or unexpected code", func() {
 				DescribeTable("should return error",
 					func(status int, expectErr error, expectErrMsg string) {
 						eh := []string{"Upload-Defer-Length", "Upload-Length", "Upload-Metadata", "Upload-Checksum", "Upload-Offset"}
-						testClient.Capabilities.Extensions = append(testClient.Capabilities.Extensions, "concatenation")
+						testClient.advertisedExtensions = append(testClient.advertisedExtensions, "concatenation")
 						srvMock.AddMocks(tRequest(http.MethodPost, "/", eh).
 							Header("Upload-Concat", expect.ToEqual("final;/foo/bar /foo/baz")).
 							Reply(reply.Status(status)))
-						f1 := Upload{Location: "/foo/bar", RemoteSize: 256, RemoteOffset: 256, Partial: true}
-						f2 := Upload{Location: "/foo/baz", RemoteSize: 512, RemoteOffset: 512, Partial: true}
-						f := Upload{}
 
-						resp, err := testClient.ConcatenateUploads(&f, []Upload{f1, f2}, nil)
-						Ω(resp).ShouldNot(BeNil())
+						loc, err := testClient.ConcatenatePartialUploads([]string{"/foo/bar", "/foo/baz"}, nil)
+						Ω(tErrResponse(err)).Should(HaveHTTPStatus(status))
 						Ω(err).Should(And(
 							MatchError(expectErr),
 							MatchError(ContainSubstring(expectErrMsg)),
 						))
-						Ω(f).Should(Equal(Upload{}))
+						Ω(loc).Should(BeEmpty())
 					},
-					Entry("404", http.StatusNotFound, ErrUploadDoesNotExist, "upload does not exist: HTTP 404: empty body"),
-					Entry("410", http.StatusGone, ErrUploadDoesNotExist, "upload does not exist: HTTP 410: empty body"),
-					Entry("403", http.StatusForbidden, ErrUnexpectedResponse, "unexpected HTTP response code: HTTP 403: empty body"),
-					Entry("400", http.StatusBadRequest, ErrUnexpectedResponse, "unexpected HTTP response code: HTTP 400: empty body"),
-					Entry("200", http.StatusOK, ErrUnexpectedResponse, "unexpected HTTP response code: HTTP 200: empty body"),
+					Entry("404", http.StatusNotFound, ErrUploadDoesNotExist, "upload does not exist (HTTP 404;"),
+					Entry("410", http.StatusGone, ErrUploadDoesNotExist, "upload does not exist (HTTP 410;"),
+					Entry("403", http.StatusForbidden, ErrUnexpectedResponse, "unexpected HTTP response code (HTTP 403;"),
+					Entry("400", http.StatusBadRequest, ErrUnexpectedResponse, "unexpected HTTP response code (HTTP 400;"),
+					Entry("200", http.StatusOK, ErrUnexpectedResponse, "unexpected HTTP response code (HTTP 200;"),
 				)
 			})
 		})
 	})
-	Context("ConcatenateStreams", func() {
+	Context("FetchCapabilities", func() {
 		Context("happy path", func() {
-			BeforeEach(func() {
-				testClient.Capabilities.Extensions = append(testClient.Capabilities.Extensions, "concatenation", "concatenation-unfinished")
-			})
-			It("should use GetRequest and ignore ExtraHeaders", func() {
-				eh := []string{"Upload-Defer-Length", "Upload-Length", "Upload-Metadata", "Upload-Checksum", "Upload-Offset"}
-				srvMock.AddMocks(tRequest(http.MethodPost, "/", eh).
-					Header("X-Custom", expect.ToEqual("custom")).
-					Header("X-Extra", expect.ToBeEmpty()).
-					Header("Upload-Concat", expect.ToEqual("final;/foo/bar /foo/baz")).
-					Reply(tReply(reply.Created()).Header("Location", "/foo/bar/baz")),
-				)
-				testClient.GetRequest = spy.GetRequest
-				testClient.ExtraHeaders = extraHeaders
-				f1 := Upload{Location: "/foo/bar", RemoteSize: 256, RemoteOffset: 256, Partial: true}
-				s1 := NewUploadStream(testClient, &f1)
-				f2 := Upload{Location: "/foo/baz", RemoteSize: 512, RemoteOffset: 512, Partial: true}
-				s2 := NewUploadStream(testClient, &f2)
-				f := Upload{}
-
-				Ω(testClient.ConcatenateStreams(&f, []*UploadStream{s1, s2}, nil)).ShouldNot(BeNil())
-				Ω(spy.calls).Should(Equal([]getRequestCall{{http.MethodPost, srvMock.URL(), testClient}}))
-				Ω(f).Should(Equal(Upload{Location: "/foo/bar/baz"}))
-			})
-			It("should send ExtraHeaders and leave them untouched", func() {
-				eh := []string{"Upload-Defer-Length", "Upload-Length", "Upload-Metadata", "Upload-Checksum", "Upload-Offset"}
-				srvMock.AddMocks(tRequest(http.MethodPost, "/", eh).
-					Header("X-Extra", expect.ToEqual("extra")).
-					Header("Upload-Concat", expect.ToEqual("final;/foo/bar /foo/baz")).
-					Reply(tReply(reply.Created()).Header("Location", "/foo/bar/baz")),
-				)
-				testClient.ExtraHeaders = extraHeaders
-				f1 := Upload{Location: "/foo/bar", RemoteSize: 256, RemoteOffset: 256, Partial: true}
-				s1 := NewUploadStream(testClient, &f1)
-				f2 := Upload{Location: "/foo/baz", RemoteSize: 512, RemoteOffset: 512, Partial: true}
-				s2 := NewUploadStream(testClient, &f2)
-				f := Upload{}
-
-				Ω(testClient.ConcatenateStreams(&f, []*UploadStream{s1, s2}, nil)).ShouldNot(BeNil())
-				Ω(testClient.ExtraHeaders).Should(Equal(http.Header{"X-Extra": {"extra"}}))
-				Ω(f).Should(Equal(Upload{Location: "/foo/bar/baz"}))
-			})
-			Specify("all streams are finished", func() {
-				eh := []string{"Upload-Defer-Length", "Upload-Length", "Upload-Metadata", "Upload-Checksum", "Upload-Offset"}
-				srvMock.AddMocks(tRequest(http.MethodPost, "/", eh).
-					Header("Upload-Concat", expect.ToEqual("final;/foo/bar /foo/baz")).
-					Reply(tReply(reply.Created()).Header("Location", "/foo/bar/baz")),
-				)
-				f1 := Upload{Location: "/foo/bar", RemoteSize: 256, RemoteOffset: 256, Partial: true}
-				s1 := NewUploadStream(testClient, &f1)
-				f2 := Upload{Location: "/foo/baz", RemoteSize: 512, RemoteOffset: 512, Partial: true}
-				s2 := NewUploadStream(testClient, &f2)
-				f := Upload{}
-
-				Ω(testClient.ConcatenateStreams(&f, []*UploadStream{s1, s2}, nil)).ShouldNot(BeNil())
-				Ω(f).Should(Equal(Upload{
-					Location: "/foo/bar/baz",
-					Partial:  false,
-				}))
-			})
-			Specify("some streams are not finished", func() {
-				eh := []string{"Upload-Defer-Length", "Upload-Length", "Upload-Metadata", "Upload-Checksum", "Upload-Offset"}
-				srvMock.AddMocks(tRequest(http.MethodPost, "/", eh).
-					Header("Upload-Concat", expect.ToEqual("final;/foo/bar /foo/baz")).
-					Reply(tReply(reply.Created()).Header("Location", "/foo/bar/baz")),
-				)
-				f1 := Upload{Location: "/foo/bar", RemoteSize: 256, RemoteOffset: 64, Partial: true}
-				s1 := NewUploadStream(testClient, &f1)
-				f2 := Upload{Location: "/foo/baz", RemoteSize: 512, RemoteOffset: 128, Partial: true}
-				s2 := NewUploadStream(testClient, &f2)
-				f := Upload{}
-
-				Ω(testClient.ConcatenateStreams(&f, []*UploadStream{s1, s2}, nil)).ShouldNot(BeNil())
-				Ω(f).Should(Equal(Upload{
-					Location: "/foo/bar/baz",
-					Partial:  false,
-				}))
-			})
-		})
-		Context("error path", func() {
-			When("final is nil", func() {
-				It("should panic", func() {
-					testClient.Capabilities.Extensions = append(testClient.Capabilities.Extensions, "concatenation", "concatenation-unfinished")
-					f1 := Upload{Location: "/foo/bar", RemoteSize: 256, RemoteOffset: 64, Partial: true}
-					s1 := NewUploadStream(testClient, &f1)
-					f2 := Upload{Location: "/foo/baz", RemoteSize: 512, RemoteOffset: 128, Partial: true}
-					s2 := NewUploadStream(testClient, &f2)
-
-					Ω(func() { _, _ = testClient.ConcatenateStreams(nil, []*UploadStream{s1, s2}, nil) }).Should(PanicWith(ContainSubstring("final is nil")))
+			It("should close the response body", func() {
+				tExpectBodyClosed(testClient, http.StatusNoContent, nil, func() error {
+					_, err := testClient.FetchCapabilities()
+					return err
 				})
 			})
-			When("some streams are not finished and no 'concatenation-unfinished' extension", func() {
-				It("should return error", func() {
-					testClient.Capabilities.Extensions = append(testClient.Capabilities.Extensions, "concatenation")
-					f1 := Upload{Location: "/foo/bar", RemoteSize: 256, RemoteOffset: 64, Partial: true}
-					s1 := NewUploadStream(testClient, &f1)
-					f2 := Upload{Location: "/foo/baz", RemoteSize: 512, RemoteOffset: 128, Partial: true}
-					s2 := NewUploadStream(testClient, &f2)
-					f := Upload{}
-
-					resp, err := testClient.ConcatenateStreams(&f, []*UploadStream{s1, s2}, nil)
-					Ω(resp).Should(BeNil())
-					Ω(err).Should(And(
-						MatchError(ErrUnsupportedFeature), MatchError(ContainSubstring("unsupported feature: concatenation-unfinished")),
-					))
-				})
-			})
-		})
-	})
-	Context("UpdateCapabilities", func() {
-		Context("happy path", func() {
-			It("should use GetRequest and ignore ExtraHeaders", func() {
+			It("should send the request via DoRequest along with ExtraHeaders", func() {
 				srvMock.AddMocks(
 					mocha.Request().URL(expect.URLPath("/")).Method(http.MethodOptions).
 						Header("X-Custom", expect.ToEqual("custom")).
-						Header("X-Extra", expect.ToBeEmpty()).
+						Header("X-Extra", expect.ToEqual("extra")).
 						Reply(tReply(reply.NoContent()).
 							Header("Tus-Version", "1.0.0").
 							Header("Tus-Extension", "creation")),
 				)
-				testClient.GetRequest = spy.GetRequest
+				testClient.DoRequest = spy.DoRequest
 				testClient.ExtraHeaders = extraHeaders
 
-				Ω(testClient.UpdateCapabilities()).ShouldNot(BeNil())
-				Ω(spy.calls).Should(Equal([]getRequestCall{{http.MethodOptions, srvMock.URL(), testClient}}))
-				Ω(*testClient.Capabilities).Should(Equal(ServerCapabilities{
+				caps, err := testClient.FetchCapabilities()
+				Ω(err).ShouldNot(HaveOccurred())
+				Ω(spy.calls).Should(Equal([]doRequestCall{{http.MethodOptions, srvMock.URL()}}))
+				Ω(caps).Should(Equal(ServerCapabilities{
 					Extensions:       []string{"creation"},
 					ProtocolVersions: []string{"1.0.0"},
 				}))
@@ -1200,14 +1196,29 @@ var _ = Describe("Client", func() {
 				)
 				testClient.ExtraHeaders = extraHeaders
 
-				Ω(testClient.UpdateCapabilities()).ShouldNot(BeNil())
+				caps, err := testClient.FetchCapabilities()
+				Ω(err).ShouldNot(HaveOccurred())
 				Ω(testClient.ExtraHeaders).Should(Equal(http.Header{"X-Extra": {"extra"}}))
-				Ω(*testClient.Capabilities).Should(Equal(ServerCapabilities{
+				Ω(caps).Should(Equal(ServerCapabilities{
 					Extensions:       []string{"creation"},
 					ProtocolVersions: []string{"1.0.0"},
 				}))
 			})
-			DescribeTable("should fill client capabilities",
+			It("should not affect the client state", func() {
+				srvMock.AddMocks(
+					mocha.Request().URL(expect.URLPath("/")).Method(http.MethodOptions).
+						Reply(tReply(reply.NoContent()).
+							Header("Tus-Version", "1.0.0").
+							Header("Tus-Extension", "creation,termination")),
+				)
+				testClient.advertisedExtensions = nil
+
+				caps, err := testClient.FetchCapabilities()
+				Ω(err).ShouldNot(HaveOccurred())
+				Ω(caps.Extensions).Should(Equal([]string{"creation", "termination"}))
+				Ω(testClient.advertisedExtensions).Should(BeNil())
+			})
+			DescribeTable("should return the server capabilities",
 				func(status int) {
 					srvMock.AddMocks(
 						mocha.Request().URL(expect.URLPath("/")).Method(http.MethodOptions).
@@ -1217,8 +1228,9 @@ var _ = Describe("Client", func() {
 								Header("Tus-Extension", "creation,expiration,checksum").
 								Header("Tus-Checksum-Algorithm", "sha1,md5")),
 					)
-					Ω(testClient.UpdateCapabilities()).ShouldNot(BeNil())
-					Ω(*testClient.Capabilities).Should(Equal(ServerCapabilities{
+					caps, err := testClient.FetchCapabilities()
+					Ω(err).ShouldNot(HaveOccurred())
+					Ω(caps).Should(Equal(ServerCapabilities{
 						Extensions:         []string{"creation", "expiration", "checksum"},
 						MaxSize:            1073741824,
 						ProtocolVersions:   []string{"1.0.0", "0.2.2", "0.2.1"},
@@ -1230,6 +1242,12 @@ var _ = Describe("Client", func() {
 			)
 		})
 		Context("error path", func() {
+			It("should keep the response body in the error and close the original body", func() {
+				tExpectBodyKeptInError(testClient, http.StatusInternalServerError, nil, ErrUnexpectedResponse, func() error {
+					_, err := testClient.FetchCapabilities()
+					return err
+				})
+			})
 			When("corrupted number in Tus-Max-Size", func() {
 				It("should return error", func() {
 					srvMock.AddMocks(
@@ -1240,9 +1258,9 @@ var _ = Describe("Client", func() {
 								Header("Tus-Extension", "creation,expiration,checksum").
 								Header("Tus-Checksum-Algorithm", "sha1,md5")),
 					)
-					resp, err := testClient.UpdateCapabilities()
-					Ω(resp).ShouldNot(BeNil())
-					Ω(err).Should(MatchError(ContainSubstring("cannot parse Tus-Max-Size integer value \"fdsa107374182dw4\"")))
+					_, err := testClient.FetchCapabilities()
+					Ω(err).Should(MatchError(ErrProtocol))
+					Ω(err).Should(MatchError(ContainSubstring("parse Tus-Max-Size integer value \"fdsa107374182dw4\"")))
 				})
 			})
 			When("http error or unexpected code", func() {
@@ -1254,27 +1272,32 @@ var _ = Describe("Client", func() {
 							Reply(tReply(reply.Status(status))),
 						)
 
-						resp, err := testClient.UpdateCapabilities()
-						Ω(resp).ShouldNot(BeNil())
+						_, err := testClient.FetchCapabilities()
 						Ω(err).Should(And(
 							MatchError(expectErr),
 							MatchError(ContainSubstring(expectErrMsg)),
 						))
 					},
-					Entry("404", http.StatusNotFound, ErrUnexpectedResponse, "unexpected HTTP response code: HTTP 404: empty body"),
-					Entry("410", http.StatusGone, ErrUnexpectedResponse, "unexpected HTTP response code: HTTP 410: empty body"),
-					Entry("403", http.StatusForbidden, ErrUnexpectedResponse, "unexpected HTTP response code: HTTP 403: empty body"),
-					Entry("400", http.StatusBadRequest, ErrUnexpectedResponse, "unexpected HTTP response code: HTTP 400: empty body"),
-					Entry("201", http.StatusCreated, ErrUnexpectedResponse, "unexpected HTTP response code: HTTP 201: empty body"),
+					Entry("404", http.StatusNotFound, ErrUnexpectedResponse, "unexpected HTTP response code (HTTP 404;"),
+					Entry("410", http.StatusGone, ErrUnexpectedResponse, "unexpected HTTP response code (HTTP 410;"),
+					Entry("403", http.StatusForbidden, ErrUnexpectedResponse, "unexpected HTTP response code (HTTP 403;"),
+					Entry("400", http.StatusBadRequest, ErrUnexpectedResponse, "unexpected HTTP response code (HTTP 400;"),
+					Entry("201", http.StatusCreated, ErrUnexpectedResponse, "unexpected HTTP response code (HTTP 201;"),
 				)
 			})
 		})
 	})
 	Context("ensureExtension", func() {
+		var counter *doRequestCounter
+
+		BeforeEach(func() {
+			counter = &doRequestCounter{}
+			testClient.DoRequest = counter.DoRequest
+		})
 		When("extension exists", func() {
-			When("capabilities are empty", func() {
-				It("should request from server and return no error", func() {
-					testClient.Capabilities = nil
+			When("extensions have not been fetched yet", func() {
+				BeforeEach(func() {
+					testClient.advertisedExtensions = nil
 					srvMock.AddMocks(
 						mocha.Request().URL(expect.URLPath("/")).Method(http.MethodOptions).
 							Reply(tReply(reply.OK()).
@@ -1283,13 +1306,33 @@ var _ = Describe("Client", func() {
 								Header("Tus-Extension", "creation,expiration,checksum").
 								Header("Tus-Checksum-Algorithm", "sha1,md5")),
 					)
+				})
+				It("should request from server, cache the extensions and return no error", func() {
 					Ω(testClient.ensureExtension("creation")).Should(Succeed())
+					Ω(testClient.advertisedExtensions).Should(Equal([]string{"creation", "expiration", "checksum"}))
+					Ω(testClient.ensureExtension("checksum")).Should(Succeed())
+					Ω(counter.requests.Load()).Should(BeEquivalentTo(1))
+				})
+				It("should request from server only once when called concurrently", func() {
+					var wg sync.WaitGroup
+					for range 10 {
+						wg.Add(1)
+						go func() {
+							defer GinkgoRecover()
+							defer wg.Done()
+							Ω(testClient.ensureExtension("creation")).Should(Succeed())
+						}()
+					}
+					wg.Wait()
+					Ω(counter.requests.Load()).Should(BeEquivalentTo(1))
+					Ω(testClient.advertisedExtensions).Should(Equal([]string{"creation", "expiration", "checksum"}))
 				})
 			})
-			When("capabilities are not empty", func() {
+			When("extensions have been fetched", func() {
 				It("should use cache and return no error", func() {
-					testClient.Capabilities.Extensions = []string{"creation", "expiration"}
+					testClient.advertisedExtensions = []string{"creation", "expiration"}
 					Ω(testClient.ensureExtension("creation")).Should(Succeed())
+					Ω(counter.requests.Load()).Should(BeZero())
 				})
 			})
 		})
@@ -1299,6 +1342,37 @@ var _ = Describe("Client", func() {
 					MatchError(ErrUnsupportedFeature),
 					MatchError(ContainSubstring("unsupported feature: creation")),
 				))
+				Ω(counter.requests.Load()).Should(BeZero())
+			})
+			When("server advertises no extensions", func() {
+				It("should cache the empty list and return error", func() {
+					testClient.advertisedExtensions = nil
+					srvMock.AddMocks(
+						mocha.Request().URL(expect.URLPath("/")).Method(http.MethodOptions).
+							Reply(tReply(reply.NoContent()).Header("Tus-Version", "1.0.0")),
+					)
+					Ω(testClient.ensureExtension("creation")).Should(MatchError(ErrUnsupportedFeature))
+					Ω(testClient.advertisedExtensions).Should(BeEmpty())
+					Ω(testClient.advertisedExtensions).ShouldNot(BeNil())
+					Ω(testClient.ensureExtension("termination")).Should(MatchError(ErrUnsupportedFeature))
+					Ω(counter.requests.Load()).Should(BeEquivalentTo(1))
+				})
+			})
+		})
+		When("fetching extensions fails", func() {
+			It("should return error and not cache anything", func() {
+				testClient.advertisedExtensions = nil
+				srvMock.AddMocks(
+					mocha.Request().URL(expect.URLPath("/")).Method(http.MethodOptions).
+						Reply(reply.Status(http.StatusInternalServerError)),
+				)
+				Ω(testClient.ensureExtension("creation")).Should(And(
+					MatchError(ErrUnexpectedResponse),
+					MatchError(ContainSubstring("fetch capabilities")),
+				))
+				Ω(testClient.advertisedExtensions).Should(BeNil())
+				Ω(testClient.ensureExtension("creation")).Should(MatchError(ErrUnexpectedResponse))
+				Ω(counter.requests.Load()).Should(BeEquivalentTo(2))
 			})
 		})
 	})
@@ -1360,6 +1434,9 @@ var _ = Describe("Metadata", func() {
 			Entry("single item", "key dmFsdWU=", map[string]string{"key": "value"}),
 			Entry("multiple items", "key1 dmFsdWUx,key2 Jl4lJCIJ", map[string]string{"key1": "value1", "key2": "&^%$\"\t"}),
 			Entry("empty value", "key ", map[string]string{"key": ""}),
+			Entry("empty value without separating space", "key", map[string]string{"key": ""}),
+			Entry("empty value without separating space among other items", "key1 dmFsdWUx,key2,key3 dmFsdWUz",
+				map[string]string{"key1": "value1", "key2": "", "key3": "value3"}),
 			Entry("value containing spaces and commas", "key YSBiLGM=", map[string]string{"key": "a b,c"}),
 			Entry("non-ASCII value", "filename 0YTQsNC50LsudHh0", map[string]string{"filename": "файл.txt"}),
 			Entry("duplicated key, keeping the last value", "key dmFsdWUx,key dmFsdWUy", map[string]string{"key": "value2"}),
@@ -1370,7 +1447,7 @@ var _ = Describe("Metadata", func() {
 				Ω(err).Should(MatchError(expectMsg))
 			},
 			Entry("empty string", "", `metadata item "" has bad format`),
-			Entry("item without value", "key1 dmFsdWUx,key2", `metadata item "key2" has bad format`),
+			Entry("item without key", "key1 dmFsdWUx, dmFsdWUy", `metadata item " dmFsdWUy" has bad format`),
 			Entry("trailing comma", "key dmFsdWU=,", `metadata item "" has bad format`),
 			Entry("empty item in the middle", "key1 dmFsdWUx,,key2 dmFsdWUy", `metadata item "" has bad format`),
 			Entry("illegal base64 characters", "key !!!!", "illegal base64 data at input byte 0"),
@@ -1379,7 +1456,7 @@ var _ = Describe("Metadata", func() {
 			Entry("extra space before the value", "key  dmFsdWU=", "illegal base64 data at input byte 0"),
 		)
 		It("should return the items decoded before the error", func() {
-			m, err := DecodeMetadata("key1 dmFsdWUx,key2,key3 dmFsdWUz")
+			m, err := DecodeMetadata("key1 dmFsdWUx,key2 !!!!,key3 dmFsdWUz")
 			Ω(err).Should(HaveOccurred())
 			Ω(m).Should(Equal(map[string]string{"key1": "value1"}))
 		})

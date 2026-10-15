@@ -21,7 +21,7 @@ import (
 func UploadWithRetry(dst *tusgo.UploadStream, src io.ReadSeeker) error {
 	// Set stream and file pointer to be equal to the remote pointer
 	// (if we resume the upload that was interrupted earlier)
-	if _, err := dst.Sync(); err != nil {
+	if err := dst.Sync(); err != nil {
 		return fmt.Errorf("sync: %w", err)
 	}
 	if _, err := src.Seek(dst.Tell(), io.SeekStart); err != nil {
@@ -70,7 +70,7 @@ func SplitFile(file *os.File, size int64, parts int64) []*io.SectionReader {
 
 func Example_minimal() {
 	baseURL, _ := url.Parse("http://example.com/files")
-	cl := tusgo.NewClient(http.DefaultClient, baseURL)
+	cl := tusgo.NewClient(baseURL)
 
 	// Assume that the upload has already been created on the server with a size of 1 MiB
 	u := tusgo.Upload{
@@ -85,10 +85,13 @@ func Example_minimal() {
 	}
 	defer f.Close()
 
-	s := tusgo.NewUploadStream(cl, &u)
+	s, err := tusgo.NewUploadStream(cl, u)
+	if err != nil {
+		log.Fatalf("Failed to create upload stream: %s", err)
+	}
 
 	// Align the stream and file offsets with the offset reported by the server
-	if _, err = s.Sync(); err != nil {
+	if err = s.Sync(); err != nil {
 		log.Fatalf("Failed to sync upload stream: %s", err)
 	}
 	if _, err = f.Seek(s.Tell(), io.SeekStart); err != nil {
@@ -97,7 +100,7 @@ func Example_minimal() {
 
 	written, err := io.Copy(s, f)
 	if err != nil {
-		log.Fatalf("Written %d bytes, error: %s, last response: %v", written, err, s.LastResponse)
+		log.Fatalf("Written %d bytes, error: %s", written, err)
 	}
 	log.Printf("Written %d bytes\n", written)
 }
@@ -108,7 +111,7 @@ func ExampleClient_CreateUpload() {
 	if err != nil {
 		log.Fatalf("Failed to parse URL: %s", err)
 	}
-	cl := tusgo.NewClient(http.DefaultClient, baseURL)
+	cl := tusgo.NewClient(baseURL)
 
 	f, finfo, err := OpenFile("/tmp/file.txt")
 	if err != nil {
@@ -116,17 +119,20 @@ func ExampleClient_CreateUpload() {
 	}
 	defer f.Close()
 
-	u := tusgo.Upload{}
-	if _, err = cl.CreateUpload(&u, finfo.Size(), false, nil); err != nil {
+	u, err := cl.CreateUpload(finfo.Size(), false, nil)
+	if err != nil {
 		log.Fatalf("Failed to create upload: %s", err)
 	}
 	fmt.Printf("Location: %s\n", u.Location)
 
-	stream := tusgo.NewUploadStream(cl, &u)
+	stream, err := tusgo.NewUploadStream(cl, u)
+	if err != nil {
+		log.Fatalf("Failed to create upload stream: %s", err)
+	}
 	if err = UploadWithRetry(stream, f); err != nil {
 		log.Fatalf("Failed to upload: %s", err)
 	}
-	fmt.Printf("Uploading complete. Offset: %d, Size: %d\n", u.RemoteOffset, u.RemoteSize)
+	fmt.Printf("Uploading complete. Offset: %d, Size: %d\n", stream.Tell(), stream.Len())
 }
 
 // Example demonstrates the "creation-with-upload" extension. The whole data is sent within the creation request,
@@ -136,15 +142,14 @@ func ExampleClient_CreateUploadWithData() {
 	if err != nil {
 		log.Fatalf("Failed to parse URL: %s", err)
 	}
-	cl := tusgo.NewClient(http.DefaultClient, baseURL)
+	cl := tusgo.NewClient(baseURL)
 
 	data, err := os.ReadFile("/tmp/file.txt")
 	if err != nil {
 		log.Fatalf("Failed to read file: %s", err)
 	}
 
-	u := tusgo.Upload{}
-	uploaded, _, err := cl.CreateUploadWithData(&u, data, int64(len(data)), false, map[string]string{"filename": "file.txt"})
+	uploaded, u, err := cl.CreateUploadWithData(data, int64(len(data)), false, map[string]string{"filename": "file.txt"})
 	if err != nil {
 		log.Fatalf("Failed to create upload: %s", err)
 	}
@@ -164,7 +169,7 @@ func ExampleClient_DeleteUpload() {
 	if err != nil {
 		log.Fatalf("Failed to parse URL: %s", err)
 	}
-	cl := tusgo.NewClient(http.DefaultClient, baseURL)
+	cl := tusgo.NewClient(baseURL)
 
 	f, finfo, err := OpenFile("/tmp/file.txt")
 	if err != nil {
@@ -172,17 +177,24 @@ func ExampleClient_DeleteUpload() {
 	}
 	defer f.Close()
 
-	u := tusgo.Upload{}
-	if _, err = cl.CreateUpload(&u, finfo.Size(), false, nil); err != nil {
+	u, err := cl.CreateUpload(finfo.Size(), false, nil)
+	if err != nil {
 		log.Fatalf("Failed to create upload: %s", err)
 	}
 	fmt.Printf("Location: %s\n", u.Location)
 
-	// Cancel the transfer on Ctrl-C
+	// Cancel the transfer on Ctrl-C. The context is attached to the requests of a separate client used by the stream
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
+	streamCl := tusgo.NewClient(baseURL)
+	streamCl.DoRequest = func(req *http.Request) (*http.Response, error) {
+		return http.DefaultClient.Do(req.WithContext(ctx))
+	}
 
-	stream := tusgo.NewUploadStream(cl, &u).WithContext(ctx)
+	stream, err := tusgo.NewUploadStream(streamCl, u)
+	if err != nil {
+		log.Fatalf("Failed to create upload stream: %s", err)
+	}
 	err = UploadWithRetry(stream, f)
 	switch {
 	case err == nil:
@@ -190,7 +202,7 @@ func ExampleClient_DeleteUpload() {
 	case errors.Is(err, context.Canceled):
 		fmt.Println("Transfer interrupted, deleting the upload")
 		// The client does not use the canceled context, so the request is sent
-		if _, err = cl.DeleteUpload(u); err != nil && !errors.Is(err, tusgo.ErrUploadDoesNotExist) {
+		if err = cl.DeleteUpload(u.Location); err != nil && !errors.Is(err, tusgo.ErrUploadDoesNotExist) {
 			log.Fatalf("Failed to delete upload: %s", err)
 		}
 		fmt.Println("Upload deleted")
@@ -201,12 +213,12 @@ func ExampleClient_DeleteUpload() {
 
 // Example demonstrates the "concatenation" extension. A file is split into parts, which are transferred in parallel
 // to partial uploads, and then concatenated into a final upload.
-func ExampleClient_ConcatenateUploads_parallel() {
+func ExampleClient_ConcatenatePartialUploads_parallel() {
 	baseURL, err := url.Parse("http://example.com/files")
 	if err != nil {
 		log.Fatalf("Failed to parse URL: %s", err)
 	}
-	cl := tusgo.NewClient(http.DefaultClient, baseURL)
+	cl := tusgo.NewClient(baseURL)
 
 	f, finfo, err := OpenFile("/tmp/file.txt")
 	if err != nil {
@@ -216,7 +228,7 @@ func ExampleClient_ConcatenateUploads_parallel() {
 
 	// Split the file into 4 parts, each one is read independently from its own offset in the file
 	parts := SplitFile(f, finfo.Size(), 4)
-	uploads := make([]tusgo.Upload, len(parts))
+	locations := make([]string, len(parts))
 	wg := &sync.WaitGroup{}
 	wg.Add(len(parts))
 
@@ -227,17 +239,20 @@ func ExampleClient_ConcatenateUploads_parallel() {
 		go func() {
 			defer wg.Done()
 
-			u := tusgo.Upload{}
-			if _, err := cl.CreateUpload(&u, part.Size(), true, nil); err != nil {
+			u, err := cl.CreateUpload(part.Size(), true, nil)
+			if err != nil {
 				log.Fatalf("Part #%d: failed to create upload: %s", ind, err)
 			}
 
 			fmt.Printf("Part #%d: transferring %d bytes to %s\n", ind, part.Size(), u.Location)
-			stream := tusgo.NewUploadStream(cl, &u)
+			stream, err := tusgo.NewUploadStream(cl, u)
+			if err != nil {
+				log.Fatalf("Part #%d: failed to create upload stream: %s", ind, err)
+			}
 			if err := UploadWithRetry(stream, part); err != nil {
 				log.Fatalf("Part #%d: failed to upload: %s", ind, err)
 			}
-			uploads[ind] = u
+			locations[ind] = u.Location
 		}()
 	}
 
@@ -245,22 +260,22 @@ func ExampleClient_ConcatenateUploads_parallel() {
 	fmt.Println("Uploading complete, starting concatenation...")
 
 	// Concatenate partial uploads into a final upload
-	final := tusgo.Upload{}
-	if _, err = cl.ConcatenateUploads(&final, uploads, nil); err != nil {
+	final, err := cl.ConcatenatePartialUploads(locations, nil)
+	if err != nil {
 		log.Fatalf("Failed to concatenate uploads: %s", err)
 	}
-	fmt.Printf("Final upload location: %s\n", final.Location)
+	fmt.Printf("Final upload location: %s\n", final)
 }
 
 // Example demonstrates the "concatenation-unfinished" extension. A file is split into parts, and the final upload is
 // requested before the parts are transferred. The server concatenates the partial uploads once all of them are
 // finished.
-func ExampleClient_ConcatenateStreams_parallel() {
+func ExampleClient_ConcatenatePartialUploads_unfinished() {
 	baseURL, err := url.Parse("http://example.com/files")
 	if err != nil {
 		log.Fatalf("Failed to parse URL: %s", err)
 	}
-	cl := tusgo.NewClient(http.DefaultClient, baseURL)
+	cl := tusgo.NewClient(baseURL)
 
 	f, finfo, err := OpenFile("/tmp/file.txt")
 	if err != nil {
@@ -271,21 +286,25 @@ func ExampleClient_ConcatenateStreams_parallel() {
 	// Split the file into consecutive parts
 	parts := SplitFile(f, finfo.Size(), 4)
 	streams := make([]*tusgo.UploadStream, len(parts))
+	locations := make([]string, len(parts))
 	for ind, part := range parts {
-		u := tusgo.Upload{}
-		if _, err = cl.CreateUpload(&u, part.Size(), true, nil); err != nil {
+		u, err := cl.CreateUpload(part.Size(), true, nil)
+		if err != nil {
 			log.Fatalf("Part #%d: failed to create upload: %s", ind, err)
 		}
 		fmt.Printf("Part #%d: location %s\n", ind, u.Location)
-		streams[ind] = tusgo.NewUploadStream(cl, &u)
+		if streams[ind], err = tusgo.NewUploadStream(cl, u); err != nil {
+			log.Fatalf("Part #%d: failed to create upload stream: %s", ind, err)
+		}
+		locations[ind] = u.Location
 	}
 
 	// Asking the server to concatenate the partial uploads into a final upload once they are finished.
-	final := tusgo.Upload{}
-	if _, err = cl.ConcatenateStreams(&final, streams, nil); err != nil {
+	final, err := cl.ConcatenatePartialUploads(locations, nil)
+	if err != nil {
 		log.Fatalf("Failed to concatenate uploads: %s", err)
 	}
-	fmt.Printf("Final upload location: %s\n", final.Location)
+	fmt.Printf("Final upload location: %s\n", final)
 
 	// Transfer the parts in parallel
 	wg := &sync.WaitGroup{}
@@ -310,10 +329,10 @@ func ExampleClient_CreateUpload_deferredSize() {
 	if err != nil {
 		log.Fatalf("Failed to parse URL: %s", err)
 	}
-	cl := tusgo.NewClient(http.DefaultClient, baseURL)
+	cl := tusgo.NewClient(baseURL)
 
-	u := tusgo.Upload{}
-	if _, err = cl.CreateUpload(&u, tusgo.SizeUnknown, false, nil); err != nil {
+	u, err := cl.CreateUpload(tusgo.SizeUnknown, false, nil)
+	if err != nil {
 		log.Fatalf("Failed to create upload: %s", err)
 	}
 	fmt.Printf("Location: %s\n", u.Location)
@@ -325,12 +344,15 @@ func ExampleClient_CreateUpload_deferredSize() {
 	defer f.Close()
 	u.RemoteSize = finfo.Size() // Set size after the upload has been created on server
 
-	stream := tusgo.NewUploadStream(cl, &u)
+	stream, err := tusgo.NewUploadStream(cl, u)
+	if err != nil {
+		log.Fatalf("Failed to create upload stream: %s", err)
+	}
 	stream.SetUploadSize = true
 	if err = UploadWithRetry(stream, f); err != nil {
 		log.Fatalf("Failed to upload: %s", err)
 	}
-	fmt.Printf("Uploading complete. Offset: %d, Size: %d\n", u.RemoteOffset, u.RemoteSize)
+	fmt.Printf("Uploading complete. Offset: %d, Size: %d\n", stream.Tell(), stream.Len())
 }
 
 // Example demonstrates the "expiration" extension. The upload created in a previous run is resumed if it has not
@@ -340,7 +362,7 @@ func Example_expiration() {
 	if err != nil {
 		log.Fatalf("Failed to parse URL: %s", err)
 	}
-	cl := tusgo.NewClient(http.DefaultClient, baseURL)
+	cl := tusgo.NewClient(baseURL)
 
 	f, finfo, err := OpenFile("/tmp/file.txt")
 	if err != nil {
@@ -348,8 +370,8 @@ func Example_expiration() {
 	}
 	defer f.Close()
 
-	u := tusgo.Upload{}
-	if _, err = cl.CreateUpload(&u, finfo.Size(), false, nil); err != nil {
+	u, err := cl.CreateUpload(finfo.Size(), false, nil)
+	if err != nil {
 		log.Fatalf("Failed to create upload: %s", err)
 	}
 
@@ -362,25 +384,28 @@ func Example_expiration() {
 
 // Example demonstrates the "checksum" extension. The data is sent in chunks, and each chunk is verified by the server
 // using the checksum sent in the request header.
-func ExampleUploadStream_WithChecksumAlgorithm() {
+func ExampleNewUploadStreamWithChecksum() {
 	baseURL, err := url.Parse("http://example.com/files")
 	if err != nil {
 		log.Fatalf("Failed to parse URL: %s", err)
 	}
-	cl := tusgo.NewClient(http.DefaultClient, baseURL)
+	cl := tusgo.NewClient(baseURL)
 
 	f, finfo, err := OpenFile("/tmp/file.txt")
 	if err != nil {
 		log.Fatalf("%s", err)
 	}
 	defer f.Close()
-	u := tusgo.Upload{}
-	if _, err = cl.CreateUpload(&u, finfo.Size(), false, nil); err != nil {
+	u, err := cl.CreateUpload(finfo.Size(), false, nil)
+	if err != nil {
 		log.Fatalf("Failed to create upload: %s", err)
 	}
 
 	// We want to use sha1
-	stream := tusgo.NewUploadStream(cl, &u).WithChecksumAlgorithm("sha1")
+	stream, err := tusgo.NewUploadStreamWithChecksum(cl, u, "sha1")
+	if err != nil {
+		log.Fatalf("Failed to create upload stream: %s", err)
+	}
 	if err = UploadWithRetry(stream, f); err != nil {
 		log.Fatalf("Failed to upload: %s", err)
 	}
@@ -389,28 +414,28 @@ func ExampleUploadStream_WithChecksumAlgorithm() {
 
 // Example demonstrates the "checksum-trailer" extension. The data is streamed in a single request without
 // chunking, and the checksum of the whole data is sent in the HTTP trailer.
-func ExampleUploadStream_WithChecksumAlgorithm_streamed() {
+func ExampleNewUploadStreamWithChecksum_streamed() {
 	baseURL, err := url.Parse("http://example.com/files")
 	if err != nil {
 		log.Fatalf("Failed to parse URL: %s", err)
 	}
-	cl := tusgo.NewClient(http.DefaultClient, baseURL)
-	if _, err = cl.UpdateCapabilities(); err != nil {
-		log.Fatalf("Failed to get server capabilities: %s", err)
-	}
+	cl := tusgo.NewClient(baseURL)
 
 	f, finfo, err := OpenFile("/tmp/file.txt")
 	if err != nil {
 		log.Fatalf("%s", err)
 	}
 	defer f.Close()
-	u := tusgo.Upload{}
-	if _, err = cl.CreateUpload(&u, finfo.Size(), false, nil); err != nil {
+	u, err := cl.CreateUpload(finfo.Size(), false, nil)
+	if err != nil {
 		log.Fatalf("Failed to create upload: %s", err)
 	}
 	fmt.Printf("Location: %s\n", u.Location)
 
-	stream := tusgo.NewUploadStream(cl, &u).WithChecksumAlgorithm("sha256")
+	stream, err := tusgo.NewUploadStreamWithChecksum(cl, u, "sha256")
+	if err != nil {
+		log.Fatalf("Failed to create upload stream: %s", err)
+	}
 	stream.ChunkSize = tusgo.NoChunked // Checksum is sent in trailer only when chunking is disabled
 	if err = UploadWithRetry(stream, f); err != nil {
 		log.Fatalf("Failed to upload: %s", err)
@@ -442,39 +467,39 @@ func Example_transferWithSpeedControl() {
 	if err != nil {
 		log.Fatalf("Failed to parse URL: %s", err)
 	}
-	cl := tusgo.NewClient(http.DefaultClient, baseURL)
-	if _, err = cl.UpdateCapabilities(); err != nil {
-		log.Fatalf("Failed to get server capabilities: %s", err)
-	}
+	cl := tusgo.NewClient(baseURL)
 
 	f, finfo, err := OpenFile("/tmp/file.txt")
 	if err != nil {
 		log.Fatalf("%s", err)
 	}
 	defer f.Close()
-	u := tusgo.Upload{}
-	if _, err = cl.CreateUpload(&u, finfo.Size(), false, nil); err != nil {
+	u, err := cl.CreateUpload(finfo.Size(), false, nil)
+	if err != nil {
 		log.Fatalf("Failed to create upload: %s", err)
 	}
 
 	// Limit speed to 512 KiB/s
 	src := &rateLimitedReader{ReadSeeker: f, bytesPerSecond: 512 * 1024}
-	stream := tusgo.NewUploadStream(cl, &u)
+	stream, err := tusgo.NewUploadStream(cl, u)
+	if err != nil {
+		log.Fatalf("Failed to create upload stream: %s", err)
+	}
 
 	if err = UploadWithRetry(stream, src); err != nil {
 		log.Fatalf("Failed to upload: %s", err)
 	}
-	fmt.Printf("Uploading complete. Offset: %d, Size: %d\n", u.RemoteOffset, u.RemoteSize)
+	fmt.Printf("Uploading complete. Offset: %d, Size: %d\n", stream.Tell(), stream.Len())
 }
 
-// Example demonstrates how to add the Authorization header to all requests by replacing [tusgo.Client.GetRequest].
-// The function is called for every request the library sends, including the ones issued by [tusgo.UploadStream].
+// Example demonstrates how to add the Authorization header to all requests by setting [tusgo.Client.ExtraHeaders].
+// The headers are sent with every request the library sends, including the ones issued by [tusgo.UploadStream].
 func ExampleClient_headers() {
 	baseURL, err := url.Parse("http://example.com/files")
 	if err != nil {
 		log.Fatalf("Failed to parse URL: %s", err)
 	}
-	cl := tusgo.NewClient(http.DefaultClient, baseURL)
+	cl := tusgo.NewClient(baseURL)
 	cl.ExtraHeaders.Set("Authorization", "Bearer "+os.Getenv("TUS_TOKEN"))
 
 	f, finfo, err := OpenFile("/tmp/file.txt")
@@ -483,13 +508,16 @@ func ExampleClient_headers() {
 	}
 	defer f.Close()
 
-	u := tusgo.Upload{}
-	if _, err = cl.CreateUpload(&u, finfo.Size(), false, nil); err != nil {
+	u, err := cl.CreateUpload(finfo.Size(), false, nil)
+	if err != nil {
 		log.Fatalf("Failed to create upload: %s", err)
 	}
 	fmt.Printf("Location: %s\n", u.Location)
 
-	stream := tusgo.NewUploadStream(cl, &u)
+	stream, err := tusgo.NewUploadStream(cl, u)
+	if err != nil {
+		log.Fatalf("Failed to create upload stream: %s", err)
+	}
 	if err = UploadWithRetry(stream, f); err != nil {
 		log.Fatalf("Failed to upload: %s", err)
 	}

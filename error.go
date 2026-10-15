@@ -1,75 +1,13 @@
 package tusgo
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
-	"unicode/utf8"
+	"strings"
 )
-
-// bodyReadLimit is the maximum number of the response body bytes included in an error message
-const bodyReadLimit = 256
-
-// TusError represents an error occurred during a TUS operation.
-type TusError struct {
-	inner error
-	msg   string
-}
-
-func (te TusError) Error() string {
-	if te.inner == nil {
-		return te.msg
-	}
-	return fmt.Sprintf("%s: %s", te.msg, te.inner)
-}
-
-func (te TusError) Unwrap() error {
-	return te.inner
-}
-
-// Is reports whether the error is equal to the target error.
-func (te TusError) Is(e error) bool {
-	v, ok := e.(TusError)
-	return ok && v.msg == te.msg || errors.Is(te.inner, e)
-}
-
-func newTusErrorWithErr(te TusError, inner error) TusError {
-	te.inner = inner
-	return te
-}
-
-func newTusErrorWithResponse(te TusError, r *http.Response) TusError {
-	if r == nil {
-		te.inner = fmt.Errorf("response is nil")
-		return te
-	}
-
-	b := make([]byte, bodyReadLimit)
-	if l, err := io.ReadFull(r.Body, b); err == nil || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-		size := r.Header.Get("Content-Length")
-		if size == "" {
-			size = "?"
-		}
-		var body string
-		if !utf8.Valid(b[:l]) {
-			body = fmt.Sprintf("%v", b[:l]) // if the body is not valid UTF-8, print it as a byte slice
-		} else {
-			body = string(b[:l])
-		}
-		switch {
-		case err == nil:
-			te.inner = fmt.Errorf("HTTP %d: body (%s bytes): %s... (truncated)", r.StatusCode, size, body)
-		case l > 0:
-			te.inner = fmt.Errorf("HTTP %d: body (%s bytes): %s", r.StatusCode, size, body)
-		default:
-			te.inner = fmt.Errorf("HTTP %d: empty body", r.StatusCode)
-		}
-	} else {
-		te.inner = fmt.Errorf("HTTP %d: read body: %w", r.StatusCode, err)
-	}
-	return te
-}
 
 var (
 	// ErrUnsupportedFeature is returned when an action requires a TUS extension the server does not support.
@@ -106,3 +44,64 @@ var (
 	// by a proxy server or CDN.
 	ErrUnexpectedResponse = TusError{msg: "unexpected HTTP response code"}
 )
+
+// bodyReadLimit is the maximum number of the response body bytes included in an error message
+const bodyReadLimit = 2 * 1024 // 2 KiB
+
+// TusError represents an error occurred during a TUS operation.
+type TusError struct {
+	inner error
+	resp  *http.Response
+	msg   string
+}
+
+func (te TusError) Error() string {
+	var b strings.Builder
+
+	b.WriteString(te.msg)
+	if te.resp != nil {
+		fmt.Fprintf(&b, " (HTTP %d; Content-Length=%d)", te.resp.StatusCode, te.resp.ContentLength)
+	}
+	if te.inner != nil {
+		fmt.Fprintf(&b, ": %s", te.inner.Error())
+	}
+	return b.String()
+}
+
+func (te TusError) Unwrap() error {
+	return te.inner
+}
+
+// Is reports whether the error is equal to the target error.
+func (te TusError) Is(e error) bool {
+	v, ok := e.(TusError)
+	return ok && v.msg == te.msg || errors.Is(te.inner, e)
+}
+
+// Response returns the copy of the HTTP response that caused the error, or nil if no response has been made.
+// The response body is already closed and contains up to first 2KiB of the original response body if it was available.
+func (te TusError) Response() *http.Response {
+	return te.resp
+}
+
+func newTusError(te TusError, r *http.Response, e error) TusError {
+	// Read the response body up to bodyReadLimit byte
+	if r != nil {
+		r2 := *r
+		te.resp = &r2
+
+		b := make([]byte, bodyReadLimit)
+		if l, err := io.ReadFull(r2.Body, b); err == nil || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			r2.Body = io.NopCloser(bytes.NewReader(b[:l]))
+		} else {
+			te.inner = fmt.Errorf("read response body: %w", err)
+			r2.Body = io.NopCloser(bytes.NewReader(nil))
+		}
+	}
+
+	if e != nil {
+		te.inner = errors.Join(te.inner, e)
+	}
+
+	return te
+}

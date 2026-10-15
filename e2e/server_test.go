@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"crypto/rand"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -72,15 +73,34 @@ func startServer(configure func(cfg *handler.Config), mw middleware) *tusServer 
 
 // NewClient returns a new client working with the server.
 func (s *tusServer) NewClient() *tusgo.Client {
-	return tusgo.NewClient(s.Client(), s.BaseURL)
+	cl := tusgo.NewClient(s.BaseURL)
+	cl.Client = s.Client()
+	return cl
 }
 
-// StoredData returns the data the server has stored for the upload.
-func (s *tusServer) StoredData(u tusgo.Upload) []byte {
+// StoredData returns the data the server has stored for the upload at the given location.
+func (s *tusServer) StoredData(location string) []byte {
 	GinkgoHelper()
-	data, err := os.ReadFile(filepath.Join(s.Dir, path.Base(u.Location)))
+	data, err := os.ReadFile(filepath.Join(s.Dir, path.Base(location)))
 	Expect(err).NotTo(HaveOccurred())
 	return data
+}
+
+// newStream returns a new stream transferring the data to the upload.
+func newStream(cl *tusgo.Client, u tusgo.Upload) *tusgo.UploadStream {
+	GinkgoHelper()
+	s, err := tusgo.NewUploadStream(cl, u)
+	Expect(err).NotTo(HaveOccurred())
+	return s
+}
+
+// errResponse returns the response kept by the tusgo.TusError found in err chain, or nil.
+func errResponse(err error) *http.Response {
+	var te tusgo.TusError
+	if errors.As(err, &te) {
+		return te.Response()
+	}
+	return nil
 }
 
 // randomData returns n random bytes.

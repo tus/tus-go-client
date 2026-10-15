@@ -55,7 +55,6 @@ package main
 import (
 	"io"
 	"log"
-	"net/http"
 	"net/url"
 	"os"
 
@@ -64,7 +63,7 @@ import (
 
 func main() {
 	baseURL, _ := url.Parse("http://example.com/files")
-	cl := tusgo.NewClient(http.DefaultClient, baseURL)
+	cl := tusgo.NewClient(baseURL)
 
 	// Assume that the upload has already been created on the server with a size of 1 MiB
 	u := tusgo.Upload{
@@ -79,10 +78,13 @@ func main() {
 	}
 	defer f.Close()
 
-	s := tusgo.NewUploadStream(cl, &u)
+	s, err := tusgo.NewUploadStream(cl, u)
+	if err != nil {
+		log.Fatalf("Failed to create upload stream: %s", err)
+	}
 
 	// Align the stream and file offsets with the offset reported by the server
-	if _, err = s.Sync(); err != nil {
+	if err = s.Sync(); err != nil {
 		log.Fatalf("Failed to sync upload stream: %s", err)
 	}
 	if _, err = f.Seek(s.Tell(), io.SeekStart); err != nil {
@@ -91,7 +93,7 @@ func main() {
 
 	written, err := io.Copy(s, f)
 	if err != nil {
-		log.Fatalf("Written %d bytes, error: %s, last response: %v", written, err, s.LastResponse)
+		log.Fatalf("Written %d bytes, error: %s", written, err)
 	}
 	log.Printf("Written %d bytes\n", written)
 }
