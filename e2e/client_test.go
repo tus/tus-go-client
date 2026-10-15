@@ -39,7 +39,7 @@ var _ = Describe("Client", func() {
 			u, err := cl.CreateUpload(10, false, nil)
 			Expect(err).NotTo(HaveOccurred())
 
-			err = cl.DeleteUpload(u)
+			err = cl.DeleteUpload(u.Location)
 
 			Expect(err).To(MatchError(tusgo.ErrUnsupportedFeature))
 		})
@@ -172,12 +172,12 @@ var _ = Describe("Client", func() {
 			u, err := cl.CreateUpload(1024, false, nil)
 			Expect(err).NotTo(HaveOccurred())
 
-			err = cl.DeleteUpload(u)
+			err = cl.DeleteUpload(u.Location)
 
 			Expect(err).NotTo(HaveOccurred())
 			_, err = cl.GetUpload(u.Location)
 			Expect(err).To(MatchError(tusgo.ErrUploadDoesNotExist))
-			err = cl.DeleteUpload(u)
+			err = cl.DeleteUpload(u.Location)
 			Expect(err).To(MatchError(tusgo.ErrUploadDoesNotExist))
 			Expect(errResponse(err)).To(And(
 				HaveHTTPStatus(http.StatusNotFound),

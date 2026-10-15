@@ -265,15 +265,16 @@ func (c *Client) CreateUploadWithData(data []byte, remoteSize int64, partial boo
 	return uploadedBytes, res, nil
 }
 
-// DeleteUpload deletes the upload u from the server. The server must advertise the "termination" extension.
+// DeleteUpload deletes the upload at the given location from the server. The server must advertise the
+// "termination" extension.
 //
 // The method returns [ErrUploadDoesNotExist] if no such upload has been found on the server.
-func (c *Client) DeleteUpload(u Upload) error {
+func (c *Client) DeleteUpload(location string) error {
 	if err := c.ensureExtension("termination"); err != nil {
 		return err
 	}
 
-	loc, err := url.Parse(u.Location)
+	loc, err := url.Parse(location)
 	if err != nil {
 		return fmt.Errorf("parse location: %w", err)
 	}

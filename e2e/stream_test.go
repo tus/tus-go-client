@@ -158,7 +158,7 @@ var _ = Describe("UploadStream", func() {
 	})
 
 	It("should return error when writing to a deleted upload", func() {
-		err := cl.DeleteUpload(u)
+		err := cl.DeleteUpload(u.Location)
 		Expect(err).NotTo(HaveOccurred())
 
 		_, err = tusgo.NewUploadStream(cl, &u).Write(data)

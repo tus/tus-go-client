@@ -930,7 +930,7 @@ var _ = Describe("Client", func() {
 			})
 			It("should close the response body", func() {
 				tExpectBodyClosed(testClient, http.StatusNoContent, nil, func() error {
-					return testClient.DeleteUpload(Upload{Location: "/foo/bar"})
+					return testClient.DeleteUpload("/foo/bar")
 				})
 			})
 			It("should send the request via DoRequest along with ExtraHeaders", func() {
@@ -940,9 +940,8 @@ var _ = Describe("Client", func() {
 					Reply(tReply(reply.NoContent())))
 				testClient.DoRequest = spy.DoRequest
 				testClient.ExtraHeaders = extraHeaders
-				f := Upload{Location: "/foo/bar"}
 
-				Ω(testClient.DeleteUpload(f)).Should(Succeed())
+				Ω(testClient.DeleteUpload("/foo/bar")).Should(Succeed())
 				Ω(spy.calls).Should(Equal([]doRequestCall{{http.MethodDelete, srvMock.URL() + "/foo/bar"}}))
 			})
 			It("should send ExtraHeaders and leave them untouched", func() {
@@ -950,30 +949,26 @@ var _ = Describe("Client", func() {
 					Header("X-Extra", expect.ToEqual("extra")).
 					Reply(tReply(reply.NoContent())))
 				testClient.ExtraHeaders = extraHeaders
-				f := Upload{Location: "/foo/bar"}
 
-				Ω(testClient.DeleteUpload(f)).Should(Succeed())
+				Ω(testClient.DeleteUpload("/foo/bar")).Should(Succeed())
 				Ω(testClient.ExtraHeaders).Should(Equal(http.Header{"X-Extra": {"extra"}}))
 			})
 			Specify("make a request", func() {
 				srvMock.AddMocks(
 					tRequest(http.MethodDelete, "/foo/bar", tusHeaders).
 						Reply(tReply(reply.NoContent())))
-				f := Upload{Location: "/foo/bar"}
-				Ω(testClient.DeleteUpload(f)).Should(Succeed())
-				Ω(f).Should(Equal(Upload{Location: "/foo/bar"}))
+				Ω(testClient.DeleteUpload("/foo/bar")).Should(Succeed())
 			})
 		})
 		Context("error path", func() {
 			It("should keep the response body in the error and close the original body", func() {
 				testClient.Capabilities.Extensions = append(testClient.Capabilities.Extensions, "termination")
 				tExpectBodyKeptInError(testClient, http.StatusNotFound, nil, ErrUploadDoesNotExist, func() error {
-					return testClient.DeleteUpload(Upload{Location: "/foo/bar"})
+					return testClient.DeleteUpload("/foo/bar")
 				})
 			})
 			Specify("no termination extension", func() {
-				f := Upload{Location: "/foo/bar"}
-				err := testClient.DeleteUpload(f)
+				err := testClient.DeleteUpload("/foo/bar")
 				Ω(err).Should(And(
 					MatchError(ErrUnsupportedFeature), MatchError(ContainSubstring("unsupported feature: termination")),
 				))
@@ -983,14 +978,12 @@ var _ = Describe("Client", func() {
 					func(status int, expectErr error, expectErrMsg string) {
 						testClient.Capabilities.Extensions = append(testClient.Capabilities.Extensions, "termination")
 						srvMock.AddMocks(tRequest(http.MethodDelete, "/foo/bar", tusHeaders).Reply(reply.Status(status)))
-						f := Upload{Location: "/foo/bar"}
 
-						err := testClient.DeleteUpload(f)
+						err := testClient.DeleteUpload("/foo/bar")
 						Ω(tErrResponse(err)).Should(HaveHTTPStatus(status))
 						Ω(err).Should(And(
 							MatchError(expectErr), MatchError(ContainSubstring(expectErrMsg)),
 						))
-						Ω(f).Should(Equal(Upload{Location: "/foo/bar"}))
 					},
 					Entry("413", http.StatusRequestEntityTooLarge, ErrUnexpectedResponse, "unexpected HTTP response code (HTTP 413;"),
 					Entry("404", http.StatusNotFound, ErrUploadDoesNotExist, "upload does not exist (HTTP 404;"),

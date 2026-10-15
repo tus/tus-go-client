@@ -193,7 +193,7 @@ func ExampleClient_DeleteUpload() {
 	case errors.Is(err, context.Canceled):
 		fmt.Println("Transfer interrupted, deleting the upload")
 		// The client does not use the canceled context, so the request is sent
-		if err = cl.DeleteUpload(u); err != nil && !errors.Is(err, tusgo.ErrUploadDoesNotExist) {
+		if err = cl.DeleteUpload(u.Location); err != nil && !errors.Is(err, tusgo.ErrUploadDoesNotExist) {
 			log.Fatalf("Failed to delete upload: %s", err)
 		}
 		fmt.Println("Upload deleted")
