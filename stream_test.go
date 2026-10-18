@@ -53,7 +53,7 @@ var _ = Describe("Stream", func() {
 		Context("NewStream", func() {
 			It("should correct set initial values", func() {
 				expires := time.Date(2014, 6, 25, 16, 0, 0, 0, time.UTC)
-				u := Upload{Location: "/foo/bar", RemoteSize: 1024, RemoteOffset: 64, UploadExpired: &expires}
+				u := Upload{Location: "/foo/bar", RemoteSize: 1024, RemoteOffset: 64, Expires: &expires}
 				s, err := NewStream(testClient, u)
 				Ω(err).ShouldNot(HaveOccurred())
 
@@ -267,7 +267,7 @@ var _ = Describe("Stream", func() {
 			Ω(up.requests[0].Header.Get("Upload-Checksum")).Should(Equal("sha1 " + b64sum))
 			Ω(up.requests[0].Trailer.Get("Upload-Checksum")).Should(BeEmpty())
 		})
-		It("should set UploadExpired", func() {
+		It("should set Expires", func() {
 			testClient.advertisedExtensions = append(testClient.advertisedExtensions, "expiration")
 			rpl := tReply(reply.NoContent()).Header("Upload-Expires", "Wed, 25 Jun 2014 16:00:00 GMT")
 			up := mockTusUploader{replies: []*reply.StdReply{rpl}, buf: bytes.NewBuffer(make([]byte, 0))}
@@ -341,7 +341,7 @@ var _ = Describe("Stream", func() {
 				Ω(s.DeclareSize(1024)).Should(Succeed())
 				Ω(s.Size()).Should(BeEquivalentTo(1024))
 			})
-			It("should set UploadExpired", func() {
+			It("should set Expires", func() {
 				testClient.advertisedExtensions = append(testClient.advertisedExtensions, "creation-defer-length")
 				rpl := tReply(reply.NoContent()).Header("Upload-Expires", "Wed, 25 Jun 2014 16:00:00 GMT")
 				up := mockTusUploader{replies: []*reply.StdReply{rpl}, buf: bytes.NewBuffer(make([]byte, 0))}

@@ -30,9 +30,9 @@ type Upload struct {
 	// Metadata is the additional data assigned to the upload when it was created on the server.
 	Metadata map[string]string
 
-	// UploadExpired is the time the upload expires on the server, after which it is no longer available.
-	// A nil value means that the upload does not expire.
-	UploadExpired *time.Time
+	// Expires is the time the upload expires on the server, after which it is no longer available.
+	// A nil value means that the upload does not expire or the server does not support the upload expiration
+	Expires *time.Time
 
 	// Partial reports whether the upload is "partial". Partial uploads may be transferred in parallel and,
 	// once completed, are meant to be concatenated into a "final" upload.

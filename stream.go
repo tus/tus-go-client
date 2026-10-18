@@ -31,7 +31,7 @@ func NewStream(client *Client, upload Upload) (*Stream, error) {
 
 		uploadStateOffset:  upload.RemoteOffset,
 		uploadSize:         upload.RemoteSize,
-		uploadStateExpires: upload.UploadExpired,
+		uploadStateExpires: upload.Expires,
 	}, nil
 }
 
@@ -186,7 +186,7 @@ func (rs *Stream) Sync() (int64, error) {
 	oldOffset := rs.uploadStateOffset
 	rs.uploadStateOffset = u.RemoteOffset
 	rs.uploadSize = u.RemoteSize
-	rs.uploadStateExpires = u.UploadExpired
+	rs.uploadStateExpires = u.Expires
 
 	return rs.uploadStateOffset - oldOffset, nil
 }

@@ -203,7 +203,7 @@ func (c *Client) CreateUpload(remoteSize int64, partial bool, metadata map[strin
 			if err != nil {
 				return res, newTusError(ErrProtocol, resp, fmt.Errorf("parse RFC1123 datetime in Upload-Expires header %q: %w", v, err))
 			}
-			res.UploadExpired = &t
+			res.Expires = &t
 		}
 		return res, nil
 	case http.StatusRequestEntityTooLarge:
@@ -249,7 +249,7 @@ func (c *Client) CreateUploadWithData(data []byte, remoteSize int64, partial boo
 
 	newOffset, expires, resp, err := s.doRequest(http.MethodPost, c.endpoint.String(), data, nil, 0, headers) // Upload in one request
 	res.RemoteOffset = newOffset
-	res.UploadExpired = expires
+	res.Expires = expires
 	defer closeResponseBody(resp)
 	if err != nil {
 		return newOffset, res, fmt.Errorf("request: %w", err)

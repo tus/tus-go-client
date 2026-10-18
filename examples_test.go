@@ -384,8 +384,8 @@ func Example_expiration() {
 		log.Fatalf("Failed to create upload: %s", err)
 	}
 
-	if u.UploadExpired != nil {
-		fmt.Printf("Upload expires at %s\n", u.UploadExpired.Format(time.RFC1123))
+	if u.Expires != nil {
+		fmt.Printf("Upload expires at %s\n", u.Expires.Format(time.RFC1123))
 	} else {
 		fmt.Printf("Upload does not expire\n")
 	}

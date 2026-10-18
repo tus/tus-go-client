@@ -9,7 +9,7 @@ type ServerCapabilities struct {
 	//   - creation-defer-length -- create an upload without its size, which is declared on the first data transfer
 	//   - creation-with-upload -- create an upload and transfer its data in a single request, see
 	//     [Client.CreateUploadWithData]
-	//   - expiration -- uploads expire after some time, see [Upload.UploadExpired]
+	//   - expiration -- uploads expire after some time, see [Upload.Expires]
 	//   - checksum -- verify the integrity of chunked uploads
 	//   - checksum-trailer -- verify the integrity of streamed uploads, the checksum is sent in an HTTP trailer
 	//   - termination -- delete uploads, see [Client.DeleteUpload]
