@@ -2,7 +2,6 @@ package e2e
 
 import (
 	"bytes"
-	"io"
 
 	"github.com/bdragon300/tusgo"
 	. "github.com/onsi/ginkgo/v2"
@@ -20,7 +19,7 @@ var _ = Describe("Concatenation", func() {
 		u, err := cl.CreateUpload(int64(len(data)), true, nil)
 		Expect(err).NotTo(HaveOccurred())
 		s := newStream(cl, u)
-		_, err = io.Copy(s, bytes.NewReader(data[:n]))
+		_, err = s.Write(data[:n])
 		Expect(err).NotTo(HaveOccurred())
 		return u.Location
 	}

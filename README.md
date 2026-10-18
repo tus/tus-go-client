@@ -19,8 +19,9 @@ The API reference is available on [pkg.go.dev](https://pkg.go.dev/github.com/bdr
 
 ## Features
 
-- **Resumable upload stream** with both chunked and streamed transfer modes. The stream implements `io.Writer` and
-  `io.ReaderFrom`, so it works with standard library helpers such as `io.Copy`.
+- **Resumable upload streams**: `ChunkedStream` implements `io.ReaderFrom` and transfers the data in chunks, one
+  request per chunk, so it works with standard library helpers such as `io.Copy`. `RawStream` implements `io.Writer`
+  and sends each write in a single request.
 - **Upload management client** for creating, deleting, concatenating, and otherwise manipulating uploads.
 - **Protocol extensions** support (see below).
 
@@ -29,7 +30,7 @@ The API reference is available on [pkg.go.dev](https://pkg.go.dev/github.com/bdr
 | Extension                  | Description                                                                                                             |
 |----------------------------|-------------------------------------------------------------------------------------------------------------------------|
 | `creation`                 | Create new uploads on the server                                                                                        |
-| `creation-defer-length`    | Create an upload without specifying its size, which is declared on the first data transfer.                             |
+| `creation-defer-length`    | Create an upload without specifying its size, which is declared later.                                                  |
 | `creation-with-upload`     | Create an upload and transfer its data in a single HTTP request.                                                        |
 | `expiration`               | Uploads with expiration date.                                                                                           |
 | `checksum`                 | Verify data integrity of chunked uploads. Many checksum algorithms are supported.                                       |
@@ -78,20 +79,22 @@ func main() {
 	}
 	defer f.Close()
 
-	s, err := tusgo.NewUploadStream(cl, u)
+	s, err := tusgo.NewStream(cl, u)
 	if err != nil {
 		log.Fatalf("Failed to create upload stream: %s", err)
 	}
 
 	// Align the stream and file offsets with the offset reported by the server
-	if err = s.Sync(); err != nil {
+	if _, err = s.Sync(); err != nil {
 		log.Fatalf("Failed to sync upload stream: %s", err)
 	}
 	if _, err = f.Seek(s.Tell(), io.SeekStart); err != nil {
 		log.Fatalf("Failed to seek file: %s", err)
 	}
 
-	written, err := io.Copy(s, f)
+	// Transfer the file in chunks of 2 MiB, one request per chunk
+	w := tusgo.NewChunkedWriter(s, 2*1024*1024)
+	written, err := io.Copy(w, f)
 	if err != nil {
 		log.Fatalf("Written %d bytes, error: %s", written, err)
 	}

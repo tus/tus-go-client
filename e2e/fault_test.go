@@ -2,7 +2,6 @@ package e2e
 
 import (
 	"bytes"
-	"io"
 	"net/http"
 
 	"github.com/bdragon300/tusgo"
@@ -13,105 +12,106 @@ import (
 var _ = Describe("Fault recovery", func() {
 	const (
 		dataSize  = 10 * 1000
-		chunkSize = 1000
+		chunkSize = 2048
+		// 4 full chunks and the rest
+		chunks = (dataSize + chunkSize - 1) / chunkSize
 	)
 
 	var data []byte
-
-	// setup starts the server with the given middleware, creates an upload of dataSize on it and returns the stream
-	// for the upload and its location.
-	setup := func(mw middleware) (*tusServer, *tusgo.UploadStream, string) {
-		GinkgoHelper()
-		srv := startServer(nil, mw)
-		cl := srv.NewClient()
-		u, err := cl.CreateUpload(dataSize, false, nil)
-		Expect(err).NotTo(HaveOccurred())
-		s := newStream(cl, u)
-		s.ChunkSize = chunkSize
-		return srv, s, u.Location
-	}
 
 	BeforeEach(func() {
 		data = randomData(dataSize)
 	})
 
 	Context("server accepts only a part of the sent data", func() {
-		It("should resend the rest of the chunk in chunked mode", func() {
-			patches := &requestCounter{method: http.MethodPatch}
-			fault := injectFault(http.MethodPatch, 3, acceptOnly(chunkSize/3))
-			srv, s, loc := setup(func(next http.Handler) http.Handler { return patches.Middleware(fault(next)) })
-
-			_, err := io.Copy(s, readerOnly(bytes.NewReader(data)))
-
+		It("should return ErrIncompleteWrite in Stream and resume from the accepted bytes", func() {
+			srv := startServer(nil, injectFault(http.MethodPatch, 1, acceptOnly(dataSize/3)))
+			cl := srv.NewClient()
+			u, err := cl.CreateUpload(dataSize, false, nil)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(srv.StoredData(loc)).To(Equal(data))
-			Expect(patches.count.Load()).To(BeEquivalentTo(dataSize/chunkSize + 1))
-		})
+			s := newStream(cl, u)
 
-		It("should return io.ErrShortWrite in not chunked mode and resume after Sync", func() {
-			srv, s, loc := setup(injectFault(http.MethodPatch, 1, acceptOnly(dataSize/3)))
-			s.ChunkSize = tusgo.NoChunked
-			src := bytes.NewReader(data)
-
-			_, err := io.Copy(s, src)
-			Expect(err).To(MatchError(io.ErrShortWrite))
+			n, err := s.Write(data)
+			Expect(err).To(MatchError(tusgo.ErrIncompleteWrite))
+			Expect(n).To(Equal(dataSize / 3))
 			Expect(s.Tell()).To(BeEquivalentTo(dataSize / 3))
 
-			err = s.Sync()
-			Expect(err).NotTo(HaveOccurred())
-			_, err = src.Seek(s.Tell(), io.SeekStart)
-			Expect(err).NotTo(HaveOccurred())
-			_, err = io.Copy(s, src)
+			n, err = s.Write(data[s.Tell():])
 
 			Expect(err).NotTo(HaveOccurred())
-			Expect(srv.StoredData(loc)).To(Equal(data))
+			Expect(n).To(Equal(dataSize - dataSize/3))
+			Expect(srv.StoredData(u.Location)).To(Equal(data))
+		})
+
+		It("should resend the rest of the chunk in the same ReadFrom call in ChunkedWriter", func() {
+			patches := &requestCounter{method: http.MethodPatch}
+			srv := startServer(nil, chain(patches.Middleware, injectFault(http.MethodPatch, 2, acceptOnly(100))))
+			cl := srv.NewClient()
+			u, err := cl.CreateUpload(dataSize, false, nil)
+			Expect(err).NotTo(HaveOccurred())
+			s, w := newChunkedWriter(cl, u, chunkSize)
+
+			n, err := w.ReadFrom(readerOnly{bytes.NewReader(data)})
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(n).To(BeEquivalentTo(dataSize))
+			Expect(s.Tell()).To(BeEquivalentTo(dataSize))
+			Expect(patches.count.Load()).To(BeEquivalentTo(chunks + 1))
+			Expect(srv.StoredData(u.Location)).To(Equal(data))
 		})
 	})
 
-	Context("connection breaks after the server has committed the chunk", func() {
-		It("should report the offsets out of sync on ReadFrom retry and resume after Sync", func() {
-			srv, s, loc := setup(injectFault(http.MethodPatch, 3, dropResponse()))
-			src := bytes.NewReader(data)
+	Context("server fails to handle a request", func() {
+		It("should keep the chunk in ChunkedWriter buffer and resend it on the next ReadFrom call", func() {
+			srv := startServer(nil, injectFault(http.MethodPatch, 3, replyStatus(http.StatusInternalServerError)))
+			cl := srv.NewClient()
+			u, err := cl.CreateUpload(dataSize, false, nil)
+			Expect(err).NotTo(HaveOccurred())
+			s, w := newChunkedWriter(cl, u, chunkSize)
+			rd := readerOnly{bytes.NewReader(data)}
 
-			_, err := io.Copy(s, readerOnly(src))
-			Expect(err).To(HaveOccurred())
-			Expect(s.Dirty()).To(BeTrue())
+			n, err := w.ReadFrom(rd)
+			Expect(err).To(MatchError(tusgo.ErrUnexpectedResponse))
+			Expect(errResponse(err)).To(HaveHTTPStatus(http.StatusInternalServerError))
+			Expect(n).To(BeEquivalentTo(3 * chunkSize))
 			Expect(s.Tell()).To(BeEquivalentTo(2 * chunkSize))
+			Expect(w.Buffer()).To(Equal(data[2*chunkSize : 3*chunkSize]))
 
-			// The dirty buffer is resent at the stale offset, but the server already has this chunk
-			_, err = io.Copy(s, readerOnly(src))
-			Expect(err).To(MatchError(tusgo.ErrOffsetsNotSynced))
-
-			err = s.Sync()
-			Expect(err).NotTo(HaveOccurred())
-			Expect(s.Tell()).To(BeEquivalentTo(3 * chunkSize))
-			s.ForceClean()
-			_, err = src.Seek(s.Tell(), io.SeekStart)
-			Expect(err).NotTo(HaveOccurred())
-			_, err = io.Copy(s, src)
+			n, err = w.ReadFrom(rd)
 
 			Expect(err).NotTo(HaveOccurred())
-			Expect(srv.StoredData(loc)).To(Equal(data))
+			Expect(n).To(BeEquivalentTo(dataSize - 3*chunkSize))
+			Expect(w.Buffer()).To(BeEmpty())
+			Expect(srv.StoredData(u.Location)).To(Equal(data))
 		})
+	})
 
-		It("should report the offsets out of sync on Write retry and resume after Sync", func() {
-			srv, s, loc := setup(injectFault(http.MethodPatch, 3, dropResponse()))
+	Context("response is lost after the server has stored the data", func() {
+		It("should adopt the server offset after Sync, drop the stored chunk with Reset and continue in ChunkedWriter", func() {
+			srv := startServer(nil, injectFault(http.MethodPatch, 2, dropResponse()))
+			cl := srv.NewClient()
+			u, err := cl.CreateUpload(dataSize, false, nil)
+			Expect(err).NotTo(HaveOccurred())
+			s, w := newChunkedWriter(cl, u, chunkSize)
+			rd := readerOnly{bytes.NewReader(data)}
 
-			n, err := s.Write(data)
+			n, err := w.ReadFrom(rd)
 			Expect(err).To(HaveOccurred())
-			Expect(n).To(Equal(2 * chunkSize))
-			Expect(s.Dirty()).To(BeFalse())
+			Expect(n).To(BeEquivalentTo(2 * chunkSize))
+			Expect(s.Tell()).To(BeEquivalentTo(chunkSize))
+			Expect(w.Buffer()).To(Equal(data[chunkSize : 2*chunkSize]))
 
-			_, err = s.Write(data[n:])
-			Expect(err).To(MatchError(tusgo.ErrOffsetsNotSynced))
-
-			err = s.Sync()
+			// The server has already stored the buffered chunk, so it must not be sent again
+			delta, err := s.Sync()
 			Expect(err).NotTo(HaveOccurred())
-			Expect(s.Tell()).To(BeEquivalentTo(3 * chunkSize))
-			_, err = s.Write(data[s.Tell():])
+			Expect(delta).To(BeEquivalentTo(chunkSize))
+			w.Reset()
+
+			n, err = w.ReadFrom(rd)
 
 			Expect(err).NotTo(HaveOccurred())
-			Expect(srv.StoredData(loc)).To(Equal(data))
+			Expect(n).To(BeEquivalentTo(dataSize - 2*chunkSize))
+			Expect(srv.StoredData(u.Location)).To(Equal(data))
 		})
 	})
 })

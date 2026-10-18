@@ -13,33 +13,37 @@ var (
 	// ErrUnsupportedFeature is returned when an action requires a TUS extension the server does not support.
 	ErrUnsupportedFeature = TusError{msg: "unsupported feature"}
 
-	// ErrUploadTooLarge is returned when creating an upload that is larger than the server accepts.
-	ErrUploadTooLarge = TusError{msg: "upload is too large"}
+	// ErrTooLarge is returned when creating an upload that is larger than the server accepts, or when sending more
+	// data than the upload can contain.
+	ErrTooLarge = TusError{msg: "data is too large"}
 
 	// ErrUploadDoesNotExist is returned when the upload is not found on the server or the access to it is denied.
 	ErrUploadDoesNotExist = TusError{msg: "upload does not exist"}
 
-	// ErrOffsetsNotSynced is returned when the server expects the data at an offset other than the local one.
-	// Call UploadStream.Sync to adopt the server offset.
+	// ErrOffsetsNotSynced indicates that stream's offset does not match the remote offset on the server.
+	// This error may occur when sending the data from the start to the upload that already contains some data.
+	// Or when the server has accepted data, but its response was lost.
+	//
+	// To fix this error, call stream's Sync method and try again.
 	ErrOffsetsNotSynced = TusError{msg: "client stream and server offsets are not synced"}
 
 	// ErrChecksumMismatch is returned when the server has detected a corruption of the transferred data.
 	ErrChecksumMismatch = TusError{msg: "checksum mismatch"}
 
-	// ErrProtocol is returned when an otherwise successful server response contains malformed data.
+	// ErrIncompleteWrite is returned when the server responds successfully but rejects some or all sent data.
+	// This may indicate the server-side backpressure, which means the server is overloaded. Retry after a short delay.
+	ErrIncompleteWrite = TusError{msg: "incomplete write"}
+
+	// ErrCannotUpload is returned when the server explicitly refuses to accept any data for an existing upload.
+	// For example, this may happen while trying to transfer data to a "final" upload that has been concatenated from
+	// partial uploads, which is forbidden by the TUS protocol.
+	ErrCannotUpload = TusError{msg: "can not upload"}
+
+	// ErrProtocol is a general error that is returned when an otherwise successful server response contains malformed data.
 	// This error may indicate that the server does not support the requested TUS version, or server misbehaves.
 	ErrProtocol = TusError{msg: "protocol error"}
 
-	// ErrZeroProgress is returned by UploadStream in chunked mode, indicating that the server did not
-	// accept any of the data and did not return an error. This may happen when client is sending data too fast and the
-	// server is overloaded, or if the server has a bug or misconfiguration.
-	ErrZeroProgress = TusError{msg: "zero progress"}
-
-	// ErrCannotUpload is returned when the server explicitly refuses to accept the data for an existing upload.
-	// This error may occur if the server returned 403 Forbidden when trying to upload data.
-	ErrCannotUpload = TusError{msg: "can not upload"}
-
-	// ErrUnexpectedResponse is returned when the server has responded with an unexpected status code.
+	// ErrUnexpectedResponse is a general error that returned when the server has responded with an unexpected status code.
 	// This error may indicate that the server does not support the TUS protocol, or the response is originated
 	// by a proxy server or CDN.
 	ErrUnexpectedResponse = TusError{msg: "unexpected HTTP response code"}

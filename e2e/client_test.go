@@ -1,9 +1,7 @@
 package e2e
 
 import (
-	"bytes"
 	"context"
-	"io"
 	"net/http"
 	"net/url"
 	"path"
@@ -80,7 +78,8 @@ var _ = Describe("Client", func() {
 			u, err := cl.CreateUpload(1000, false, nil)
 			Expect(err).NotTo(HaveOccurred())
 			s := newStream(cl, u)
-			Expect(s.Sync()).To(Succeed())
+			_, err = s.Sync()
+			Expect(err).NotTo(HaveOccurred())
 			_, err = s.Write(randomData(1000))
 
 			Expect(err).NotTo(HaveOccurred())
@@ -159,7 +158,7 @@ var _ = Describe("Client", func() {
 		It("should return error if the upload size exceeds the server limit", func() {
 			_, err := cl.CreateUpload(1024*1024+1, false, nil)
 
-			Expect(err).To(MatchError(tusgo.ErrUploadTooLarge))
+			Expect(err).To(MatchError(tusgo.ErrTooLarge))
 		})
 
 		It("should return error when getting a non-existent upload", func() {
@@ -216,7 +215,7 @@ var _ = Describe("Client", func() {
 			_, u, err := cl.CreateUploadWithData(data[:300], int64(len(data)), false, nil)
 			Expect(err).NotTo(HaveOccurred())
 			s := newStream(cl, u)
-			_, err = io.Copy(s, bytes.NewReader(data[s.Tell():]))
+			_, err = s.Write(data[s.Tell():])
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(srv.StoredData(u.Location)).To(Equal(data))

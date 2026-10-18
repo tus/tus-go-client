@@ -1,18 +1,4 @@
 // Package tusgo is a client library for TUS (https://tus.io), the resumable upload protocol over HTTP.
-//
-// The work is split between two types. [Client] manages the uploads on a server: it creates, deletes and queries them,
-// concatenates the partial ones and reports the server capabilities. [UploadStream] transfers the data of a single
-// upload; it implements [io.Writer], [io.ReaderFrom] and [io.Seeker].
-// [Upload] represents a particular upload object on the server and its state.
-//
-// The basic approach is following: first, create a fixed-size upload object on the server by Client,
-// and then transfer the data to the returned Upload using the UploadStream. To resume an interrupted transfer,
-// just call the same method again.
-//
-// The protocol also defines a number of extensions -- optional features that customize this process:
-// deleting an upload, concatenating several uploads into a single one or verifying the transferred data with a
-// checksum, etc. A server supports any subset of them, so the features backed by an extension fail with
-// [ErrUnsupportedFeature] unless the server announces it, see [Client.capabilities].
 package tusgo
 
 import (
@@ -29,15 +15,15 @@ import (
 	"time"
 )
 
-const DefaultProtocolVersion = "1.0.0"
+const TUSv1ProtocolVersion = "1.0.0"
 
-// NewClient returns a new [Client] that sends its requests to the given URL.
+// NewClient returns a new [Client] that sends its requests to the given endpoint URL.
 func NewClient(endpoint *url.URL) *Client {
 	if endpoint == nil {
 		panic("endpoint is nil")
 	}
 	return &Client{
-		ProtocolVersion: DefaultProtocolVersion,
+		ProtocolVersion: TUSv1ProtocolVersion,
 		ExtraHeaders:    make(http.Header),
 		endpoint:        endpoint,
 		mu:              &sync.Mutex{},
@@ -45,7 +31,7 @@ func NewClient(endpoint *url.URL) *Client {
 }
 
 // Client manages the uploads on a TUS server: it creates, deletes and queries them, and concatenates partial uploads.
-// It does not transfer the upload data itself, use [UploadStream] for that.
+// It does not transfer the upload data itself, use [ChunkedWriter] or [Stream] for that.
 // Client is safe for concurrent use by multiple goroutines.
 //
 // Common errors returned by the Client methods are:
@@ -54,7 +40,7 @@ func NewClient(endpoint *url.URL) *Client {
 //   - [ErrProtocol] -- an otherwise successful server response contains malformed data, e.g. a missing required HTTP header
 //   - [ErrUnexpectedResponse] -- the server responded with an unexpected status code
 type Client struct {
-	// ProtocolVersion is the TUS protocol version sent in the requests. By default, it's equal to [DefaultProtocolVersion].
+	// ProtocolVersion is the TUS protocol version sent in the requests. By default, it's equal to [TUSv1ProtocolVersion].
 	ProtocolVersion string
 
 	// ExtraHeaders are the additional HTTP headers sent with every request to the server.
@@ -78,9 +64,10 @@ type Client struct {
 	mu                   *sync.Mutex
 }
 
-// DoRequestFunc is the callback type for sending a TUS request to the server and returning the response.
-// It may be called concurrently if the Client is used by several goroutines. It receives a prepared TUS [http.Request]
-// and returns the [http.Response] or an error.
+// DoRequestFunc is the callback type that can be set on Client and will be called on every request to the server.
+// Function receives a prepared TUS [http.Request] and returns the [http.Response] or an error.
+// It must not close the response body, it will be closed by the library after processing.
+// The function should be safe for concurrent use if the Client is used by several goroutines.
 type DoRequestFunc func(req *http.Request) (*http.Response, error)
 
 // GetUpload requests the server for the upload information by its location.
@@ -139,17 +126,25 @@ func (c *Client) GetUpload(location string) (Upload, error) {
 	return res, newTusError(ErrUnexpectedResponse, resp, nil)
 }
 
+// SizeUnknown is passed to Client.CreateUpload in remoteSize arg to create an upload with deferred size.
+// Such upload is created without size and accepts as much data as the server is able to accept.
+// The actual size is reported later by a separate request, see DeclareSize stream method.
+//
+// Server must support the "creation-defer-length" extension for this feature.
+const SizeUnknown = -1
+
 // CreateUpload creates an upload of the given size, and returns an [Upload] object.
 // The server must advertise the "creation" extension.
 //
-// If remoteSize is [SizeUnknown], the upload is created with a deferred size, i.e. with a size that is not known yet,
-// but has to be known by the time the data transfer begins. The server must also advertise the
-// "creation-defer-length" extension for this feature, and [UploadStream.SetUploadSize] must be set before the transfer.
+// If remoteSize is [SizeUnknown], the upload is created with a deferred size, i.e. with a size that is not known yet
+// and may be set later by DeclareSize method in stream.
+// The server must also advertise the "creation-defer-length" extension for this feature.
 //
-// If partial arg is true, the "partial" upload will be created, which may be used to upload data in parallel, see
-// [Client.ConcatenateUploads]. The given metadata will be attached to the upload and can be retrieved later.
+// If partial arg is true, the upload marks as "partial", which may be used to upload data in parallel and meant
+// to be concatenated to "final" upload further, see [Client.ConcatenatePartialUploads].
+// The given metadata will be attached to the upload and can be retrieved later.
 //
-// The method returns [ErrUploadTooLarge] if the upload size exceeds [ServerCapabilities.MaxSize] the server is able to
+// The method returns [ErrTooLarge] if the upload size exceeds [ServerCapabilities.MaxSize] the server is able to
 // accept.
 func (c *Client) CreateUpload(remoteSize int64, partial bool, metadata map[string]string) (Upload, error) {
 	var res Upload
@@ -176,7 +171,7 @@ func (c *Client) CreateUpload(remoteSize int64, partial bool, metadata map[strin
 	case remoteSize > 0:
 		req.Header.Set("Upload-Length", strconv.FormatInt(remoteSize, 10))
 	default:
-		panic(fmt.Sprintf("remoteSize is negative: %d", remoteSize))
+		return res, fmt.Errorf("remoteSize is negative: %d", remoteSize)
 	}
 
 	if len(metadata) > 0 {
@@ -208,20 +203,20 @@ func (c *Client) CreateUpload(remoteSize int64, partial bool, metadata map[strin
 		}
 		return res, nil
 	case http.StatusRequestEntityTooLarge:
-		return res, newTusError(ErrUploadTooLarge, resp, nil)
+		return res, newTusError(ErrTooLarge, resp, nil)
 	}
 
 	return res, newTusError(ErrUnexpectedResponse, resp, nil)
 }
 
-// CreateUploadWithData creates an upload on the server and transfers data in the same HTTP request.
+// CreateUploadWithData creates an upload on the server and transfers data in a single HTTP request.
 // It returns the number of bytes been uploaded and the [Upload] object.
-// The whole data is sent in a single request, so the server must advertise the "creation-with-upload" extension.
+// Server must advertise the "creation-with-upload" extension.
 //
 // The remoteSize, partial and metadata parameters have the same meaning as in CreateUpload.
 //
-// If the server did not accept any data by some reason, the method returns a correct Upload and [ErrZeroProgress] error.
-// In that case, use [UploadStream] to transfer the remaining data.
+// If the server successfully create the upload, but did not accept all data, the method returns a correct Upload
+// and [ErrIncompleteWrite] error. In that case, use [ChunkedWriter] or [Stream] to transfer the remaining data.
 func (c *Client) CreateUploadWithData(data []byte, remoteSize int64, partial bool, metadata map[string]string) (int64, Upload, error) {
 	var res Upload
 
@@ -229,11 +224,10 @@ func (c *Client) CreateUploadWithData(data []byte, remoteSize int64, partial boo
 		return 0, res, err
 	}
 
-	s, err := NewUploadStream(c, res)
+	s, err := NewStream(c, res)
 	if err != nil {
 		return 0, res, fmt.Errorf("create upload stream: %w", err)
 	}
-	s.ChunkSize = int64(len(data)) // Data must be uploaded in one request as single chunk
 	headers := map[string]string{"Upload-Length": strconv.Itoa(int(remoteSize)), "Upload-Offset": ""}
 	if partial {
 		headers["Upload-Concat"] = "partial"
@@ -249,25 +243,25 @@ func (c *Client) CreateUploadWithData(data []byte, remoteSize int64, partial boo
 	res.Partial = partial
 	res.Metadata = metadata
 
-	uploadedBytes, expires, resp, err := s.doRequest(http.MethodPost, c.endpoint.String(), data, nil, 0, headers) // Upload in one request
-	res.RemoteOffset = uploadedBytes
+	newOffset, expires, resp, err := s.doRequest(http.MethodPost, c.endpoint.String(), data, nil, 0, headers) // Upload in one request
+	res.RemoteOffset = newOffset
 	res.UploadExpired = expires
 	defer closeResponseBody(resp)
 	if err != nil {
-		return uploadedBytes, res, fmt.Errorf("request: %w", err)
+		return newOffset, res, fmt.Errorf("request: %w", err)
 	}
 	res.Location = resp.Header.Get("Location")
 
 	switch {
-	case uploadedBytes == 0 && len(data) > 0:
-		return uploadedBytes, res, newTusError(ErrZeroProgress, resp, fmt.Errorf("offset=%d", res.RemoteOffset))
-	case uploadedBytes < 0:
-		return uploadedBytes, res, newTusError(ErrProtocol, resp, fmt.Errorf("server offset has gone backwards, offset=%d, transferredDataSize=%d", uploadedBytes, len(data)))
-	case uploadedBytes > int64(len(data)):
-		return uploadedBytes, res, newTusError(ErrProtocol, resp, fmt.Errorf("server offset has been advanced too far: offset=%d, transferredDataSize=%d", uploadedBytes, len(data)))
+	case newOffset < 0:
+		return newOffset, res, newTusError(ErrProtocol, resp, fmt.Errorf("server offset is negative, offset=%d, transferredDataSize=%d", newOffset, len(data)))
+	case newOffset > int64(len(data)):
+		return newOffset, res, newTusError(ErrProtocol, resp, fmt.Errorf("server offset has been advanced too far, offset=%d, transferredDataSize=%d", newOffset, len(data)))
+	case newOffset < int64(len(data)) && len(data) > 0:
+		return newOffset, res, newTusError(ErrIncompleteWrite, resp, fmt.Errorf("server did not accepted some data, accepted=%d, offset=%d", newOffset, res.RemoteOffset))
 	}
 
-	return uploadedBytes, res, nil
+	return newOffset, res, nil
 }
 
 // DeleteUpload deletes the upload at the given location from the server. The server must advertise the
@@ -305,7 +299,7 @@ func (c *Client) DeleteUpload(location string) error {
 
 // ConcatenatePartialUploads creates a "final" upload whose data is the concatenation of the "partial" uploads at
 // partialLocations, in the given order, and returns its location. The optional metadata is attached to the final
-// upload. The metadata of the partial uploads, if any, is discarded. The final upload does not accept any data.
+// upload. The metadata of the partial uploads, if any, is discarded. The final upload will not be able to accept any data.
 //
 // Partial uploads are typically used to transfer the data in parallel. The approach is following: create several
 // "partial" uploads on the server, transfer in parallel the data split by chunks equal to these uploads,

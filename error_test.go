@@ -55,8 +55,8 @@ var _ = Describe("TusError", func() {
 			Ω(err.Error()).Should(Equal("upload does not exist (HTTP 404; Content-Length=14)"))
 		})
 		It("should include the unknown content length of the response", func() {
-			err := newTusError(ErrUploadTooLarge, testResponse(http.StatusRequestEntityTooLarge, &closeTrackingBody{Reader: strings.NewReader("too large")}, -1), nil)
-			Ω(err.Error()).Should(Equal("upload is too large (HTTP 413; Content-Length=-1)"))
+			err := newTusError(ErrTooLarge, testResponse(http.StatusRequestEntityTooLarge, &closeTrackingBody{Reader: strings.NewReader("too large")}, -1), nil)
+			Ω(err.Error()).Should(Equal("data is too large (HTTP 413; Content-Length=-1)"))
 		})
 		It("should not include the response body", func() {
 			err := newTusError(ErrUploadDoesNotExist, testResponse(http.StatusNotFound, &closeTrackingBody{Reader: strings.NewReader("no such upload")}, 14), nil)
@@ -101,8 +101,8 @@ var _ = Describe("TusError", func() {
 			Ω(errors.Is(err, ErrCannotUpload)).Should(BeFalse())
 		})
 		It("should match regardless of the inner error the sentinel carries", func() {
-			a := newTusError(ErrUploadTooLarge, nil, errors.New("first"))
-			b := newTusError(ErrUploadTooLarge, nil, errors.New("second"))
+			a := newTusError(ErrTooLarge, nil, errors.New("first"))
+			b := newTusError(ErrTooLarge, nil, errors.New("second"))
 			Ω(errors.Is(a, b)).Should(BeTrue())
 			Ω(errors.Is(b, a)).Should(BeTrue())
 		})
@@ -233,7 +233,7 @@ var _ = Describe("TusError", func() {
 			body := &closeTrackingBody{Reader: strings.NewReader(data)}
 			resp := testResponse(http.StatusRequestEntityTooLarge, body, int64(len(data)))
 
-			err := newTusError(ErrUploadTooLarge, resp, nil)
+			err := newTusError(ErrTooLarge, resp, nil)
 			Ω(err.Unwrap()).Should(BeNil())
 			Ω(err.Response()).Should(HaveHTTPBody([]byte(data)))
 		})
@@ -241,7 +241,7 @@ var _ = Describe("TusError", func() {
 			body := &closeTrackingBody{Reader: strings.NewReader(strings.Repeat("x", bodyReadLimit) + strings.Repeat("y", 100))}
 			resp := testResponse(http.StatusRequestEntityTooLarge, body, -1)
 
-			err := newTusError(ErrUploadTooLarge, resp, nil)
+			err := newTusError(ErrTooLarge, resp, nil)
 			Ω(err.Unwrap()).Should(BeNil())
 			Ω(err.Response()).Should(HaveHTTPBody([]byte(strings.Repeat("x", bodyReadLimit))))
 			Ω(body.closed).Should(BeFalse())

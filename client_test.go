@@ -620,7 +620,7 @@ var _ = Describe("Client", func() {
 						return err
 					})
 				},
-				Entry("http error", http.StatusRequestEntityTooLarge, ErrUploadTooLarge),
+				Entry("http error", http.StatusRequestEntityTooLarge, ErrTooLarge),
 				Entry("unsupported protocol version", http.StatusPreconditionFailed, ErrProtocol),
 			)
 			Specify("no creation extension", func() {
@@ -637,9 +637,10 @@ var _ = Describe("Client", func() {
 				))
 			})
 			When("upload size is negative", func() {
-				It("should panic", func() {
+				It("should return an error", func() {
 					testClient.advertisedExtensions = append(testClient.advertisedExtensions, "creation")
-					Ω(func() { _, _ = testClient.CreateUpload(-2, false, nil) }).Should(Panic())
+					_, err := testClient.CreateUpload(-2, false, nil)
+					Ω(err).Should(MatchError(ContainSubstring("remoteSize is negative: -2")))
 				})
 			})
 			Specify("metadata key contains a space", func() {
@@ -667,7 +668,7 @@ var _ = Describe("Client", func() {
 							MatchError(ContainSubstring(expectErrMsg)),
 						))
 					},
-					Entry("413", http.StatusRequestEntityTooLarge, ErrUploadTooLarge, "upload is too large (HTTP 413;"),
+					Entry("413", http.StatusRequestEntityTooLarge, ErrTooLarge, "data is too large (HTTP 413;"),
 					Entry("404", http.StatusNotFound, ErrUnexpectedResponse, "unexpected HTTP response code (HTTP 404;"),
 					Entry("410", http.StatusGone, ErrUnexpectedResponse, "unexpected HTTP response code (HTTP 410;"),
 					Entry("403", http.StatusForbidden, ErrUnexpectedResponse, "unexpected HTTP response code (HTTP 403;"),
@@ -827,7 +828,7 @@ var _ = Describe("Client", func() {
 					})
 				},
 				Entry("http error", http.StatusConflict, nil, ErrOffsetsNotSynced),
-				Entry("zero progress", http.StatusCreated, http.Header{"Upload-Offset": {"0"}}, ErrZeroProgress),
+				Entry("zero progress", http.StatusCreated, http.Header{"Upload-Offset": {"0"}}, ErrIncompleteWrite),
 				Entry("offset advanced too far", http.StatusCreated, http.Header{"Upload-Offset": {"50"}}, ErrProtocol),
 			)
 			Specify("no 'creation-with-upload' extension", func() {
@@ -865,41 +866,46 @@ var _ = Describe("Client", func() {
 				Entry("403", http.StatusForbidden, ErrCannotUpload, "can not upload (HTTP 403;"),
 				Entry("410", http.StatusGone, ErrUploadDoesNotExist, "upload does not exist (HTTP 410;"),
 				Entry("404", http.StatusNotFound, ErrUploadDoesNotExist, "upload does not exist (HTTP 404;"),
-				Entry("413", http.StatusRequestEntityTooLarge, ErrUploadTooLarge, "upload is too large (HTTP 413;"),
+				Entry("413", http.StatusRequestEntityTooLarge, ErrTooLarge, "data is too large (HTTP 413;"),
 				Entry("460", 460, ErrUnexpectedResponse, "unexpected HTTP response code (HTTP 460;"),
 				Entry("401", http.StatusUnauthorized, ErrUnexpectedResponse, "unexpected HTTP response code (HTTP 401;"),
 				Entry("400", http.StatusBadRequest, ErrUnexpectedResponse, "unexpected HTTP response code (HTTP 400;"),
 				Entry("200", http.StatusOK, ErrUnexpectedResponse, "unexpected HTTP response code (HTTP 200;"),
 			)
-			When("server creates upload but does not advance the offset", func() {
-				It("should return ErrZeroProgress and the created upload", func() {
-					testClient.advertisedExtensions = append(testClient.advertisedExtensions, "creation", "creation-with-upload")
-					d, _ := io.ReadAll(io.LimitReader(rand.New(rand.NewSource(time.Now().UnixNano())), 512))
-					eh := []string{"Upload-Concat", "Upload-Defer-Length", "Upload-Metadata", "Upload-Checksum", "Upload-Offset"}
-					srvMock.AddMocks(tRequest(http.MethodPost, "/", eh).
-						Header("Content-Length", expect.ToEqual("512")).
-						Header("Upload-Length", expect.ToEqual("1024")).
-						Header("Content-Type", expect.ToEqual("application/offset+octet-stream")).
-						Body(expect.ToEqual(d)).
-						Reply(tReply(reply.Created()).
-							Header("Location", "/foo/bar").
-							Header("Upload-Offset", "0")),
-					)
+			When("server creates upload but accepts only a part of the data", func() {
+				DescribeTable("should return ErrIncompleteWrite and the created upload",
+					func(offset int64) {
+						testClient.advertisedExtensions = append(testClient.advertisedExtensions, "creation", "creation-with-upload")
+						d, _ := io.ReadAll(io.LimitReader(rand.New(rand.NewSource(time.Now().UnixNano())), 512))
+						eh := []string{"Upload-Concat", "Upload-Defer-Length", "Upload-Metadata", "Upload-Checksum", "Upload-Offset"}
+						srvMock.AddMocks(tRequest(http.MethodPost, "/", eh).
+							Header("Content-Length", expect.ToEqual("512")).
+							Header("Upload-Length", expect.ToEqual("1024")).
+							Header("Content-Type", expect.ToEqual("application/offset+octet-stream")).
+							Body(expect.ToEqual(d)).
+							Reply(tReply(reply.Created()).
+								Header("Location", "/foo/bar").
+								Header("Upload-Offset", strconv.FormatInt(offset, 10))),
+						)
 
-					bytes, u, err := testClient.CreateUploadWithData(d, 1024, false, nil)
-					Ω(bytes).Should(BeEquivalentTo(0))
-					Ω(tErrResponse(err).StatusCode).Should(Equal(http.StatusCreated))
-					Ω(err).Should(And(
-						MatchError(ErrZeroProgress),
-						MatchError(ContainSubstring("offset=0")),
-					))
-					// Upload is created anyway, so the caller can continue the transfer with UploadStream
-					Ω(u).Should(Equal(Upload{
-						RemoteSize:   1024,
-						Location:     "/foo/bar",
-						RemoteOffset: 0,
-					}))
-				})
+						bytes, u, err := testClient.CreateUploadWithData(d, 1024, false, nil)
+						Ω(bytes).Should(Equal(offset))
+						Ω(tErrResponse(err).StatusCode).Should(Equal(http.StatusCreated))
+						Ω(err).Should(And(
+							MatchError(ErrIncompleteWrite),
+							MatchError(ContainSubstring("offset="+strconv.FormatInt(offset, 10))),
+						))
+						// Upload is created anyway, so the caller can continue the transfer with ChunkedWriter or Stream
+						Ω(u).Should(Equal(Upload{
+							RemoteSize:   1024,
+							Location:     "/foo/bar",
+							RemoteOffset: offset,
+						}))
+					},
+					Entry("nothing", int64(0)),
+					Entry("partially", int64(100)),
+					Entry("all except the last byte", int64(511)),
+				)
 			})
 			When("server advances the offset to an invalid value", func() {
 				DescribeTable("should return protocol error",
@@ -926,9 +932,9 @@ var _ = Describe("Client", func() {
 						))
 						Ω(u.Location).Should(Equal("/foo/bar"))
 					},
-					Entry("below zero", int64(-1), "server offset has gone backwards, offset=-1, transferredDataSize=512"),
-					Entry("more than data size", int64(513), "server offset has been advanced too far: offset=513, transferredDataSize=512"),
-					Entry("more than data size, but within upload size", int64(1024), "server offset has been advanced too far: offset=1024, transferredDataSize=512"),
+					Entry("below zero", int64(-1), "server offset is negative, offset=-1, transferredDataSize=512"),
+					Entry("more than data size", int64(513), "server offset has been advanced too far, offset=513, transferredDataSize=512"),
+					Entry("more than data size, but within upload size", int64(1024), "server offset has been advanced too far, offset=1024, transferredDataSize=512"),
 				)
 			})
 		})
