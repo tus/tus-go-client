@@ -626,19 +626,63 @@ var _ = Describe("Client", func() {
 					}))
 				})
 			})
+			When("server returns Upload-Expires header", func() {
+				It("should parse the expiration time", func() {
+					srvMock.AddMocks(tRequest(http.MethodPost, "/", nil).
+						Reply(tReply(reply.Created()).
+							Header("Location", "/foo/bar").
+							Header("Upload-Expires", "Wed, 25 Jun 2014 16:00:00 GMT")),
+					)
+
+					f, err := testClient.CreateUpload(1024, false, nil)
+					Ω(err).Should(Succeed())
+					Ω(f.Expires).ShouldNot(BeNil())
+					Ω(*f.Expires).Should(BeTemporally("==", time.Date(2014, 6, 25, 16, 0, 0, 0, time.UTC)))
+					f.Expires = nil
+					Ω(f).Should(Equal(Upload{RemoteSize: 1024, Location: "/foo/bar"}))
+				})
+			})
+			When("server does not return Upload-Expires header", func() {
+				It("should leave the expiration time nil", func() {
+					srvMock.AddMocks(tRequest(http.MethodPost, "/", nil).
+						Reply(tReply(reply.Created()).
+							Header("Location", "/foo/bar")),
+					)
+
+					f, err := testClient.CreateUpload(1024, false, nil)
+					Ω(err).Should(Succeed())
+					Ω(f.Expires).Should(BeNil())
+				})
+			})
 		})
 		Context("error path", func() {
 			DescribeTable("should keep the response body in the error and close the original body",
-				func(status int, expectErr error) {
+				func(status int, header http.Header, expectErr error) {
 					testClient.advertisedExtensions = append(testClient.advertisedExtensions, "creation")
-					tExpectBodyKeptInError(testClient, status, nil, expectErr, func() error {
+					tExpectBodyKeptInError(testClient, status, header, expectErr, func() error {
 						_, err := testClient.CreateUpload(1024, false, nil)
 						return err
 					})
 				},
-				Entry("http error", http.StatusRequestEntityTooLarge, ErrTooLarge),
-				Entry("unsupported protocol version", http.StatusPreconditionFailed, ErrProtocol),
+				Entry("http error", http.StatusRequestEntityTooLarge, nil, ErrTooLarge),
+				Entry("unsupported protocol version", http.StatusPreconditionFailed, nil, ErrProtocol),
+				Entry("malformed Upload-Expires", http.StatusCreated, http.Header{"Location": {"/foo/bar"}, "Upload-Expires": {"tomorrow"}}, ErrProtocol),
 			)
+			It("should return ErrProtocol if Upload-Expires header is not in RFC1123 format", func() {
+				testClient.advertisedExtensions = append(testClient.advertisedExtensions, "creation")
+				srvMock.AddMocks(tRequest(http.MethodPost, "/", nil).
+					Reply(tReply(reply.Created()).
+						Header("Location", "/foo/bar").
+						Header("Upload-Expires", "2014-06-25T16:00:00Z")),
+				)
+
+				_, err := testClient.CreateUpload(1024, false, nil)
+				Ω(err).Should(And(
+					MatchError(ErrProtocol),
+					MatchError(ContainSubstring(`parse RFC1123 datetime in Upload-Expires header "2014-06-25T16:00:00Z"`)),
+				))
+				Ω(tErrResponse(err)).Should(HaveHTTPStatus(http.StatusCreated))
+			})
 			Specify("no creation extension", func() {
 				_, err := testClient.CreateUpload(1024, false, nil)
 				Ω(err).Should(And(
