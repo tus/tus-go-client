@@ -221,6 +221,8 @@ func (c *Client) CreateUpload(remoteSize int64, partial bool, metadata map[strin
 //
 // If the server successfully create the upload, but did not accept all data, the method returns a correct Upload
 // and [ErrIncompleteWrite] error. In that case, use [ChunkedWriter] or [Stream] to transfer the remaining data.
+//
+// The method returns [ErrTooLarge] if the upload size exceeds the size the server is able to accept.
 func (c *Client) CreateUploadWithData(data []byte, remoteSize int64, partial bool, metadata map[string]string) (int64, Upload, error) {
 	var res Upload
 
