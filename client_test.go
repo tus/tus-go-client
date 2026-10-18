@@ -43,43 +43,47 @@ func tErrResponse(err error) *http.Response {
 	return nil
 }
 
-// countingTransport counts the requests made through it
-type countingTransport struct {
-	requests int
-}
+// http.Client must be usable as Client.Client
+var _ HTTPClient = (*http.Client)(nil)
 
-func (t *countingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	t.requests++
-	return http.DefaultTransport.RoundTrip(req)
-}
-
-// doRequestCounter provides a DoRequestFunc that counts its calls, safe for concurrent use
-type doRequestCounter struct {
+// countingClient is an HTTPClient that counts its calls, safe for concurrent use. Its Do method may also be used as
+// a DoRequestFunc.
+type countingClient struct {
 	requests atomic.Int32
 }
 
-func (c *doRequestCounter) DoRequest(req *http.Request) (*http.Response, error) {
+func (c *countingClient) Do(req *http.Request) (*http.Response, error) {
 	c.requests.Add(1)
 	return http.DefaultClient.Do(req)
 }
 
-type doRequestCall struct {
+type requestCall struct {
 	method string
 	url    string
 }
 
-// doRequestSpy provides a DoRequestFunc that records its calls and sets the X-Custom header in every request
-type doRequestSpy struct {
-	calls []doRequestCall
+// spyClient is an HTTPClient that records its calls and sets the X-Custom header in every request. Its Do method may
+// also be used as a DoRequestFunc.
+type spyClient struct {
+	calls []requestCall
 }
 
-func (s *doRequestSpy) DoRequest(req *http.Request) (*http.Response, error) {
-	s.calls = append(s.calls, doRequestCall{method: req.Method, url: req.URL.String()})
+func (s *spyClient) Do(req *http.Request) (*http.Response, error) {
+	s.calls = append(s.calls, requestCall{method: req.Method, url: req.URL.String()})
 	req.Header.Set("X-Custom", "custom")
 	return http.DefaultClient.Do(req)
 }
 
-// fakeResponder provides a DoRequestFunc that replies with the given status, headers and body without making a real
+// failingClient is an HTTPClient that fails every request with err
+type failingClient struct {
+	err error
+}
+
+func (f *failingClient) Do(*http.Request) (*http.Response, error) {
+	return nil, f.err
+}
+
+// fakeResponder is an HTTPClient that replies with the given status, headers and body without making a real
 // request, and records the response bodies to check whether they have been closed
 type fakeResponder struct {
 	status int
@@ -88,7 +92,7 @@ type fakeResponder struct {
 	bodies []*closeTrackingBody
 }
 
-func (f *fakeResponder) DoRequest(req *http.Request) (*http.Response, error) {
+func (f *fakeResponder) Do(req *http.Request) (*http.Response, error) {
 	if req.Body != nil {
 		_, _ = io.Copy(io.Discard, req.Body)
 	}
@@ -102,7 +106,7 @@ func (f *fakeResponder) DoRequest(req *http.Request) (*http.Response, error) {
 func tExpectBodyKeptInError(c *Client, status int, header http.Header, expectErr error, call func() error) {
 	GinkgoHelper()
 	responder := &fakeResponder{status: status, header: header, body: "server says"}
-	c.DoRequest = responder.DoRequest
+	c.DoRequest = responder.Do
 
 	err := call()
 	Ω(err).Should(MatchError(expectErr))
@@ -117,7 +121,7 @@ func tExpectBodyKeptInError(c *Client, status int, header http.Header, expectErr
 func tExpectBodyClosed(c *Client, status int, header http.Header, call func() error) {
 	GinkgoHelper()
 	responder := &fakeResponder{status: status, header: header, body: "server says"}
-	c.DoRequest = responder.DoRequest
+	c.DoRequest = responder.Do
 
 	Ω(call()).Should(Succeed())
 	Ω(responder.bodies).Should(HaveLen(1))
@@ -129,7 +133,7 @@ var _ = Describe("Client", func() {
 	var testURL *url.URL
 	var srvMock *mocha.Mocha
 	var tusHeaders []string
-	var spy *doRequestSpy
+	var spy *spyClient
 	var extraHeaders http.Header
 
 	BeforeEach(func() {
@@ -139,7 +143,7 @@ var _ = Describe("Client", func() {
 		testClient = NewClient(testURL)
 		testClient.advertisedExtensions = []string{}
 		tusHeaders = []string{"Upload-Concat", "Upload-Defer-Length", "Upload-Length", "Upload-Metadata", "Upload-Checksum", "Upload-Offset"}
-		spy = &doRequestSpy{}
+		spy = &spyClient{}
 		extraHeaders = http.Header{"X-Extra": {"extra"}}
 	})
 	AfterEach(func() {
@@ -204,29 +208,41 @@ var _ = Describe("Client", func() {
 				Ω(testClient.tusRequest(req)).Should(HaveHTTPStatus(http.StatusOK))
 			})
 			It("should use Client if DoRequest is not set", func() {
-				srvMock.AddMocks(tRequest(http.MethodGet, "/foo", tusHeaders).Reply(tReply(reply.OK())))
-				transport := &countingTransport{}
-				testClient.Client = &http.Client{Transport: transport}
+				srvMock.AddMocks(tRequest(http.MethodGet, "/foo", tusHeaders).
+					Header("X-Custom", expect.ToEqual("custom")).
+					Reply(tReply(reply.OK())),
+				)
+				testClient.Client = spy
 				req, err := http.NewRequest(http.MethodGet, srvMock.URL()+"/foo", nil)
 				Ω(err).Should(Succeed())
 
 				Ω(testClient.tusRequest(req)).Should(HaveHTTPStatus(http.StatusOK))
-				Ω(transport.requests).Should(Equal(1))
+				Ω(spy.calls).Should(Equal([]requestCall{{http.MethodGet, srvMock.URL() + "/foo"}}))
 			})
 			It("should use DoRequest and ignore Client if both are set", func() {
 				srvMock.AddMocks(tRequest(http.MethodGet, "/foo", tusHeaders).
 					Header("X-Custom", expect.ToEqual("custom")).
 					Reply(tReply(reply.OK())),
 				)
-				transport := &countingTransport{}
-				testClient.Client = &http.Client{Transport: transport}
-				testClient.DoRequest = spy.DoRequest
+				cl := &countingClient{}
+				testClient.Client = cl
+				testClient.DoRequest = spy.Do
 				req, err := http.NewRequest(http.MethodGet, srvMock.URL()+"/foo", nil)
 				Ω(err).Should(Succeed())
 
 				Ω(testClient.tusRequest(req)).Should(HaveHTTPStatus(http.StatusOK))
-				Ω(spy.calls).Should(Equal([]doRequestCall{{http.MethodGet, srvMock.URL() + "/foo"}}))
-				Ω(transport.requests).Should(Equal(0))
+				Ω(spy.calls).Should(Equal([]requestCall{{http.MethodGet, srvMock.URL() + "/foo"}}))
+				Ω(cl.requests.Load()).Should(BeZero())
+			})
+			It("should return error returned by Client", func() {
+				doErr := errors.New("boom")
+				testClient.Client = &failingClient{err: doErr}
+				req, err := http.NewRequest(http.MethodGet, srvMock.URL()+"/foo", nil)
+				Ω(err).Should(Succeed())
+
+				resp, err := testClient.tusRequest(req)
+				Ω(err).Should(MatchError(doErr))
+				Ω(resp).Should(BeNil())
 			})
 		})
 		Context("error path", func() {
@@ -274,12 +290,12 @@ var _ = Describe("Client", func() {
 					Reply(tReply(reply.OK()).
 						Header("Upload-Offset", "64")),
 				)
-				testClient.DoRequest = spy.DoRequest
+				testClient.DoRequest = spy.Do
 				testClient.ExtraHeaders = extraHeaders
 
 				f, err := testClient.GetUpload("/foo/bar")
 				Ω(err).Should(Succeed())
-				Ω(spy.calls).Should(Equal([]doRequestCall{{http.MethodHead, srvMock.URL() + "/foo/bar"}}))
+				Ω(spy.calls).Should(Equal([]requestCall{{http.MethodHead, srvMock.URL() + "/foo/bar"}}))
 				Ω(f).Should(Equal(Upload{Location: "/foo/bar", RemoteOffset: 64}))
 			})
 			It("should send ExtraHeaders and leave them untouched", func() {
@@ -482,12 +498,12 @@ var _ = Describe("Client", func() {
 					Reply(tReply(reply.Created()).
 						Header("Location", "/foo/bar")),
 				)
-				testClient.DoRequest = spy.DoRequest
+				testClient.DoRequest = spy.Do
 				testClient.ExtraHeaders = extraHeaders
 
 				f, err := testClient.CreateUpload(1024, false, nil)
 				Ω(err).Should(Succeed())
-				Ω(spy.calls).Should(Equal([]doRequestCall{{http.MethodPost, srvMock.URL()}}))
+				Ω(spy.calls).Should(Equal([]requestCall{{http.MethodPost, srvMock.URL()}}))
 				Ω(f).Should(Equal(Upload{RemoteSize: 1024, Location: "/foo/bar"}))
 			})
 			It("should send ExtraHeaders and leave them untouched", func() {
@@ -703,13 +719,13 @@ var _ = Describe("Client", func() {
 						Header("Location", "/foo/bar").
 						Header("Upload-Offset", "512")),
 				)
-				testClient.DoRequest = spy.DoRequest
+				testClient.DoRequest = spy.Do
 				testClient.ExtraHeaders = extraHeaders
 
 				bytes, u, err := testClient.CreateUploadWithData(d, 1024, false, nil)
 				Ω(bytes).Should(BeEquivalentTo(512))
 				Ω(err).Should(Succeed())
-				Ω(spy.calls).Should(Equal([]doRequestCall{{http.MethodPost, srvMock.URL()}}))
+				Ω(spy.calls).Should(Equal([]requestCall{{http.MethodPost, srvMock.URL()}}))
 				Ω(u).Should(Equal(Upload{RemoteSize: 1024, Location: "/foo/bar", RemoteOffset: 512}))
 			})
 			It("should send ExtraHeaders and leave them untouched", func() {
@@ -954,11 +970,11 @@ var _ = Describe("Client", func() {
 					Header("X-Custom", expect.ToEqual("custom")).
 					Header("X-Extra", expect.ToEqual("extra")).
 					Reply(tReply(reply.NoContent())))
-				testClient.DoRequest = spy.DoRequest
+				testClient.DoRequest = spy.Do
 				testClient.ExtraHeaders = extraHeaders
 
 				Ω(testClient.DeleteUpload("/foo/bar")).Should(Succeed())
-				Ω(spy.calls).Should(Equal([]doRequestCall{{http.MethodDelete, srvMock.URL() + "/foo/bar"}}))
+				Ω(spy.calls).Should(Equal([]requestCall{{http.MethodDelete, srvMock.URL() + "/foo/bar"}}))
 			})
 			It("should send ExtraHeaders and leave them untouched", func() {
 				srvMock.AddMocks(tRequest(http.MethodDelete, "/foo/bar", tusHeaders).
@@ -1030,12 +1046,12 @@ var _ = Describe("Client", func() {
 					Header("Upload-Concat", expect.ToEqual("final;/foo/bar /foo/baz")).
 					Reply(tReply(reply.Created()).Header("Location", "/foo/bar/baz")),
 				)
-				testClient.DoRequest = spy.DoRequest
+				testClient.DoRequest = spy.Do
 				testClient.ExtraHeaders = extraHeaders
 
 				loc, err := testClient.ConcatenatePartialUploads([]string{"/foo/bar", "/foo/baz"}, nil)
 				Ω(err).Should(Succeed())
-				Ω(spy.calls).Should(Equal([]doRequestCall{{http.MethodPost, srvMock.URL()}}))
+				Ω(spy.calls).Should(Equal([]requestCall{{http.MethodPost, srvMock.URL()}}))
 				Ω(loc).Should(Equal("/foo/bar/baz"))
 			})
 			It("should send ExtraHeaders and leave them untouched", func() {
@@ -1116,7 +1132,7 @@ var _ = Describe("Client", func() {
 				DescribeTable("should return error without making a request",
 					func(locations []string) {
 						testClient.advertisedExtensions = append(testClient.advertisedExtensions, "concatenation")
-						testClient.DoRequest = spy.DoRequest
+						testClient.DoRequest = spy.Do
 
 						loc, err := testClient.ConcatenatePartialUploads(locations, nil)
 						Ω(err).Should(MatchError("locations list is empty"))
@@ -1181,12 +1197,12 @@ var _ = Describe("Client", func() {
 							Header("Tus-Version", "1.0.0").
 							Header("Tus-Extension", "creation")),
 				)
-				testClient.DoRequest = spy.DoRequest
+				testClient.DoRequest = spy.Do
 				testClient.ExtraHeaders = extraHeaders
 
 				caps, err := testClient.FetchCapabilities()
 				Ω(err).ShouldNot(HaveOccurred())
-				Ω(spy.calls).Should(Equal([]doRequestCall{{http.MethodOptions, srvMock.URL()}}))
+				Ω(spy.calls).Should(Equal([]requestCall{{http.MethodOptions, srvMock.URL()}}))
 				Ω(caps).Should(Equal(ServerCapabilities{
 					Extensions:       []string{"creation"},
 					ProtocolVersions: []string{"1.0.0"},
@@ -1294,11 +1310,11 @@ var _ = Describe("Client", func() {
 		})
 	})
 	Context("ensureExtension", func() {
-		var counter *doRequestCounter
+		var counter *countingClient
 
 		BeforeEach(func() {
-			counter = &doRequestCounter{}
-			testClient.DoRequest = counter.DoRequest
+			counter = &countingClient{}
+			testClient.DoRequest = counter.Do
 		})
 		When("extension exists", func() {
 			When("extensions have not been fetched yet", func() {

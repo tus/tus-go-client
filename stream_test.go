@@ -289,8 +289,8 @@ var _ = Describe("Stream", func() {
 				Header("X-Custom", expect.ToEqual("custom")).
 				Header("X-Extra", expect.ToEqual("extra")).
 				ReplyFunction(up.handler()))
-			spy := &doRequestSpy{}
-			testClient.DoRequest = spy.DoRequest
+			spy := &spyClient{}
+			testClient.DoRequest = spy.Do
 			testClient.ExtraHeaders = http.Header{"X-Extra": {"extra"}}
 
 			u := Upload{Location: "/foo/bar", RemoteSize: 1024}
@@ -300,7 +300,7 @@ var _ = Describe("Stream", func() {
 
 			Ω(s.Write(data)).Should(Equal(1024))
 			Ω(data).Should(Equal(up.buf.Bytes()))
-			Ω(spy.calls).Should(Equal([]doRequestCall{{http.MethodPatch, srvMock.URL() + "/foo/bar"}}))
+			Ω(spy.calls).Should(Equal([]requestCall{{http.MethodPatch, srvMock.URL() + "/foo/bar"}}))
 			Ω(testClient.ExtraHeaders).Should(Equal(http.Header{"X-Extra": {"extra"}}))
 		})
 		Context("DeclareSize", func() {

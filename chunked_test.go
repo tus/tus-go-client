@@ -573,7 +573,7 @@ var _ = Describe("ChunkedWriter", func() {
 		It("should close the response bodies if the server accepts nothing in consecutive requests", func() {
 			_, w := newWriter(Upload{Location: "/foo/bar", RemoteSize: 1024}, 256)
 			responder := &fakeResponder{status: http.StatusNoContent, header: http.Header{"Upload-Offset": {"0"}}, body: "server says"}
-			testClient.DoRequest = responder.DoRequest
+			testClient.DoRequest = responder.Do
 			data := tRandomData(1024)
 
 			n, err := w.ReadFrom(bytes.NewReader(data))

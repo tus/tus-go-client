@@ -47,21 +47,25 @@ type Client struct {
 	// They may be used for authentication, cache control, etc.
 	ExtraHeaders http.Header
 
-	// DoRequest is called on every request, that sends a prepared TUS [http.Request] to the server and returns the
-	// [http.Response]. It may be called concurrently if the Client is used by several goroutines.
+	// DoRequest is called on every request, that sends a prepared TUS [http.Request] passed as an argument
+	// and returns the [http.Response]. Client may call it concurrently if the Client used by several goroutines.
 	// If nil, the library uses the Client field or [http.DefaultClient].
 	//
 	// This function may be used for testing, logging, collecting the metrics, shaping the connection speed,
-	// modifying the request before sending it, etc.
+	// modifying the request before sending, etc.
 	DoRequest DoRequestFunc
 
 	// Client is the HTTP client used to send requests to the server. If nil, [http.DefaultClient] is used.
 	// This field is ignored if DoRequest is set.
-	Client *http.Client
+	Client HTTPClient
 
 	endpoint             *url.URL
 	advertisedExtensions []string
 	mu                   *sync.Mutex
+}
+
+type HTTPClient interface {
+	Do(req *http.Request) (*http.Response, error)
 }
 
 // DoRequestFunc is the callback type that can be set on Client and will be called on every request to the server.
