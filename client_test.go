@@ -247,7 +247,7 @@ var _ = Describe("Client", func() {
 			})
 		})
 		Context("error path", func() {
-			It("should process http 412 unknown versions", func() {
+			It("should process http 412 unknown versions on non-OPTIONS request", func() {
 				srvMock.AddMocks(tRequest(http.MethodGet, "/foo", tusHeaders).
 					Reply(reply.Status(http.StatusPreconditionFailed).
 						Header("Tus-Version", "1.0.1,0.9.0").
@@ -263,6 +263,20 @@ var _ = Describe("Client", func() {
 					MatchError(ContainSubstring("server does not support protocol version \"1.0.0\", supported versions: 1.0.1,0.9.0")),
 				))
 				Ω(tErrResponse(err)).Should(And(HaveHTTPStatus(http.StatusPreconditionFailed), HaveHTTPBody([]byte("test"))))
+			})
+			It("should pass http 412 to the caller on OPTIONS request", func() {
+				srvMock.AddMocks(mocha.Request().
+					URL(expect.URLPath("/foo")).Method(http.MethodOptions).
+					Reply(reply.Status(http.StatusPreconditionFailed).
+						Header("Tus-Version", "1.0.1,0.9.0").
+						Body([]byte("test"))),
+				)
+				req, err := http.NewRequest(http.MethodOptions, srvMock.URL()+"/foo", nil)
+				Ω(err).Should(Succeed())
+
+				resp, err := testClient.tusRequest(req)
+				Ω(err).Should(Succeed())
+				Ω(resp).Should(And(HaveHTTPStatus(http.StatusPreconditionFailed), HaveHTTPBody([]byte("test"))))
 			})
 			It("should return error returned by DoRequest", func() {
 				doErr := errors.New("boom")
@@ -579,6 +593,7 @@ var _ = Describe("Client", func() {
 					Entry("403", http.StatusForbidden, ErrUploadDoesNotExist, "upload does not exist (HTTP 403;"),
 					Entry("400", http.StatusBadRequest, ErrUnexpectedResponse, "unexpected HTTP response code (HTTP 400;"),
 					Entry("201", http.StatusCreated, ErrUnexpectedResponse, "unexpected HTTP response code (HTTP 201;"),
+					Entry("412", http.StatusPreconditionFailed, ErrProtocol, "protocol error (HTTP 412;"),
 				)
 			})
 			When("corrupted numeric header value", func() {
@@ -1498,6 +1513,7 @@ var _ = Describe("Client", func() {
 					Entry("403", http.StatusForbidden, ErrUnexpectedResponse, "unexpected HTTP response code (HTTP 403;"),
 					Entry("400", http.StatusBadRequest, ErrUnexpectedResponse, "unexpected HTTP response code (HTTP 400;"),
 					Entry("201", http.StatusCreated, ErrUnexpectedResponse, "unexpected HTTP response code (HTTP 201;"),
+					Entry("412", http.StatusPreconditionFailed, ErrUnexpectedResponse, "unexpected HTTP response code (HTTP 412;"),
 				)
 			})
 		})

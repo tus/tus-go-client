@@ -411,12 +411,14 @@ func (c *Client) fetchCapabilities() (ServerCapabilities, error) {
 }
 
 func (c *Client) tusRequest(req *http.Request) (*http.Response, error) {
+	var version string
 	if req.Method != http.MethodOptions {
-		v, err := c.negotiateProtocolVersion() // Makes an OPTIONS request
+		var err error
+		version, err = c.negotiateProtocolVersion() // Makes an OPTIONS request
 		if err != nil {
 			return nil, fmt.Errorf("get supported protocol version: %w", err)
 		}
-		req.Header.Set("Tus-Resumable", v)
+		req.Header.Set("Tus-Resumable", version)
 	}
 
 	f := c.DoRequest
@@ -432,9 +434,10 @@ func (c *Client) tusRequest(req *http.Request) (*http.Response, error) {
 		return nil, fmt.Errorf("do request: %w", err)
 	}
 
-	if resp.StatusCode == http.StatusPreconditionFailed {
+	// If request is OPTIONS, this should be ErrUnexpectedResponse, so pass it to the caller
+	if req.Method != http.MethodOptions && resp.StatusCode == http.StatusPreconditionFailed {
 		versions := resp.Header.Get("Tus-Version")
-		return resp, newTusError(ErrProtocol, resp, fmt.Errorf("server does not support protocol version %q, supported versions: %s", c.protocolVersion, versions))
+		return resp, newTusError(ErrProtocol, resp, fmt.Errorf("server does not support protocol version %q, supported versions: %s", version, versions))
 	}
 
 	return resp, nil
