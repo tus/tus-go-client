@@ -2,10 +2,13 @@ package tusgo
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
 )
 
@@ -103,6 +106,57 @@ func (te TusError) StatusCode() int {
 		return te.resp.StatusCode
 	}
 	return 0
+}
+
+// IsErrorRetryable reports whether the operation that returned err may succeed if repeated.
+//
+// The following errors are retryable:
+//
+//   - [ErrIncompleteWrite], [ErrChecksumMismatch] and [ErrOffsetsNotSynced]. The latter requires calling
+//     [Stream.Sync] before repeating
+//   - [ErrUnexpectedResponse] with status 408, 423, 429, 500, 502, 503 or 504
+//   - network errors, such as connection failures, timeouts and connections closed by the server
+//
+// Other errors, including [context.Canceled] and an expired [context.Context] deadline, are not retryable.
+func IsErrorRetryable(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) {
+		return false
+	}
+
+	var te TusError
+	if errors.As(err, &te) {
+		switch te.msg {
+		case ErrIncompleteWrite.msg, ErrChecksumMismatch.msg, ErrOffsetsNotSynced.msg:
+			return true
+		case ErrUnexpectedResponse.msg:
+			switch te.StatusCode() {
+			case http.StatusRequestTimeout, http.StatusLocked, http.StatusTooManyRequests, http.StatusInternalServerError,
+				http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+				return true
+			}
+		}
+		return false
+	}
+
+	// url.Error, returned by http.Client, implements net.Error itself, so check the error it wraps
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		if errors.Is(ue.Err, io.EOF) || errors.Is(ue.Err, io.ErrUnexpectedEOF) { // Connection closed by the server
+			return true
+		}
+		err = ue.Err
+	}
+	var de *net.DNSError
+	if errors.As(err, &de) {
+		return !de.IsNotFound
+	}
+	var ne net.Error
+	if errors.As(err, &ne) {
+		// context.DeadlineExceeded is a net.Error too, but it means the caller's deadline has passed.
+		// http.Client.Timeout is reported with a different error.
+		return ne != context.DeadlineExceeded
+	}
+	return false
 }
 
 func newTusError(te TusError, r *http.Response, e error) TusError {

@@ -1,11 +1,17 @@
 package tusgo
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"strings"
+	"syscall"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -297,6 +303,152 @@ var _ = Describe("TusError", func() {
 		})
 		It("should return 0 for a bare sentinel", func() {
 			Ω(ErrProtocol.StatusCode()).Should(Equal(0))
+		})
+	})
+})
+
+var _ = Describe("IsErrorRetryable", func() {
+	// withStatus returns the error built from the sentinel with a response of the given status
+	withStatus := func(te TusError, status int) TusError {
+		return newTusError(te, testResponse(status, &closeTrackingBody{Reader: strings.NewReader("")}, 0), nil)
+	}
+
+	DescribeTable("should classify errors",
+		func(err error, expect bool) {
+			Ω(IsErrorRetryable(err)).Should(Equal(expect))
+		},
+		Entry("nil", nil, false),
+		Entry("unrelated error", errors.New("boom"), false),
+
+		Entry("ErrIncompleteWrite", newTusError(ErrIncompleteWrite, nil, errors.New("boom")), true),
+		Entry("ErrChecksumMismatch", withStatus(ErrChecksumMismatch, 460), true),
+		Entry("ErrOffsetsNotSynced", withStatus(ErrOffsetsNotSynced, http.StatusConflict), true),
+		Entry("bare sentinel", ErrOffsetsNotSynced, true),
+		Entry("TusError wrapped by fmt.Errorf", fmt.Errorf("write: %w", withStatus(ErrOffsetsNotSynced, http.StatusConflict)), true),
+
+		Entry("ErrTooLarge", withStatus(ErrTooLarge, http.StatusRequestEntityTooLarge), false),
+		Entry("ErrUploadDoesNotExist", withStatus(ErrUploadDoesNotExist, http.StatusNotFound), false),
+		Entry("ErrCannotUpload", withStatus(ErrCannotUpload, http.StatusForbidden), false),
+		Entry("ErrUnsupportedFeature", newTusError(ErrUnsupportedFeature, nil, errors.New("checksum")), false),
+		Entry("ErrProtocol", withStatus(ErrProtocol, http.StatusPreconditionFailed), false),
+		Entry("non-retryable TusError carrying a retryable one", newTusError(ErrProtocol, nil, ErrIncompleteWrite), false),
+
+		Entry("ErrUnexpectedResponse 408", withStatus(ErrUnexpectedResponse, http.StatusRequestTimeout), true),
+		Entry("ErrUnexpectedResponse 423", withStatus(ErrUnexpectedResponse, http.StatusLocked), true),
+		Entry("ErrUnexpectedResponse 429", withStatus(ErrUnexpectedResponse, http.StatusTooManyRequests), true),
+		Entry("ErrUnexpectedResponse 500", withStatus(ErrUnexpectedResponse, http.StatusInternalServerError), true),
+		Entry("ErrUnexpectedResponse 502", withStatus(ErrUnexpectedResponse, http.StatusBadGateway), true),
+		Entry("ErrUnexpectedResponse 503", withStatus(ErrUnexpectedResponse, http.StatusServiceUnavailable), true),
+		Entry("ErrUnexpectedResponse 504", withStatus(ErrUnexpectedResponse, http.StatusGatewayTimeout), true),
+		Entry("ErrUnexpectedResponse 200", withStatus(ErrUnexpectedResponse, http.StatusOK), false),
+		Entry("ErrUnexpectedResponse 400", withStatus(ErrUnexpectedResponse, http.StatusBadRequest), false),
+		Entry("ErrUnexpectedResponse 401", withStatus(ErrUnexpectedResponse, http.StatusUnauthorized), false),
+		Entry("ErrUnexpectedResponse 501", withStatus(ErrUnexpectedResponse, http.StatusNotImplemented), false),
+		Entry("ErrUnexpectedResponse without response", ErrUnexpectedResponse, false),
+
+		Entry("context.Canceled", fmt.Errorf("do request: %w", context.Canceled), false),
+		Entry("context.DeadlineExceeded", fmt.Errorf("do request: %w", context.DeadlineExceeded), false),
+		Entry("context.DeadlineExceeded in url.Error",
+			&url.Error{Op: "Patch", URL: "http://example.com", Err: context.DeadlineExceeded}, false),
+		Entry("connection refused",
+			&url.Error{Op: "Patch", URL: "http://example.com", Err: &net.OpError{Op: "dial", Net: "tcp", Err: syscall.ECONNREFUSED}}, true),
+		Entry("net.OpError without url.Error", fmt.Errorf("do request: %w", &net.OpError{Op: "read", Net: "tcp", Err: syscall.ECONNRESET}), true),
+		Entry("connection closed by the server", &url.Error{Op: "Patch", URL: "http://example.com", Err: io.EOF}, true),
+		Entry("connection closed unexpectedly", &url.Error{Op: "Patch", URL: "http://example.com", Err: io.ErrUnexpectedEOF}, true),
+		Entry("io.ErrUnexpectedEOF outside url.Error", fmt.Errorf("read: %w", io.ErrUnexpectedEOF), false),
+		Entry("temporary DNS failure",
+			&url.Error{Op: "Patch", URL: "http://example.com", Err: &net.DNSError{Err: "server misbehaving", IsTemporary: true}}, true),
+		Entry("host not found",
+			&url.Error{Op: "Patch", URL: "http://example.com", Err: &net.DNSError{Err: "no such host", IsNotFound: true}}, false),
+		Entry("url.Error with non-network error",
+			&url.Error{Op: "Patch", URL: "foo://example.com", Err: errors.New(`unsupported protocol scheme "foo"`)}, false),
+	)
+
+	Context("errors returned by http.Client", func() {
+		var srv *httptest.Server
+		var handler http.HandlerFunc
+
+		BeforeEach(func() {
+			handler = nil
+			srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { handler(w, r) }))
+		})
+		AfterEach(func() {
+			srv.Close()
+		})
+		// withContext makes c send requests with ctx
+		withContext := func(c *Client, ctx context.Context) *Client {
+			c.DoRequest = func(req *http.Request) (*http.Response, error) {
+				return http.DefaultClient.Do(req.WithContext(ctx))
+			}
+			return c
+		}
+		// getUpload requests the upload from srv through c and returns the error
+		getUpload := func(c *Client) error {
+			GinkgoHelper()
+			_, err := c.GetUpload(srv.URL + "/foo/bar")
+			Ω(err).Should(HaveOccurred())
+			return err
+		}
+
+		It("should be retryable on http.Client.Timeout", func() {
+			handler = func(w http.ResponseWriter, r *http.Request) { time.Sleep(200 * time.Millisecond) }
+			u, _ := url.Parse(srv.URL)
+			c := NewClient(u)
+			c.Client = &http.Client{Timeout: 20 * time.Millisecond}
+
+			Ω(IsErrorRetryable(getUpload(c))).Should(BeTrue())
+		})
+		It("should not be retryable when the context deadline has expired", func() {
+			handler = func(w http.ResponseWriter, r *http.Request) { time.Sleep(200 * time.Millisecond) }
+			u, _ := url.Parse(srv.URL)
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+			defer cancel()
+			c := withContext(NewClient(u), ctx)
+
+			Ω(IsErrorRetryable(getUpload(c))).Should(BeFalse())
+		})
+		It("should not be retryable when the context is canceled", func() {
+			u, _ := url.Parse(srv.URL)
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			c := withContext(NewClient(u), ctx)
+
+			Ω(IsErrorRetryable(getUpload(c))).Should(BeFalse())
+		})
+		It("should be retryable when the server closes the connection", func() {
+			handler = func(w http.ResponseWriter, r *http.Request) {
+				conn, _, err := w.(http.Hijacker).Hijack()
+				Ω(err).ShouldNot(HaveOccurred())
+				Ω(conn.Close()).Should(Succeed())
+			}
+			u, _ := url.Parse(srv.URL)
+
+			Ω(IsErrorRetryable(getUpload(NewClient(u)))).Should(BeTrue())
+		})
+		It("should be retryable when the connection is refused", func() {
+			u, _ := url.Parse(srv.URL)
+			srv.Close()
+
+			Ω(IsErrorRetryable(getUpload(NewClient(u)))).Should(BeTrue())
+		})
+		It("should not be retryable for an unsupported URL scheme", func() {
+			u, _ := url.Parse("foo://example.com")
+			_, err := NewClient(u).GetUpload("foo://example.com/foo/bar")
+			Ω(err).Should(HaveOccurred())
+
+			Ω(IsErrorRetryable(err)).Should(BeFalse())
+		})
+		It("should be retryable on 503 response", func() {
+			handler = func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusServiceUnavailable) }
+			u, _ := url.Parse(srv.URL)
+
+			Ω(IsErrorRetryable(getUpload(NewClient(u)))).Should(BeTrue())
+		})
+		It("should not be retryable on 404 response", func() {
+			handler = func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNotFound) }
+			u, _ := url.Parse(srv.URL)
+
+			Ω(IsErrorRetryable(getUpload(NewClient(u)))).Should(BeFalse())
 		})
 	})
 })
