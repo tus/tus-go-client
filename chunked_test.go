@@ -135,7 +135,7 @@ var _ = Describe("ChunkedWriter", func() {
 		It("should create a writer with an empty buffer of chunk size", func() {
 			s, w := newWriter(Upload{Location: "/foo/bar", RemoteSize: 1024}, 256)
 
-			Ω(w.s).Should(BeIdenticalTo(s))
+			Ω(w.w).Should(BeIdenticalTo(s))
 			Ω(w.buf).Should(HaveLen(256))
 			Ω(w.Buffer()).Should(BeEmpty())
 		})
@@ -175,6 +175,7 @@ var _ = Describe("ChunkedWriter", func() {
 			Entry("data less than chunk size", 100, 1024, 1),
 			Entry("data equal to chunk size", 256, 1024, 1),
 			Entry("data and upload less than chunk size", 100, 100, 1),
+			Entry("data exceeds upload size, which is not checked on the client", 2048, 1024, 8),
 		)
 		It("should do nothing if the reader is empty", func() {
 			s, w := newWriter(Upload{Location: "/foo/bar", RemoteSize: 1024, RemoteOffset: 64}, 256)
@@ -183,23 +184,28 @@ var _ = Describe("ChunkedWriter", func() {
 			Ω(s.Tell()).Should(BeEquivalentTo(64))
 			Ω(w.Buffer()).Should(BeEmpty())
 		})
-		DescribeTable("should read no more than the space left in the upload",
-			func(remoteSize int64) {
-				up := mockUploader(4)
-				s, w := newWriter(Upload{Location: "/foo/bar", RemoteSize: remoteSize, RemoteOffset: 256}, 256)
-				data := tRandomData(2048)
-				rd := bytes.NewReader(data)
-				Ω(io.CopyN(up.buf, rd, 256)).Should(BeEquivalentTo(256)) // Prefill, Upload-Offset now is 256
+		It("should not limit reading by the upload size, leaving the excess for the server to reject", func() {
+			replies := []*reply.StdReply{
+				tReply(reply.NoContent()), tReply(reply.NoContent()), tReply(reply.NoContent()), tReply(reply.NoContent()),
+				tReply(reply.Status(http.StatusRequestEntityTooLarge)),
+			}
+			up := &mockTusUploader{replies: replies, buf: bytes.NewBuffer(make([]byte, 0)), acceptSizes: []int{-1, -1, -1, 232}}
+			srvMock.AddMocks(up.makeRequest(http.MethodPatch, "/foo/bar", emptyHeaders).ReplyFunction(up.handler()))
+			s, w := newWriter(Upload{Location: "/foo/bar", RemoteSize: 1000}, 256)
+			data := tRandomData(2048)
+			rd := bytes.NewReader(data)
 
-				Ω(w.ReadFrom(rd)).Should(BeEquivalentTo(remoteSize - 256))
-				Ω(s.Tell()).Should(BeEquivalentTo(remoteSize))
-				Ω(w.Buffer()).Should(BeEmpty())
-				Ω(rd.Len()).Should(BeEquivalentTo(2048 - remoteSize)) // The rest has not been read
-				Ω(data[:remoteSize]).Should(Equal(up.buf.Bytes()))
-			},
-			Entry("remote size aligned to chunk size", int64(1024)),
-			Entry("remote size unaligned to chunk size", int64(1000)),
-		)
+			// 256@0, 256@256, 256@512, 256@768 -> 232 confirmed, 24@1000 -> 413
+			n, err := w.ReadFrom(rd)
+			Ω(n).Should(BeEquivalentTo(1024))
+			Ω(err).Should(MatchError(ErrTooLarge))
+			Ω(tErrResponse(err)).Should(HaveHTTPStatus(http.StatusRequestEntityTooLarge))
+			Ω(s.Tell()).Should(BeEquivalentTo(1000))
+			Ω(w.Buffer()).Should(Equal(data[1000:1024]))
+			Ω(rd.Len()).Should(Equal(1024))
+			Ω(up.requests).Should(HaveLen(5))
+			Ω(data[:1000]).Should(Equal(up.buf.Bytes()))
+		})
 		It("should upload data until the reader is exhausted if upload size is unknown", func() {
 			up := mockUploader(4)
 			s, w := newWriter(Upload{Location: "/foo/bar", RemoteSize: SizeUnknown}, 256)
@@ -283,24 +289,6 @@ var _ = Describe("ChunkedWriter", func() {
 			// 256@0 -> 100 confirmed, 156@100 x3 -> nothing confirmed; next call: 156@100, then 3 full chunks
 			Entry("a part accepted", []int{100, 0, 0, 0}, int64(100), 8),
 		)
-		It("should not read more than the space left in the upload when resending the buffer", func() {
-			up := mockUploader(8, 100, 0, 0, 0)
-			s, w := newWriter(Upload{Location: "/foo/bar", RemoteSize: 1000}, 256)
-			data := tRandomData(2048)
-			rd := bytes.NewReader(data)
-
-			// 256@0 -> 100 confirmed, 156@100 x3 -> nothing confirmed
-			n, err := w.ReadFrom(rd)
-			Ω(n).Should(BeEquivalentTo(256))
-			Ω(err).Should(MatchError(ErrIncompleteWrite))
-
-			// 156@100, 256@256, 256@512, 232@768
-			Ω(w.ReadFrom(rd)).Should(BeEquivalentTo(744))
-			Ω(s.Tell()).Should(BeEquivalentTo(1000))
-			Ω(rd.Len()).Should(Equal(1048)) // The rest has not been read
-			Ω(up.requests).Should(HaveLen(8))
-			Ω(data[:1000]).Should(Equal(up.buf.Bytes()))
-		})
 	})
 	Context("retry to upload data after error", func() {
 		It("should resend the buffered chunk after an error in the middle", func() {
@@ -483,26 +471,35 @@ var _ = Describe("ChunkedWriter", func() {
 			Ω(up.requests).Should(HaveLen(5))
 			Ω(data).Should(Equal(up.buf.Bytes()))
 		})
-		It("should upload the data that fits and return ErrTooLarge if data exceeds the space left", func() {
-			// 256@0, 256@256, 256@512, 232@768
-			up := mockUploader(4)
+		It("should upload the data the server accepts and return ErrTooLarge when the server rejects the excess", func() {
+			replies := []*reply.StdReply{
+				tReply(reply.NoContent()), tReply(reply.NoContent()), tReply(reply.NoContent()), tReply(reply.NoContent()),
+				tReply(reply.Status(http.StatusRequestEntityTooLarge)),
+			}
+			up := &mockTusUploader{replies: replies, buf: bytes.NewBuffer(make([]byte, 0)), acceptSizes: []int{-1, -1, -1, 232}}
+			srvMock.AddMocks(up.makeRequest(http.MethodPatch, "/foo/bar", emptyHeaders).ReplyFunction(up.handler()))
 			s, w := newWriter(Upload{Location: "/foo/bar", RemoteSize: 1000}, 256)
 			data := tRandomData(1024)
 
+			// 256@0, 256@256, 256@512, 256@768 -> 232 confirmed, 24@1000 -> 413
 			n, err := w.Write(data)
 			Ω(n).Should(Equal(1000))
 			Ω(err).Should(MatchError(ErrTooLarge))
 			Ω(s.Tell()).Should(BeEquivalentTo(1000))
-			Ω(up.requests).Should(HaveLen(4))
+			Ω(up.requests).Should(HaveLen(5))
 			Ω(data[:1000]).Should(Equal(up.buf.Bytes()))
 		})
-		It("should return ErrTooLarge without sending requests if the upload is full", func() {
+		It("should send the data even if the upload is full, and return ErrTooLarge if the server rejects it", func() {
+			replies := []*reply.StdReply{tReply(reply.Status(http.StatusRequestEntityTooLarge))}
+			up := &mockTusUploader{replies: replies, buf: bytes.NewBuffer(make([]byte, 1024))}
+			srvMock.AddMocks(up.makeRequest(http.MethodPatch, "/foo/bar", emptyHeaders).ReplyFunction(up.handler()))
 			s, w := newWriter(Upload{Location: "/foo/bar", RemoteSize: 1024, RemoteOffset: 1024}, 256)
 
 			n, err := w.Write(tRandomData(100))
 			Ω(n).Should(Equal(0))
 			Ω(err).Should(MatchError(ErrTooLarge))
 			Ω(s.Tell()).Should(BeEquivalentTo(1024))
+			Ω(up.requests).Should(HaveLen(1))
 		})
 		It("should do nothing if data is empty", func() {
 			s, w := newWriter(Upload{Location: "/foo/bar", RemoteSize: 1024}, 256)

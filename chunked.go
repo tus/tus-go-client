@@ -8,35 +8,37 @@ import (
 
 const maxConsecutiveZeroWrites = 3
 
-type streamWriter interface {
-	Write(p []byte) (n int, err error)
-	Size() int64
-	Tell() int64
-}
-
-// NewChunkedWriter returns a ChunkedWriter that uploads data through the stream s in chunks of chunkSize bytes.
-func NewChunkedWriter(s streamWriter, chunkSize int) *ChunkedWriter {
+// NewChunkedWriter returns a ChunkedWriter that writes to w in chunks of at most chunkSize bytes. The internal
+// buffer of chunkSize bytes is allocated once and reused for the lifetime of the writer.
+//
+// w is typically a [*Stream]. Any other [io.Writer] must follow the [Stream.Write] contract: return the number of bytes
+// the server has accepted, and [ErrIncompleteWrite] if it is less than len(p).
+//
+// NewChunkedWriter panics if w is nil or chunkSize is not positive.
+func NewChunkedWriter(w io.Writer, chunkSize int) *ChunkedWriter {
 	if chunkSize <= 0 {
 		panic(fmt.Sprintf("invalid chunk size %d, must be positive", chunkSize))
 	}
-	if s == nil {
+	if w == nil {
 		panic("stream is nil")
 	}
 	return &ChunkedWriter{
-		s:   s,
+		w:   w,
 		buf: make([]byte, chunkSize),
 	}
 }
 
-// ChunkedWriter is an io.ReaderFrom that uploads the data read from an [io.Reader] in chunks of a fixed size,
-// sending each chunk with a single Write call on the underlying stream.
-// ChunkedWriter is not safe for concurrent use.
+// ChunkedWriter writes data to an underlying stream, typically a [Stream], in fixed-size chunks.
+// It's optimized for reliable and resumable writing the data to the underlying stream.
 //
-// Each chunk is read into an internal buffer and kept there until the server confirms all of it. If the upload was
-// interrupted, a repeated ReadFrom call with the same reader resends the unconfirmed data first and then continues
-// reading, so the reader does not need to be rewound.
+// [ChunkedWriter.ReadFrom] stages each chunk in an internal buffer and keeps the unaccepted data there on error,
+// so a later call with the same reader resumes the process without rewinding it. [ChunkedWriter.Write] sends
+// the caller's slice in chunks, without buffering, but returns count of bytes accepted by the stream.
+// In both cases, if the stream accepts only part of a chunk, ChunkedWriter sends the rest before it moves on.
+//
+// A ChunkedWriter is not safe for concurrent use.
 type ChunkedWriter struct {
-	s streamWriter
+	w io.Writer
 
 	// buf is the intermediate buffer where len(buf) equal to the chunk size.
 	buf []byte
@@ -47,12 +49,8 @@ type ChunkedWriter struct {
 }
 
 // ReadFrom reads data from r and uploads it in chunks until r returns [io.EOF] or the upload is full. It
-// implements [io.ReaderFrom] and returns the number of bytes read from r. Each chunk is uploaded with
-// [ChunkedWriter.Write].
-//
-// If the upload size is known, ReadFrom never reads more from r than the space left in the upload, so any data
-// beyond it stays unread. If the upload has a deferred size that has not been declared yet
-// (see [Stream.DeclareSize]), ReadFrom reads until r returns [io.EOF] or the server rejects a chunk.
+// implements [io.ReaderFrom] and returns the number of bytes read from r. ReadFrom sends the data until r returns
+// [io.EOF] or the server rejects a chunk.
 //
 // If the server accepts only part of a chunk, ReadFrom resends the rest. If the server accepts no data in
 // several consecutive requests, ReadFrom returns [ErrIncompleteWrite].
@@ -62,18 +60,10 @@ type ChunkedWriter struct {
 // not need to be rewound.
 func (us *ChunkedWriter) ReadFrom(r io.Reader) (int64, error) {
 	counterRd := &counterReader{Rd: r}
-	r = counterRd
 
-	// Preliminary limit the reader to read only the space left in the upload (if upload size is known).
-	if us.s.Size() != SizeUnknown {
-		freeSpace := us.s.Size() - us.s.Tell() - int64(len(us.bufPtr))
-		r = io.LimitReader(r, freeSpace)
-	}
-
-	// Load the data in chunks until the upload becomes full or reader is exhausted, whatever happens first.
-	for us.s.Size() == SizeUnknown || us.s.Tell() < us.s.Size() {
+	for {
 		if len(us.bufPtr) == 0 {
-			n, err := io.ReadFull(r, us.buf)
+			n, err := io.ReadFull(counterRd, us.buf)
 			us.bufPtr = us.buf[:n]
 			switch {
 			case errors.Is(err, io.EOF): // Reader is empty
@@ -91,16 +81,10 @@ func (us *ChunkedWriter) ReadFrom(r io.Reader) (int64, error) {
 			return counterRd.BytesRead, fmt.Errorf("write: %w", err)
 		}
 	}
-
-	return counterRd.BytesRead, nil
 }
 
-// Write uploads p in chunks, issuing one Stream.Write call per chunk. It returns the number of bytes accepted by
-// the server.
-//
-// If the upload size is known, Write never sends more than the space left in the upload. If p does not fit, Write
-// uploads as much as fits and returns [ErrTooLarge]. If the upload has a deferred size that has not been declared
-// yet (see [Stream.DeclareSize]), Write sends p until the server either accepts all of it or rejects a chunk.
+// Write uploads p in chunks, issuing one Stream.Write call per chunk. It always returns the number of bytes
+// accepted by the server and possible error. Write sends p until the server confirms all chunks or rejects a chunk.
 //
 // If the server accepts only part of a chunk, Write resends the rest. If the server accepts no data in
 // several consecutive requests, Write returns [ErrIncompleteWrite].
@@ -112,15 +96,9 @@ func (us *ChunkedWriter) Write(p []byte) (int, error) {
 	n0 := len(p)
 	var zeroAttempts int
 
-	deferSize := us.s.Size() == SizeUnknown
-	freeSpace := int(us.s.Size() - us.s.Tell())
-	for len(p) > 0 && (deferSize || freeSpace > 0) {
+	for len(p) > 0 {
 		nn := min(len(p), len(us.buf))
-		if nn > freeSpace && !deferSize {
-			nn = freeSpace
-		}
-
-		advance, err := us.s.Write(p[:nn])
+		advance, err := us.w.Write(p[:nn])
 		if err == nil || errors.Is(err, ErrIncompleteWrite) || errors.Is(err, ErrTooLarge) {
 			p = p[advance:]
 			n += advance
@@ -136,7 +114,6 @@ func (us *ChunkedWriter) Write(p []byte) (int, error) {
 		} else {
 			zeroAttempts = 0
 		}
-		freeSpace = int(us.s.Size() - us.s.Tell())
 	}
 
 	if n < n0 {
@@ -148,14 +125,14 @@ func (us *ChunkedWriter) Write(p []byte) (int, error) {
 // Flush sends the unconfirmed data in the buffer to the server. It returns the number of bytes acknowledged by the
 // server and an error if the upload failed.
 //
-// Flush returns all errors returned by the underlying Stream.Write. Call Flush again to resend the unconfirmed data
+// Flush returns all errors returned by the underlying writer. Call Flush again to resend the unconfirmed data
 // if the error occurred.
 func (us *ChunkedWriter) Flush() (int, error) {
 	if len(us.bufPtr) == 0 {
 		return 0, nil
 	}
 
-	advance, err := us.s.Write(us.bufPtr)
+	advance, err := us.w.Write(us.bufPtr)
 	if advance < 0 {
 		advance = 0
 	}

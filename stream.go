@@ -158,9 +158,9 @@ func (rs *Stream) Write(p []byte) (int, error) {
 	advance := int(newOffset - offset)
 	switch {
 	case advance < 0:
-		return advance, newTusError(ErrProtocol, resp, fmt.Errorf("server offset has gone backwards, offset=%d, newOffset=%d", offset, newOffset))
+		return 0, newTusError(ErrProtocol, resp, fmt.Errorf("server offset has gone backwards, offset=%d, newOffset=%d", offset, newOffset))
 	case advance > len(p):
-		return advance, newTusError(ErrProtocol, resp, fmt.Errorf("server offset has been advanced too far: offset=%d, advance=%d, size=%d", offset, advance, len(p)))
+		return 0, newTusError(ErrProtocol, resp, fmt.Errorf("server offset has been advanced too far: offset=%d, advance=%d, size=%d", offset, advance, len(p)))
 	}
 
 	rs.uploadStateOffset = newOffset

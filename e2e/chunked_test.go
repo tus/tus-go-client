@@ -65,28 +65,36 @@ var _ = Describe("ChunkedWriter", func() {
 		Expect(srv.StoredData(u.Location)).To(Equal(data))
 	})
 
-	It("should not read more from the reader than the space left in the upload", func() {
-		_, w := newChunkedWriter(cl, u, chunkSize)
-		rd := bytes.NewReader(append(data, randomData(1000)...))
+	It("should not limit reading by the upload size, and keep the chunk rejected by the server in the buffer", func() {
+		const fullChunksSize = (chunks - 1) * chunkSize
+		s, w := newChunkedWriter(cl, u, chunkSize)
+		src := append(data, randomData(1000)...)
+		rd := bytes.NewReader(src)
 
+		// The last chunk overflows the upload, so the server rejects it entirely
 		n, err := w.ReadFrom(rd)
 
-		Expect(err).NotTo(HaveOccurred())
-		Expect(n).To(BeEquivalentTo(dataSize))
-		Expect(rd.Len()).To(Equal(1000))
-		Expect(srv.StoredData(u.Location)).To(Equal(data))
+		Expect(err).To(MatchError(tusgo.ErrTooLarge))
+		Expect(n).To(BeEquivalentTo(len(src)))
+		Expect(rd.Len()).To(Equal(0))
+		Expect(s.Tell()).To(BeEquivalentTo(fullChunksSize))
+		Expect(w.Buffer()).To(Equal(src[fullChunksSize:]))
+		Expect(patches.count.Load()).To(BeEquivalentTo(chunks))
+		Expect(srv.StoredData(u.Location)).To(Equal(data[:fullChunksSize]))
 	})
 
-	It("should transfer the data that fits and return ErrTooLarge when writing more than the upload size", func() {
+	It("should transfer the chunks the server accepts and return ErrTooLarge when writing more than the upload size", func() {
+		const fullChunksSize = (chunks - 1) * chunkSize
 		s, w := newChunkedWriter(cl, u, chunkSize)
 
+		// The last chunk overflows the upload, so the server rejects it entirely
 		n, err := w.Write(append(data, 1, 2, 3))
 
 		Expect(err).To(MatchError(tusgo.ErrTooLarge))
-		Expect(n).To(Equal(dataSize))
-		Expect(s.Tell()).To(BeEquivalentTo(dataSize))
+		Expect(n).To(Equal(fullChunksSize))
+		Expect(s.Tell()).To(BeEquivalentTo(fullChunksSize))
 		Expect(patches.count.Load()).To(BeEquivalentTo(chunks))
-		Expect(srv.StoredData(u.Location)).To(Equal(data))
+		Expect(srv.StoredData(u.Location)).To(Equal(data[:fullChunksSize]))
 	})
 
 	It("should transfer the data to an upload with deferred length declared before the transfer", func() {
