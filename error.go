@@ -52,7 +52,8 @@ var (
 // bodyReadLimit is the maximum number of the response body bytes included in an error message
 const bodyReadLimit = 2 * 1024 // 2 KiB
 
-// TusError represents an error occurred during a TUS operation.
+// TusError represents an error occurred during a TUS operation. It also may contain the HTTP response that caused the
+// error, if any.
 type TusError struct {
 	inner error
 	resp  *http.Response
@@ -86,6 +87,22 @@ func (te TusError) Is(e error) bool {
 // The response body is already closed and contains up to first 2KiB of the original response body if it was available.
 func (te TusError) Response() *http.Response {
 	return te.resp
+}
+
+// StatusCode is a convenience method that returns the HTTP status code of the response that caused the error,
+// or 0 if no response has been made.
+//
+// Typical usage:
+//
+//	var te tusgo.TusError
+//	if errors.As(err, &te) && te.StatusCode() == http.StatusInternalServerError {
+//	    log.Printf("internal server error: %v", te)
+//	}
+func (te TusError) StatusCode() int {
+	if te.resp != nil {
+		return te.resp.StatusCode
+	}
+	return 0
 }
 
 func newTusError(te TusError, r *http.Response, e error) TusError {

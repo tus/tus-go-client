@@ -284,4 +284,19 @@ var _ = Describe("TusError", func() {
 			))
 		})
 	})
+
+	Context("StatusCode", func() {
+		It("should return the HTTP status code if response is not nil", func() {
+			resp := testResponse(http.StatusInternalServerError, &closeTrackingBody{Reader: strings.NewReader("boom")}, 4)
+			err := newTusError(ErrUnexpectedResponse, resp, nil)
+			Ω(err.StatusCode()).Should(Equal(http.StatusInternalServerError))
+		})
+		It("should return 0 if response is nil", func() {
+			err := newTusError(ErrUnexpectedResponse, nil, nil)
+			Ω(err.StatusCode()).Should(Equal(0))
+		})
+		It("should return 0 for a bare sentinel", func() {
+			Ω(ErrProtocol.StatusCode()).Should(Equal(0))
+		})
+	})
 })
