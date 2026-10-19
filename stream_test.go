@@ -29,7 +29,8 @@ var _ = Describe("Stream", func() {
 		srvMock.Start()
 		testURL, _ = url.Parse(srvMock.URL())
 		testClient = NewClient(testURL)
-		testClient.advertisedExtensions = []string{}
+		testClient.caps = &ServerCapabilities{Extensions: []string{}, ProtocolVersions: []string{"1.0.0"}}
+		testClient.protocolVersion = "1.0.0"
 		emptyHeaders = []string{"Upload-Concat", "Upload-Defer-Length", "Upload-Length", "Upload-Metadata", "Upload-Checksum"}
 	})
 	AfterEach(func() {
@@ -228,7 +229,7 @@ var _ = Describe("Stream", func() {
 				Entry("nothing", 0),
 			)
 			It("should set checksum of the whole data in request trailer", func() {
-				testClient.advertisedExtensions = append(testClient.advertisedExtensions, "checksum-trailer")
+				testClient.caps.Extensions = append(testClient.caps.Extensions, "checksum-trailer")
 				replies := []*reply.StdReply{tReply(reply.NoContent())}
 				up := mockTusUploader{replies: replies, buf: bytes.NewBuffer(make([]byte, 0))}
 				srvMock.AddMocks(up.makeRequest(http.MethodPatch, "/foo/bar", emptyHeaders).ReplyFunction(up.handler()))
@@ -247,7 +248,7 @@ var _ = Describe("Stream", func() {
 			})
 		})
 		It("should set checksum of the whole data in request header", func() {
-			testClient.advertisedExtensions = append(testClient.advertisedExtensions, "checksum")
+			testClient.caps.Extensions = append(testClient.caps.Extensions, "checksum")
 			replies := []*reply.StdReply{tReply(reply.NoContent())}
 			eh := []string{"Upload-Concat", "Upload-Defer-Length", "Upload-Length", "Upload-Metadata"}
 			up := mockTusUploader{replies: replies, buf: bytes.NewBuffer(make([]byte, 0))}
@@ -268,7 +269,7 @@ var _ = Describe("Stream", func() {
 			Ω(up.requests[0].Trailer.Get("Upload-Checksum")).Should(BeEmpty())
 		})
 		It("should set Expires", func() {
-			testClient.advertisedExtensions = append(testClient.advertisedExtensions, "expiration")
+			testClient.caps.Extensions = append(testClient.caps.Extensions, "expiration")
 			rpl := tReply(reply.NoContent()).Header("Upload-Expires", "Wed, 25 Jun 2014 16:00:00 GMT")
 			up := mockTusUploader{replies: []*reply.StdReply{rpl}, buf: bytes.NewBuffer(make([]byte, 0))}
 			srvMock.AddMocks(up.makeRequest(http.MethodPatch, "/foo/bar", emptyHeaders).ReplyFunction(up.handler()))
@@ -305,7 +306,7 @@ var _ = Describe("Stream", func() {
 		})
 		Context("DeclareSize", func() {
 			It("should send the size without data and keep the offset", func() {
-				testClient.advertisedExtensions = append(testClient.advertisedExtensions, "creation-defer-length")
+				testClient.caps.Extensions = append(testClient.caps.Extensions, "creation-defer-length")
 				replies := []*reply.StdReply{tReply(reply.NoContent())}
 				up := mockTusUploader{replies: replies, buf: bytes.NewBuffer(make([]byte, 256))}
 				eh := []string{"Upload-Concat", "Upload-Defer-Length", "Upload-Metadata", "Upload-Checksum"}
@@ -326,7 +327,7 @@ var _ = Describe("Stream", func() {
 				Ω(up.buf.Len()).Should(Equal(256))
 			})
 			It("should not send checksum", func() {
-				testClient.advertisedExtensions = append(testClient.advertisedExtensions, "checksum", "creation-defer-length")
+				testClient.caps.Extensions = append(testClient.caps.Extensions, "checksum", "creation-defer-length")
 				replies := []*reply.StdReply{tReply(reply.NoContent())}
 				up := mockTusUploader{replies: replies, buf: bytes.NewBuffer(make([]byte, 0))}
 				eh := []string{"Upload-Concat", "Upload-Defer-Length", "Upload-Metadata", "Upload-Checksum"}
@@ -342,7 +343,7 @@ var _ = Describe("Stream", func() {
 				Ω(s.Size()).Should(BeEquivalentTo(1024))
 			})
 			It("should set Expires", func() {
-				testClient.advertisedExtensions = append(testClient.advertisedExtensions, "creation-defer-length")
+				testClient.caps.Extensions = append(testClient.caps.Extensions, "creation-defer-length")
 				rpl := tReply(reply.NoContent()).Header("Upload-Expires", "Wed, 25 Jun 2014 16:00:00 GMT")
 				up := mockTusUploader{replies: []*reply.StdReply{rpl}, buf: bytes.NewBuffer(make([]byte, 0))}
 				eh := []string{"Upload-Concat", "Upload-Defer-Length", "Upload-Metadata", "Upload-Checksum"}
@@ -360,7 +361,7 @@ var _ = Describe("Stream", func() {
 				Ω(dt.Equal(*s.uploadStateExpires)).Should(BeTrue())
 			})
 			It("should close the response body", func() {
-				testClient.advertisedExtensions = append(testClient.advertisedExtensions, "creation-defer-length")
+				testClient.caps.Extensions = append(testClient.caps.Extensions, "creation-defer-length")
 				u := Upload{Location: "/foo/bar", RemoteSize: SizeUnknown}
 				s, err := NewStream(testClient, u)
 				Ω(err).ShouldNot(HaveOccurred())
@@ -483,7 +484,7 @@ var _ = Describe("Stream", func() {
 		)
 		When("server returned 460 Checksum Mismatch and checksum is used", func() {
 			It("should return ErrChecksumMismatch", func() {
-				testClient.advertisedExtensions = append(testClient.advertisedExtensions, "checksum")
+				testClient.caps.Extensions = append(testClient.caps.Extensions, "checksum")
 				replies := []*reply.StdReply{tReply(reply.Status(460))}
 				up := mockTusUploader{replies: replies, buf: bytes.NewBuffer(make([]byte, 0))}
 				eh := []string{"Upload-Concat", "Upload-Defer-Length", "Upload-Length", "Upload-Metadata"}
@@ -503,7 +504,7 @@ var _ = Describe("Stream", func() {
 		})
 		Context("DeclareSize", func() {
 			It("should return error if creation-defer-length extension is not active", func() {
-				testClient.advertisedExtensions = append(testClient.advertisedExtensions, "checksum")
+				testClient.caps.Extensions = append(testClient.caps.Extensions, "checksum")
 				u := Upload{Location: "/foo/bar", RemoteSize: 1024}
 				s, err := NewStream(testClient, u)
 				Ω(err).ShouldNot(HaveOccurred())
@@ -516,7 +517,7 @@ var _ = Describe("Stream", func() {
 				Ω(s.Tell()).Should(BeEquivalentTo(0))
 			})
 			It("should return error and send nothing if size is negative", func() {
-				testClient.advertisedExtensions = append(testClient.advertisedExtensions, "creation-defer-length")
+				testClient.caps.Extensions = append(testClient.caps.Extensions, "creation-defer-length")
 				u := Upload{Location: "/foo/bar", RemoteSize: SizeUnknown}
 				s, err := NewStream(testClient, u)
 				Ω(err).ShouldNot(HaveOccurred())
@@ -526,7 +527,7 @@ var _ = Describe("Stream", func() {
 			})
 			DescribeTable("should keep the response body in the error and keep the size unknown",
 				func(status int, header http.Header, expectErr error) {
-					testClient.advertisedExtensions = append(testClient.advertisedExtensions, "creation-defer-length")
+					testClient.caps.Extensions = append(testClient.caps.Extensions, "creation-defer-length")
 					u := Upload{Location: "/foo/bar", RemoteSize: SizeUnknown}
 					s, err := NewStream(testClient, u)
 					Ω(err).ShouldNot(HaveOccurred())
@@ -581,7 +582,7 @@ var _ = Describe("Stream", func() {
 				Entry("413", http.StatusRequestEntityTooLarge, ErrTooLarge),
 			)
 			It("should return error if checksum-trailer extension is not active", func() {
-				testClient.advertisedExtensions = append(testClient.advertisedExtensions, "checksum")
+				testClient.caps.Extensions = append(testClient.caps.Extensions, "checksum")
 				u := Upload{Location: "/foo/bar", RemoteSize: 1024}
 				s, err := NewStreamWithChecksum(testClient, u, "sha1")
 				Ω(err).ShouldNot(HaveOccurred())

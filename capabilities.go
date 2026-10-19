@@ -23,8 +23,7 @@ type ServerCapabilities struct {
 	// such limit.
 	MaxSize int64
 
-	// ProtocolVersions are the TUS protocol versions the server supports. A client must pick one of them by
-	// setting Client.ProtocolVersion.
+	// ProtocolVersions are the TUS protocol versions the server supports.
 	ProtocolVersions []string
 
 	// ChecksumAlgorithms are the hash algorithms the server is able to verify the transferred data with. The server

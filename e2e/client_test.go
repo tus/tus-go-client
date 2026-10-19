@@ -83,6 +83,7 @@ var _ = Describe("Client", func() {
 			_, err = s.Write(randomData(1000))
 
 			Expect(err).NotTo(HaveOccurred())
+			// Single OPTIONS request is shared by the extension check and the protocol version negotiation
 			Expect(methods).To(Equal([]string{http.MethodOptions, http.MethodPost, http.MethodHead, http.MethodPatch}))
 		})
 

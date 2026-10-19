@@ -13,9 +13,13 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/mod/semver"
 )
 
-const TUSv1ProtocolVersion = "1.0.0"
+// allowedProtocolVersionPrefix is the prefix of the TUS protocol version that this library supports.
+// If the server does not support any version with this prefix, the library returns an error.
+const allowedProtocolVersionPrefix = "1.0."
 
 // NewClient returns a new [Client] that sends its requests to the given endpoint URL.
 func NewClient(endpoint *url.URL) *Client {
@@ -23,10 +27,9 @@ func NewClient(endpoint *url.URL) *Client {
 		panic("endpoint is nil")
 	}
 	return &Client{
-		ProtocolVersion: TUSv1ProtocolVersion,
-		ExtraHeaders:    make(http.Header),
-		endpoint:        endpoint,
-		mu:              &sync.Mutex{},
+		ExtraHeaders: make(http.Header),
+		endpoint:     endpoint,
+		mu:           &sync.Mutex{},
 	}
 }
 
@@ -40,9 +43,6 @@ func NewClient(endpoint *url.URL) *Client {
 //   - [ErrProtocol] -- an otherwise successful server response contains malformed data, e.g. a missing required HTTP header
 //   - [ErrUnexpectedResponse] -- the server responded with an unexpected status code
 type Client struct {
-	// ProtocolVersion is the TUS protocol version sent in the requests. By default, it's equal to [TUSv1ProtocolVersion].
-	ProtocolVersion string
-
 	// ExtraHeaders are the additional HTTP headers sent with every request to the server.
 	// They may be used for authentication, cache control, etc.
 	ExtraHeaders http.Header
@@ -59,9 +59,10 @@ type Client struct {
 	// This field is ignored if DoRequest is set.
 	Client HTTPClient
 
-	endpoint             *url.URL
-	advertisedExtensions []string
-	mu                   *sync.Mutex
+	endpoint        *url.URL
+	protocolVersion string
+	caps            *ServerCapabilities
+	mu              *sync.Mutex
 }
 
 type HTTPClient interface {
@@ -410,8 +411,12 @@ func (c *Client) fetchCapabilities() (ServerCapabilities, error) {
 }
 
 func (c *Client) tusRequest(req *http.Request) (*http.Response, error) {
-	if req.Method != http.MethodOptions && req.Header.Get("Tus-Resumable") == "" {
-		req.Header.Set("Tus-Resumable", c.ProtocolVersion)
+	if req.Method != http.MethodOptions {
+		v, err := c.negotiateProtocolVersion() // Makes an OPTIONS request
+		if err != nil {
+			return nil, fmt.Errorf("get supported protocol version: %w", err)
+		}
+		req.Header.Set("Tus-Resumable", v)
 	}
 
 	f := c.DoRequest
@@ -429,7 +434,7 @@ func (c *Client) tusRequest(req *http.Request) (*http.Response, error) {
 
 	if resp.StatusCode == http.StatusPreconditionFailed {
 		versions := resp.Header.Get("Tus-Version")
-		return resp, newTusError(ErrProtocol, resp, fmt.Errorf("server does not support protocol version %q, supported versions: %s", c.ProtocolVersion, versions))
+		return resp, newTusError(ErrProtocol, resp, fmt.Errorf("server does not support protocol version %q, supported versions: %s", c.protocolVersion, versions))
 	}
 
 	return resp, nil
@@ -439,21 +444,50 @@ func (c *Client) ensureExtension(extension string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if c.advertisedExtensions == nil {
+	if c.caps == nil {
 		caps, err := c.fetchCapabilities()
 		if err != nil {
 			return fmt.Errorf("fetch capabilities: %w", err)
 		}
-		c.advertisedExtensions = caps.Extensions
-		if c.advertisedExtensions == nil {
-			c.advertisedExtensions = make([]string, 0)
-		}
+		c.caps = &caps
 	}
-	if !slices.Contains(c.advertisedExtensions, extension) {
+
+	if !slices.Contains(c.caps.Extensions, extension) {
 		return newTusError(ErrUnsupportedFeature, nil, errors.New(extension))
 	}
 
 	return nil
+}
+
+// negotiateProtocolVersion queries the server for its supported TUS protocol versions and selects the highest version
+// that is compatible with the library. The selected version is cached for future requests.
+func (c *Client) negotiateProtocolVersion() (string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.protocolVersion != "" {
+		return c.protocolVersion, nil
+	}
+
+	if c.caps == nil {
+		caps, err := c.fetchCapabilities()
+		if err != nil {
+			return "", fmt.Errorf("fetch capabilities: %w", err)
+		}
+		c.caps = &caps
+	}
+	versions := slices.SortedFunc(
+		slices.Values(c.caps.ProtocolVersions),
+		func(a, b string) int { return semver.Compare("v"+a, "v"+b) },
+	)
+	for _, v := range slices.Backward(versions) {
+		if strings.HasPrefix(v, allowedProtocolVersionPrefix) {
+			c.protocolVersion = v
+			return v, nil
+		}
+	}
+
+	return "", newTusError(ErrUnsupportedFeature, nil, fmt.Errorf("client supports protocol version %s..., but server advertises: %v", allowedProtocolVersionPrefix, strings.Join(c.caps.ProtocolVersions, ", ")))
 }
 
 func (c *Client) createRequest(method, url string) (*http.Request, error) {

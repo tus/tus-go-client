@@ -122,7 +122,8 @@ var _ = Describe("ChunkedWriter", func() {
 		srvMock.Start()
 		testURL, _ = url.Parse(srvMock.URL())
 		testClient = NewClient(testURL)
-		testClient.advertisedExtensions = []string{}
+		testClient.caps = &ServerCapabilities{Extensions: []string{}, ProtocolVersions: []string{"1.0.0"}}
+		testClient.protocolVersion = "1.0.0"
 		emptyHeaders = []string{"Upload-Concat", "Upload-Defer-Length", "Upload-Length", "Upload-Metadata", "Upload-Checksum"}
 	})
 	AfterEach(func() {
@@ -219,7 +220,7 @@ var _ = Describe("ChunkedWriter", func() {
 			Ω(data).Should(Equal(up.buf.Bytes()))
 		})
 		It("should send checksum of every chunk in request header", func() {
-			testClient.advertisedExtensions = append(testClient.advertisedExtensions, "checksum")
+			testClient.caps.Extensions = append(testClient.caps.Extensions, "checksum")
 			emptyHeaders = []string{"Upload-Concat", "Upload-Defer-Length", "Upload-Length", "Upload-Metadata"}
 			up := mockUploader(4)
 			s, err := NewStreamWithChecksum(testClient, Upload{Location: "/foo/bar", RemoteSize: 1024}, "sha1")
@@ -609,7 +610,7 @@ var _ = Describe("ChunkedWriter", func() {
 		)
 		When("server returned 460 Checksum Mismatch and checksum is used", func() {
 			It("should return ErrChecksumMismatch and keep the buffer", func() {
-				testClient.advertisedExtensions = append(testClient.advertisedExtensions, "checksum")
+				testClient.caps.Extensions = append(testClient.caps.Extensions, "checksum")
 				replies := []*reply.StdReply{tReply(reply.Status(460))}
 				up := &mockTusUploader{replies: replies, buf: bytes.NewBuffer(make([]byte, 0))}
 				eh := []string{"Upload-Concat", "Upload-Defer-Length", "Upload-Length", "Upload-Metadata"}

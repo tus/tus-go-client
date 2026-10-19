@@ -141,7 +141,8 @@ var _ = Describe("Client", func() {
 		srvMock.Start()
 		testURL, _ = url.Parse(srvMock.URL())
 		testClient = NewClient(testURL)
-		testClient.advertisedExtensions = []string{}
+		testClient.caps = &ServerCapabilities{Extensions: []string{}, ProtocolVersions: []string{"1.0.0"}}
+		testClient.protocolVersion = "1.0.0"
 		tusHeaders = []string{"Upload-Concat", "Upload-Defer-Length", "Upload-Length", "Upload-Metadata", "Upload-Checksum", "Upload-Offset"}
 		spy = &spyClient{}
 		extraHeaders = http.Header{"X-Extra": {"extra"}}
@@ -154,11 +155,13 @@ var _ = Describe("Client", func() {
 	})
 	Context("NewClient", func() {
 		It("should correct set initial values", func() {
-			Ω(testClient.ProtocolVersion).Should(Equal("1.0.0"))
-			Ω(testClient.DoRequest).Should(BeNil())
-			Ω(testClient.Client).Should(BeNil())
-			Ω(testClient.ExtraHeaders).Should(Equal(http.Header{}))
-			Ω(testClient.endpoint).Should(Equal(testURL))
+			cl := NewClient(testURL)
+			Ω(cl.protocolVersion).Should(BeEmpty()) // negotiated with the server on the first request
+			Ω(cl.caps).Should(BeNil())              // fetched from the server on the first need
+			Ω(cl.DoRequest).Should(BeNil())
+			Ω(cl.Client).Should(BeNil())
+			Ω(cl.ExtraHeaders).Should(Equal(http.Header{}))
+			Ω(cl.endpoint).Should(Equal(testURL))
 		})
 		It("should panic if endpoint is nil", func() {
 			Ω(func() { NewClient(nil) }).Should(PanicWith("endpoint is nil"))
@@ -176,7 +179,8 @@ var _ = Describe("Client", func() {
 				Ω(resp).Should(HaveHTTPBody([]byte("test")))
 			})
 			When("OPTIONS request", func() {
-				It("should not set Tus-Resumable header", func() {
+				It("should not set Tus-Resumable header nor negotiate the protocol version", func() {
+					testClient.protocolVersion = ""
 					srvMock.AddMocks(mocha.Request().
 						URL(expect.URLPath("/foo")).Method(http.MethodOptions).
 						Header("Tus-Resumable", expect.ToBeEmpty()). // OPTIONS request should not contain this header
@@ -186,19 +190,16 @@ var _ = Describe("Client", func() {
 					Ω(err).Should(Succeed())
 
 					Ω(testClient.tusRequest(req)).ShouldNot(BeNil())
+					Ω(testClient.protocolVersion).Should(BeEmpty())
 				})
 			})
-			It("should keep Tus-Resumable header if it is already set", func() {
-				srvMock.AddMocks(mocha.Request().
-					URL(expect.URLPath("/foo")).Method(http.MethodGet).
-					Header("Tus-Resumable", expect.ToEqual("0.2.2")).
-					Reply(tReply(reply.OK())),
-				)
+			It("should override Tus-Resumable header with the negotiated protocol version", func() {
+				srvMock.AddMocks(tRequest(http.MethodGet, "/foo", tusHeaders).Reply(tReply(reply.OK())))
 				req, err := http.NewRequest(http.MethodGet, srvMock.URL()+"/foo", nil)
 				Ω(err).Should(Succeed())
 				req.Header.Set("Tus-Resumable", "0.2.2")
 
-				Ω(testClient.tusRequest(req)).ShouldNot(BeNil())
+				Ω(testClient.tusRequest(req)).Should(HaveHTTPStatus(http.StatusOK))
 			})
 			It("should use http.DefaultClient if neither DoRequest nor Client is set", func() {
 				srvMock.AddMocks(tRequest(http.MethodGet, "/foo", tusHeaders).Reply(tReply(reply.OK())))
@@ -272,6 +273,152 @@ var _ = Describe("Client", func() {
 				resp, err := testClient.tusRequest(req)
 				Ω(err).Should(MatchError(doErr))
 				Ω(resp).Should(BeNil())
+			})
+		})
+	})
+	Context("protocol version negotiation", func() {
+		var counter *countingClient
+
+		BeforeEach(func() {
+			testClient.protocolVersion = ""
+			testClient.caps = nil
+			counter = &countingClient{}
+			testClient.DoRequest = counter.Do
+		})
+		mockOptions := func(tusVersion string) {
+			r := tReply(reply.NoContent())
+			if tusVersion != "" {
+				r = r.Header("Tus-Version", tusVersion)
+			}
+			srvMock.AddMocks(mocha.Request().
+				URL(expect.URLPath("/")).Method(http.MethodOptions).
+				Header("Tus-Resumable", expect.ToBeEmpty()).
+				Reply(r),
+			)
+		}
+		newRequest := func() *http.Request {
+			req, err := http.NewRequest(http.MethodGet, srvMock.URL()+"/foo", nil)
+			Ω(err).Should(Succeed())
+			return req
+		}
+
+		Context("happy path", func() {
+			DescribeTable("should pick the most recent supported version advertised by server",
+				func(tusVersion, expectVersion string) {
+					mockOptions(tusVersion)
+					srvMock.AddMocks(mocha.Request().
+						URL(expect.URLPath("/foo")).Method(http.MethodGet).
+						Header("Tus-Resumable", expect.ToEqual(expectVersion)).
+						Reply(tReply(reply.OK())),
+					)
+
+					Ω(testClient.tusRequest(newRequest())).Should(HaveHTTPStatus(http.StatusOK))
+					Ω(testClient.protocolVersion).Should(Equal(expectVersion))
+				},
+				Entry("single version", "1.0.0", "1.0.0"),
+				Entry("among older versions", "1.0.0,0.2.2,0.2.1", "1.0.0"),
+				Entry("most recent patch version", "1.0.1,1.0.3,1.0.0,1.0.2", "1.0.3"),
+				Entry("ignoring the newer major and minor versions", "2.0.0,1.1.0,1.0.1,0.2.2", "1.0.1"),
+			)
+			It("should negotiate the version only once", func() {
+				mockOptions("1.0.0")
+				srvMock.AddMocks(tRequest(http.MethodGet, "/foo", tusHeaders).Reply(tReply(reply.OK())).Repeat(2))
+
+				Ω(testClient.tusRequest(newRequest())).Should(HaveHTTPStatus(http.StatusOK))
+				Ω(testClient.tusRequest(newRequest())).Should(HaveHTTPStatus(http.StatusOK))
+				Ω(counter.requests.Load()).Should(BeEquivalentTo(3))
+			})
+			It("should negotiate the version on the first request made by a public method", func() {
+				mockOptions("1.0.0,0.2.2")
+				srvMock.AddMocks(tRequest(http.MethodHead, "/foo/bar", tusHeaders).
+					Reply(tReply(reply.OK()).Header("Upload-Offset", "64")),
+				)
+
+				Ω(testClient.GetUpload("/foo/bar")).Should(Equal(Upload{Location: "/foo/bar", RemoteOffset: 64}))
+				Ω(testClient.protocolVersion).Should(Equal("1.0.0"))
+				Ω(counter.requests.Load()).Should(BeEquivalentTo(2))
+			})
+			It("should share the fetched capabilities with the extension check", func() {
+				srvMock.AddMocks(mocha.Request().
+					URL(expect.URLPath("/")).Method(http.MethodOptions).
+					Header("Tus-Resumable", expect.ToBeEmpty()).
+					Reply(tReply(reply.NoContent()).
+						Header("Tus-Version", "1.0.0").
+						Header("Tus-Extension", "creation")),
+				)
+				srvMock.AddMocks(tRequest(http.MethodPost, "/", []string{"Upload-Concat", "Upload-Defer-Length", "Upload-Metadata"}).
+					Reply(tReply(reply.Created()).Header("Location", "/foo/bar")),
+				)
+
+				Ω(testClient.CreateUpload(1024, false, nil)).Should(Equal(Upload{Location: "/foo/bar", RemoteSize: 1024}))
+				Ω(testClient.protocolVersion).Should(Equal("1.0.0"))
+				Ω(counter.requests.Load()).Should(BeEquivalentTo(2)) // single OPTIONS and POST
+			})
+			It("should use the cached capabilities without requesting the server", func() {
+				testClient.caps = &ServerCapabilities{ProtocolVersions: []string{"0.2.2", "1.0.1"}}
+				srvMock.AddMocks(mocha.Request().
+					URL(expect.URLPath("/foo")).Method(http.MethodGet).
+					Header("Tus-Resumable", expect.ToEqual("1.0.1")).
+					Reply(tReply(reply.OK())),
+				)
+
+				Ω(testClient.tusRequest(newRequest())).Should(HaveHTTPStatus(http.StatusOK))
+				Ω(testClient.protocolVersion).Should(Equal("1.0.1"))
+				Ω(counter.requests.Load()).Should(BeEquivalentTo(1))
+			})
+		})
+		Context("error path", func() {
+			DescribeTable("should return error, not send the request and not cache the version",
+				func(tusVersion, expectErrMsg string) {
+					mockOptions(tusVersion)
+
+					resp, err := testClient.tusRequest(newRequest())
+					Ω(err).Should(And(
+						MatchError(ErrUnsupportedFeature),
+						MatchError(ContainSubstring("get supported protocol version")),
+						MatchError(ContainSubstring(expectErrMsg)),
+					))
+					Ω(resp).Should(BeNil())
+					Ω(testClient.protocolVersion).Should(BeEmpty())
+					Ω(counter.requests.Load()).Should(BeEquivalentTo(1))
+
+					// Capabilities are cached anyway, so the server is not requested again
+					_, err = testClient.tusRequest(newRequest())
+					Ω(err).Should(MatchError(ErrUnsupportedFeature))
+					Ω(testClient.caps).ShouldNot(BeNil())
+					Ω(counter.requests.Load()).Should(BeEquivalentTo(1))
+				},
+				Entry("no versions advertised", "", "client supports protocol version 1.0...., but server advertises:"),
+				Entry("only older versions advertised", "0.2.2,0.2.1",
+					"client supports protocol version 1.0...., but server advertises: 0.2.2, 0.2.1"),
+				Entry("only newer versions advertised", "2.0.0,1.1.0",
+					"client supports protocol version 1.0...., but server advertises: 2.0.0, 1.1.0"),
+			)
+			It("should return error and not cache anything if fetching capabilities fails", func() {
+				srvMock.AddMocks(mocha.Request().
+					URL(expect.URLPath("/")).Method(http.MethodOptions).
+					Reply(reply.Status(http.StatusInternalServerError)),
+				)
+
+				resp, err := testClient.tusRequest(newRequest())
+				Ω(err).Should(And(
+					MatchError(ErrUnexpectedResponse),
+					MatchError(ContainSubstring("get supported protocol version: fetch capabilities")),
+				))
+				Ω(resp).Should(BeNil())
+				Ω(testClient.protocolVersion).Should(BeEmpty())
+				Ω(testClient.caps).Should(BeNil())
+				Ω(counter.requests.Load()).Should(BeEquivalentTo(1))
+			})
+			It("should return error from a public method", func() {
+				mockOptions("0.2.2")
+
+				_, err := testClient.GetUpload("/foo/bar")
+				Ω(err).Should(And(
+					MatchError(ErrUnsupportedFeature),
+					MatchError(ContainSubstring("server advertises: 0.2.2")),
+				))
+				Ω(counter.requests.Load()).Should(BeEquivalentTo(1))
 			})
 		})
 	})
@@ -480,7 +627,7 @@ var _ = Describe("Client", func() {
 	Context("CreateUpload", func() {
 		Context("happy path", func() {
 			BeforeEach(func() {
-				testClient.advertisedExtensions = append(testClient.advertisedExtensions, "creation")
+				testClient.caps.Extensions = append(testClient.caps.Extensions, "creation")
 			})
 			It("should close the response body", func() {
 				tExpectBodyClosed(testClient, http.StatusCreated, http.Header{"Location": {"/foo/bar"}}, func() error {
@@ -598,7 +745,7 @@ var _ = Describe("Client", func() {
 			})
 			When("partial upload with defer size, with metadata", func() {
 				It("should encode metadata and create upload", func() {
-					testClient.advertisedExtensions = append(testClient.advertisedExtensions, "creation-defer-length")
+					testClient.caps.Extensions = append(testClient.caps.Extensions, "creation-defer-length")
 					eh := []string{"Upload-Length", "Upload-Checksum", "Upload-Offset"}
 					md := map[string]string{
 						"key1": "value1",
@@ -658,7 +805,7 @@ var _ = Describe("Client", func() {
 		Context("error path", func() {
 			DescribeTable("should keep the response body in the error and close the original body",
 				func(status int, header http.Header, expectErr error) {
-					testClient.advertisedExtensions = append(testClient.advertisedExtensions, "creation")
+					testClient.caps.Extensions = append(testClient.caps.Extensions, "creation")
 					tExpectBodyKeptInError(testClient, status, header, expectErr, func() error {
 						_, err := testClient.CreateUpload(1024, false, nil)
 						return err
@@ -669,7 +816,7 @@ var _ = Describe("Client", func() {
 				Entry("malformed Upload-Expires", http.StatusCreated, http.Header{"Location": {"/foo/bar"}, "Upload-Expires": {"tomorrow"}}, ErrProtocol),
 			)
 			It("should return ErrProtocol if Upload-Expires header is not in RFC1123 format", func() {
-				testClient.advertisedExtensions = append(testClient.advertisedExtensions, "creation")
+				testClient.caps.Extensions = append(testClient.caps.Extensions, "creation")
 				srvMock.AddMocks(tRequest(http.MethodPost, "/", nil).
 					Reply(tReply(reply.Created()).
 						Header("Location", "/foo/bar").
@@ -690,7 +837,7 @@ var _ = Describe("Client", func() {
 				))
 			})
 			Specify("no creation-defer-length extension and trying to create defer size upload", func() {
-				testClient.advertisedExtensions = append(testClient.advertisedExtensions, "creation")
+				testClient.caps.Extensions = append(testClient.caps.Extensions, "creation")
 				_, err := testClient.CreateUpload(SizeUnknown, false, nil)
 				Ω(err).Should(And(
 					MatchError(ErrUnsupportedFeature), MatchError(ContainSubstring("unsupported feature: creation-defer-length")),
@@ -698,13 +845,13 @@ var _ = Describe("Client", func() {
 			})
 			When("upload size is negative", func() {
 				It("should return an error", func() {
-					testClient.advertisedExtensions = append(testClient.advertisedExtensions, "creation")
+					testClient.caps.Extensions = append(testClient.caps.Extensions, "creation")
 					_, err := testClient.CreateUpload(-2, false, nil)
 					Ω(err).Should(MatchError(ContainSubstring("remoteSize is negative: -2")))
 				})
 			})
 			Specify("metadata key contains a space", func() {
-				testClient.advertisedExtensions = append(testClient.advertisedExtensions, "creation")
+				testClient.caps.Extensions = append(testClient.caps.Extensions, "creation")
 				md := map[string]string{
 					"key 1": "value1",
 					"key2":  "&^%$\"\t",
@@ -716,7 +863,7 @@ var _ = Describe("Client", func() {
 				DescribeTable("should return error",
 					func(status int, expectErr error, expectErrMsg string) {
 						eh := []string{"Upload-Concat", "Upload-Defer-Length", "Upload-Metadata", "Upload-Checksum", "Upload-Offset"}
-						testClient.advertisedExtensions = append(testClient.advertisedExtensions, "creation")
+						testClient.caps.Extensions = append(testClient.caps.Extensions, "creation")
 						srvMock.AddMocks(tRequest(http.MethodPost, "/", eh).
 							Header("Content-Length", expect.ToEqual("0")).
 							Header("Upload-Length", expect.ToEqual("1024")).
@@ -741,7 +888,7 @@ var _ = Describe("Client", func() {
 	Context("CreateUploadWithData", func() {
 		Context("happy path", func() {
 			BeforeEach(func() {
-				testClient.advertisedExtensions = append(testClient.advertisedExtensions, "creation", "creation-with-upload")
+				testClient.caps.Extensions = append(testClient.caps.Extensions, "creation", "creation-with-upload")
 			})
 			It("should close the response body", func() {
 				tExpectBodyClosed(testClient, http.StatusCreated, http.Header{"Location": {"/foo/bar"}, "Upload-Offset": {"10"}}, func() error {
@@ -881,7 +1028,7 @@ var _ = Describe("Client", func() {
 		Context("error path", func() {
 			DescribeTable("should keep the response body in the error and close the original body",
 				func(status int, header http.Header, expectErr error) {
-					testClient.advertisedExtensions = append(testClient.advertisedExtensions, "creation", "creation-with-upload")
+					testClient.caps.Extensions = append(testClient.caps.Extensions, "creation", "creation-with-upload")
 					tExpectBodyKeptInError(testClient, status, header, expectErr, func() error {
 						_, _, err := testClient.CreateUploadWithData(make([]byte, 10), 1024, false, nil)
 						return err
@@ -892,7 +1039,7 @@ var _ = Describe("Client", func() {
 				Entry("offset advanced too far", http.StatusCreated, http.Header{"Upload-Offset": {"50"}}, ErrProtocol),
 			)
 			Specify("no 'creation-with-upload' extension", func() {
-				testClient.advertisedExtensions = append(testClient.advertisedExtensions, "creation")
+				testClient.caps.Extensions = append(testClient.caps.Extensions, "creation")
 				bytes, _, err := testClient.CreateUploadWithData(make([]byte, 10), 1024, false, nil)
 				Ω(bytes).Should(BeEquivalentTo(0))
 				Ω(tErrResponse(err)).Should(BeNil())
@@ -902,7 +1049,7 @@ var _ = Describe("Client", func() {
 			})
 			DescribeTable("http errors handling",
 				func(expectStatus int, expectErr error, expectErrMsg string) {
-					testClient.advertisedExtensions = append(testClient.advertisedExtensions, "creation", "creation-with-upload")
+					testClient.caps.Extensions = append(testClient.caps.Extensions, "creation", "creation-with-upload")
 					d, _ := io.ReadAll(io.LimitReader(rand.New(rand.NewSource(time.Now().UnixNano())), 1024))
 					eh := []string{"Upload-Defer-Length", "Upload-Metadata", "Upload-Checksum", "Upload-Offset"}
 					srvMock.AddMocks(tRequest(http.MethodPost, "/", eh).
@@ -935,7 +1082,7 @@ var _ = Describe("Client", func() {
 			When("server creates upload but accepts only a part of the data", func() {
 				DescribeTable("should return ErrIncompleteWrite and the created upload",
 					func(offset int64) {
-						testClient.advertisedExtensions = append(testClient.advertisedExtensions, "creation", "creation-with-upload")
+						testClient.caps.Extensions = append(testClient.caps.Extensions, "creation", "creation-with-upload")
 						d, _ := io.ReadAll(io.LimitReader(rand.New(rand.NewSource(time.Now().UnixNano())), 512))
 						eh := []string{"Upload-Concat", "Upload-Defer-Length", "Upload-Metadata", "Upload-Checksum", "Upload-Offset"}
 						srvMock.AddMocks(tRequest(http.MethodPost, "/", eh).
@@ -970,7 +1117,7 @@ var _ = Describe("Client", func() {
 			When("server advances the offset to an invalid value", func() {
 				DescribeTable("should return protocol error",
 					func(offset int64, expectMsg string) {
-						testClient.advertisedExtensions = append(testClient.advertisedExtensions, "creation", "creation-with-upload")
+						testClient.caps.Extensions = append(testClient.caps.Extensions, "creation", "creation-with-upload")
 						d, _ := io.ReadAll(io.LimitReader(rand.New(rand.NewSource(time.Now().UnixNano())), 512))
 						eh := []string{"Upload-Concat", "Upload-Defer-Length", "Upload-Metadata", "Upload-Checksum", "Upload-Offset"}
 						srvMock.AddMocks(tRequest(http.MethodPost, "/", eh).
@@ -1002,7 +1149,7 @@ var _ = Describe("Client", func() {
 	Context("DeleteUpload", func() {
 		Context("happy path", func() {
 			BeforeEach(func() {
-				testClient.advertisedExtensions = append(testClient.advertisedExtensions, "termination")
+				testClient.caps.Extensions = append(testClient.caps.Extensions, "termination")
 			})
 			It("should close the response body", func() {
 				tExpectBodyClosed(testClient, http.StatusNoContent, nil, func() error {
@@ -1038,7 +1185,7 @@ var _ = Describe("Client", func() {
 		})
 		Context("error path", func() {
 			It("should keep the response body in the error and close the original body", func() {
-				testClient.advertisedExtensions = append(testClient.advertisedExtensions, "termination")
+				testClient.caps.Extensions = append(testClient.caps.Extensions, "termination")
 				tExpectBodyKeptInError(testClient, http.StatusNotFound, nil, ErrUploadDoesNotExist, func() error {
 					return testClient.DeleteUpload("/foo/bar")
 				})
@@ -1052,7 +1199,7 @@ var _ = Describe("Client", func() {
 			When("http error or unexpected code", func() {
 				DescribeTable("should return error",
 					func(status int, expectErr error, expectErrMsg string) {
-						testClient.advertisedExtensions = append(testClient.advertisedExtensions, "termination")
+						testClient.caps.Extensions = append(testClient.caps.Extensions, "termination")
 						srvMock.AddMocks(tRequest(http.MethodDelete, "/foo/bar", tusHeaders).Reply(reply.Status(status)))
 
 						err := testClient.DeleteUpload("/foo/bar")
@@ -1074,7 +1221,7 @@ var _ = Describe("Client", func() {
 	Context("ConcatenatePartialUploads", func() {
 		Context("happy path", func() {
 			BeforeEach(func() {
-				testClient.advertisedExtensions = append(testClient.advertisedExtensions, "concatenation")
+				testClient.caps.Extensions = append(testClient.caps.Extensions, "concatenation")
 			})
 			It("should close the response body", func() {
 				tExpectBodyClosed(testClient, http.StatusCreated, http.Header{"Location": {"/foo/baz"}}, func() error {
@@ -1149,7 +1296,7 @@ var _ = Describe("Client", func() {
 		})
 		DescribeTable("should accept any of concatenation extensions",
 			func(extensions []string) {
-				testClient.advertisedExtensions = extensions
+				testClient.caps.Extensions = extensions
 				eh := []string{"Upload-Defer-Length", "Upload-Length", "Upload-Metadata", "Upload-Checksum", "Upload-Offset"}
 				srvMock.AddMocks(tRequest(http.MethodPost, "/", eh).
 					Header("Upload-Concat", expect.ToEqual("final;/foo/bar /foo/baz")).
@@ -1166,7 +1313,7 @@ var _ = Describe("Client", func() {
 		)
 		Context("error path", func() {
 			It("should keep the response body in the error and close the original body", func() {
-				testClient.advertisedExtensions = append(testClient.advertisedExtensions, "concatenation")
+				testClient.caps.Extensions = append(testClient.caps.Extensions, "concatenation")
 				tExpectBodyKeptInError(testClient, http.StatusNotFound, nil, ErrUploadDoesNotExist, func() error {
 					_, err := testClient.ConcatenatePartialUploads([]string{"/foo/bar"}, nil)
 					return err
@@ -1175,7 +1322,7 @@ var _ = Describe("Client", func() {
 			When("locations list is empty", func() {
 				DescribeTable("should return error without making a request",
 					func(locations []string) {
-						testClient.advertisedExtensions = append(testClient.advertisedExtensions, "concatenation")
+						testClient.caps.Extensions = append(testClient.caps.Extensions, "concatenation")
 						testClient.DoRequest = spy.Do
 
 						loc, err := testClient.ConcatenatePartialUploads(locations, nil)
@@ -1202,7 +1349,7 @@ var _ = Describe("Client", func() {
 				DescribeTable("should return error",
 					func(status int, expectErr error, expectErrMsg string) {
 						eh := []string{"Upload-Defer-Length", "Upload-Length", "Upload-Metadata", "Upload-Checksum", "Upload-Offset"}
-						testClient.advertisedExtensions = append(testClient.advertisedExtensions, "concatenation")
+						testClient.caps.Extensions = append(testClient.caps.Extensions, "concatenation")
 						srvMock.AddMocks(tRequest(http.MethodPost, "/", eh).
 							Header("Upload-Concat", expect.ToEqual("final;/foo/bar /foo/baz")).
 							Reply(reply.Status(status)))
@@ -1277,12 +1424,14 @@ var _ = Describe("Client", func() {
 							Header("Tus-Version", "1.0.0").
 							Header("Tus-Extension", "creation,termination")),
 				)
-				testClient.advertisedExtensions = nil
+				testClient.caps = nil
+				testClient.protocolVersion = ""
 
 				caps, err := testClient.FetchCapabilities()
 				Ω(err).ShouldNot(HaveOccurred())
 				Ω(caps.Extensions).Should(Equal([]string{"creation", "termination"}))
-				Ω(testClient.advertisedExtensions).Should(BeNil())
+				Ω(testClient.caps).Should(BeNil())
+				Ω(testClient.protocolVersion).Should(BeEmpty())
 			})
 			DescribeTable("should return the server capabilities",
 				func(status int) {
@@ -1363,7 +1512,7 @@ var _ = Describe("Client", func() {
 		When("extension exists", func() {
 			When("extensions have not been fetched yet", func() {
 				BeforeEach(func() {
-					testClient.advertisedExtensions = nil
+					testClient.caps = nil
 					srvMock.AddMocks(
 						mocha.Request().URL(expect.URLPath("/")).Method(http.MethodOptions).
 							Reply(tReply(reply.OK()).
@@ -1375,7 +1524,12 @@ var _ = Describe("Client", func() {
 				})
 				It("should request from server, cache the extensions and return no error", func() {
 					Ω(testClient.ensureExtension("creation")).Should(Succeed())
-					Ω(testClient.advertisedExtensions).Should(Equal([]string{"creation", "expiration", "checksum"}))
+					Ω(testClient.caps).Should(Equal(&ServerCapabilities{
+						Extensions:         []string{"creation", "expiration", "checksum"},
+						MaxSize:            1073741824,
+						ProtocolVersions:   []string{"1.0.0", "0.2.2", "0.2.1"},
+						ChecksumAlgorithms: []string{"sha1", "md5"},
+					}))
 					Ω(testClient.ensureExtension("checksum")).Should(Succeed())
 					Ω(counter.requests.Load()).Should(BeEquivalentTo(1))
 				})
@@ -1391,12 +1545,12 @@ var _ = Describe("Client", func() {
 					}
 					wg.Wait()
 					Ω(counter.requests.Load()).Should(BeEquivalentTo(1))
-					Ω(testClient.advertisedExtensions).Should(Equal([]string{"creation", "expiration", "checksum"}))
+					Ω(testClient.caps.Extensions).Should(Equal([]string{"creation", "expiration", "checksum"}))
 				})
 			})
 			When("extensions have been fetched", func() {
 				It("should use cache and return no error", func() {
-					testClient.advertisedExtensions = []string{"creation", "expiration"}
+					testClient.caps = &ServerCapabilities{Extensions: []string{"creation", "expiration"}}
 					Ω(testClient.ensureExtension("creation")).Should(Succeed())
 					Ω(counter.requests.Load()).Should(BeZero())
 				})
@@ -1411,15 +1565,14 @@ var _ = Describe("Client", func() {
 				Ω(counter.requests.Load()).Should(BeZero())
 			})
 			When("server advertises no extensions", func() {
-				It("should cache the empty list and return error", func() {
-					testClient.advertisedExtensions = nil
+				It("should cache the capabilities and return error", func() {
+					testClient.caps = nil
 					srvMock.AddMocks(
 						mocha.Request().URL(expect.URLPath("/")).Method(http.MethodOptions).
 							Reply(tReply(reply.NoContent()).Header("Tus-Version", "1.0.0")),
 					)
 					Ω(testClient.ensureExtension("creation")).Should(MatchError(ErrUnsupportedFeature))
-					Ω(testClient.advertisedExtensions).Should(BeEmpty())
-					Ω(testClient.advertisedExtensions).ShouldNot(BeNil())
+					Ω(testClient.caps).Should(Equal(&ServerCapabilities{ProtocolVersions: []string{"1.0.0"}}))
 					Ω(testClient.ensureExtension("termination")).Should(MatchError(ErrUnsupportedFeature))
 					Ω(counter.requests.Load()).Should(BeEquivalentTo(1))
 				})
@@ -1427,7 +1580,7 @@ var _ = Describe("Client", func() {
 		})
 		When("fetching extensions fails", func() {
 			It("should return error and not cache anything", func() {
-				testClient.advertisedExtensions = nil
+				testClient.caps = nil
 				srvMock.AddMocks(
 					mocha.Request().URL(expect.URLPath("/")).Method(http.MethodOptions).
 						Reply(reply.Status(http.StatusInternalServerError)),
@@ -1436,7 +1589,7 @@ var _ = Describe("Client", func() {
 					MatchError(ErrUnexpectedResponse),
 					MatchError(ContainSubstring("fetch capabilities")),
 				))
-				Ω(testClient.advertisedExtensions).Should(BeNil())
+				Ω(testClient.caps).Should(BeNil())
 				Ω(testClient.ensureExtension("creation")).Should(MatchError(ErrUnexpectedResponse))
 				Ω(counter.requests.Load()).Should(BeEquivalentTo(2))
 			})
