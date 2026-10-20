@@ -66,16 +66,22 @@ func (mtu *mockTusUploader) handler() func(r *http.Request, m reply.M, p params.
 	}
 }
 
-func (mtu *mockTusUploader) makeRequest(method, location string, emptyHeaders []string) *mocha.MockBuilder {
+func (mtu *mockTusUploader) makePatchRequest(location string, emptyHeaders []string) *mocha.MockBuilder {
 	b := mocha.Request().
-		URL(expect.URLPath(location)).Method(method).
+		URL(expect.URLPath(location)).Method(http.MethodPatch).
 		Header("Tus-Resumable", expect.ToEqual("1.0.0")).
 		Header("Content-Type", expect.ToEqual("application/offset+octet-stream")).
 		Header("Upload-Offset", expect.Func(func(v any, a expect.Args) (bool, error) {
+			if a.RequestInfo.Request.Method != http.MethodPatch {
+				return false, nil // mocha runs may run this for any other request
+			}
 			num, e := strconv.Atoi(v.(string))
 			return num >= 0, e
 		})).
 		Header("Upload-Offset", expect.Func(func(v any, a expect.Args) (bool, error) {
+			if a.RequestInfo.Request.Method != http.MethodPatch {
+				return false, nil // mocha runs may run this for any other request
+			}
 			num, e := strconv.Atoi(v.(string))
 			return num == mtu.buf.Len(), e
 		}))
@@ -113,7 +119,7 @@ var _ = Describe("ChunkedWriter", func() {
 			replies[i] = tReply(reply.NoContent())
 		}
 		up := &mockTusUploader{replies: replies, buf: bytes.NewBuffer(make([]byte, 0)), acceptSizes: acceptSizes}
-		srvMock.AddMocks(up.makeRequest(http.MethodPatch, "/foo/bar", emptyHeaders).ReplyFunction(up.handler()))
+		srvMock.AddMocks(up.makePatchRequest("/foo/bar", emptyHeaders).ReplyFunction(up.handler()))
 		return up
 	}
 
@@ -191,7 +197,7 @@ var _ = Describe("ChunkedWriter", func() {
 				tReply(reply.Status(http.StatusRequestEntityTooLarge)),
 			}
 			up := &mockTusUploader{replies: replies, buf: bytes.NewBuffer(make([]byte, 0)), acceptSizes: []int{-1, -1, -1, 232}}
-			srvMock.AddMocks(up.makeRequest(http.MethodPatch, "/foo/bar", emptyHeaders).ReplyFunction(up.handler()))
+			srvMock.AddMocks(up.makePatchRequest("/foo/bar", emptyHeaders).ReplyFunction(up.handler()))
 			s, w := newWriter(Upload{Location: "/foo/bar", RemoteSize: 1000}, 256)
 			data := tRandomData(2048)
 			rd := bytes.NewReader(data)
@@ -297,7 +303,7 @@ var _ = Describe("ChunkedWriter", func() {
 				tReply(reply.NoContent()), tReply(reply.NoContent()), reply.InternalServerError(), tReply(reply.NoContent()), tReply(reply.NoContent()),
 			}
 			up := &mockTusUploader{replies: replies, buf: bytes.NewBuffer(make([]byte, 0))}
-			srvMock.AddMocks(up.makeRequest(http.MethodPatch, "/foo/bar", emptyHeaders).ReplyFunction(up.handler()))
+			srvMock.AddMocks(up.makePatchRequest("/foo/bar", emptyHeaders).ReplyFunction(up.handler()))
 			s, w := newWriter(Upload{Location: "/foo/bar", RemoteSize: 1024}, 256)
 			data := tRandomData(1024)
 			rd := bytes.NewReader(data)
@@ -319,7 +325,7 @@ var _ = Describe("ChunkedWriter", func() {
 				tReply(reply.NoContent()), tReply(reply.NoContent()), tReply(reply.NoContent()), reply.InternalServerError(), tReply(reply.NoContent()),
 			}
 			up := &mockTusUploader{replies: replies, buf: bytes.NewBuffer(make([]byte, 0))}
-			srvMock.AddMocks(up.makeRequest(http.MethodPatch, "/foo/bar", emptyHeaders).ReplyFunction(up.handler()))
+			srvMock.AddMocks(up.makePatchRequest("/foo/bar", emptyHeaders).ReplyFunction(up.handler()))
 			s, w := newWriter(Upload{Location: "/foo/bar", RemoteSize: 1024}, 256)
 			data := tRandomData(1000)
 			rd := bytes.NewReader(data)
@@ -395,7 +401,7 @@ var _ = Describe("ChunkedWriter", func() {
 				tReply(reply.Status(http.StatusConflict)),
 			}
 			up := &mockTusUploader{replies: replies, buf: bytes.NewBuffer(make([]byte, 0)), acceptSizes: []int{100, 0, 0, 0}}
-			srvMock.AddMocks(up.makeRequest(http.MethodPatch, "/foo/bar", emptyHeaders).ReplyFunction(up.handler()))
+			srvMock.AddMocks(up.makePatchRequest("/foo/bar", emptyHeaders).ReplyFunction(up.handler()))
 			s, w := newWriter(Upload{Location: "/foo/bar", RemoteSize: 1024}, 256)
 			data := tRandomData(1024)
 			_, err := w.ReadFrom(bytes.NewReader(data))
@@ -427,6 +433,105 @@ var _ = Describe("ChunkedWriter", func() {
 			Ω(s.Tell()).Should(BeEquivalentTo(868))
 			Ω(up.requests).Should(HaveLen(7))
 			Ω(append(data[:100:100], data[256:]...)).Should(Equal(up.buf.Bytes()))
+		})
+	})
+	Context("Advance", func() {
+		DescribeTable("should discard the first n bytes of the buffered data",
+			func(n int64, expectOk bool, expectFrom int) {
+				_, w := newWriter(Upload{Location: "/foo/bar", RemoteSize: 1024}, 256)
+				data := tRandomData(256)
+				w.bufPtr = data[100:]
+
+				Ω(w.Advance(n)).Should(Equal(expectOk))
+				Ω(w.Buffer()).Should(Equal(data[expectFrom:]))
+			},
+			Entry("zero", int64(0), true, 100),
+			Entry("a part of the buffer", int64(50), true, 150),
+			Entry("the whole buffer", int64(156), true, 256),
+		)
+		DescribeTable("should empty the buffer and return false if n is out of the buffered data",
+			func(n int64) {
+				_, w := newWriter(Upload{Location: "/foo/bar", RemoteSize: 1024}, 256)
+				w.bufPtr = tRandomData(256)[100:]
+
+				Ω(w.Advance(n)).Should(BeFalse())
+				Ω(w.Buffer()).Should(BeEmpty())
+			},
+			Entry("one byte beyond the buffer", int64(157)),
+			Entry("far beyond the buffer", int64(1024)),
+			Entry("negative", int64(-1)),
+		)
+		DescribeTable("on empty buffer",
+			func(n int64, expectOk bool) {
+				_, w := newWriter(Upload{Location: "/foo/bar", RemoteSize: 1024}, 256)
+
+				Ω(w.Advance(n)).Should(Equal(expectOk))
+				Ω(w.Buffer()).Should(BeEmpty())
+			},
+			Entry("zero", int64(0), true),
+			Entry("positive", int64(1), false),
+			Entry("negative", int64(-1), false),
+		)
+
+		// The first 4 requests leave data[100:256] in the buffer: 256@0 -> 100 confirmed, 156@100 x3 -> nothing
+		// confirmed. Then the server gets more data, whose confirmation is lost, which is emulated by writing to up.buf.
+		// The HEAD mock is matched before the PATCH mock, whose Upload-Offset matchers fail on requests without
+		// this header.
+		It("should skip the data the server has already received after Sync, without rewinding the reader", func() {
+			up := mockUploader(8, 100, 0, 0, 0)
+			eh := []string{"Upload-Concat", "Upload-Defer-Length", "Upload-Length", "Upload-Metadata", "Upload-Checksum", "Upload-Offset"}
+			srvMock.AddMocks(tRequest(http.MethodHead, "/foo/bar", eh).
+				Reply(tReply(reply.Status(http.StatusOK)).
+					Header("Upload-Offset", "150").
+					Header("Upload-Length", "1024")),
+			)
+			s, w := newWriter(Upload{Location: "/foo/bar", RemoteSize: 1024}, 256)
+			data := tRandomData(1024)
+			rd := bytes.NewReader(data)
+			_, err := w.ReadFrom(rd)
+			Ω(err).Should(MatchError(ErrIncompleteWrite))
+			up.buf.Write(data[100:150])
+
+			d, err := s.Sync()
+			Ω(err).ShouldNot(HaveOccurred())
+			Ω(d).Should(BeEquivalentTo(50))
+			Ω(w.Advance(d)).Should(BeTrue())
+			Ω(w.Buffer()).Should(Equal(data[150:256]))
+
+			// 106@150, then 3 full chunks
+			Ω(w.ReadFrom(rd)).Should(BeEquivalentTo(768))
+			Ω(s.Tell()).Should(BeEquivalentTo(1024))
+			Ω(w.Buffer()).Should(BeEmpty())
+			Ω(up.requests).Should(HaveLen(8))
+			Ω(data).Should(Equal(up.buf.Bytes()))
+		})
+		It("should require rewinding the reader if the server offset is beyond the buffered data after Sync", func() {
+			up := mockUploader(7, 100, 0, 0, 0)
+			eh := []string{"Upload-Concat", "Upload-Defer-Length", "Upload-Length", "Upload-Metadata", "Upload-Checksum", "Upload-Offset"}
+			srvMock.AddMocks(tRequest(http.MethodHead, "/foo/bar", eh).Priority(-1).
+				Reply(tReply(reply.Status(http.StatusOK)).
+					Header("Upload-Offset", "300").
+					Header("Upload-Length", "1024")),
+			)
+			s, w := newWriter(Upload{Location: "/foo/bar", RemoteSize: 1024}, 256)
+			data := tRandomData(1024)
+			rd := bytes.NewReader(data)
+			_, err := w.ReadFrom(rd)
+			Ω(err).Should(MatchError(ErrIncompleteWrite))
+			up.buf.Write(data[100:300])
+
+			d, err := s.Sync()
+			Ω(err).ShouldNot(HaveOccurred())
+			Ω(d).Should(BeEquivalentTo(200))
+			Ω(w.Advance(d)).Should(BeFalse())
+			Ω(w.Buffer()).Should(BeEmpty())
+
+			// 256@300, 256@556, 212@812
+			Ω(rd.Seek(s.Tell(), io.SeekStart)).Should(BeEquivalentTo(300))
+			Ω(w.ReadFrom(rd)).Should(BeEquivalentTo(724))
+			Ω(s.Tell()).Should(BeEquivalentTo(1024))
+			Ω(up.requests).Should(HaveLen(7))
+			Ω(data).Should(Equal(up.buf.Bytes()))
 		})
 	})
 	Context("Write", func() {
@@ -478,7 +583,7 @@ var _ = Describe("ChunkedWriter", func() {
 				tReply(reply.Status(http.StatusRequestEntityTooLarge)),
 			}
 			up := &mockTusUploader{replies: replies, buf: bytes.NewBuffer(make([]byte, 0)), acceptSizes: []int{-1, -1, -1, 232}}
-			srvMock.AddMocks(up.makeRequest(http.MethodPatch, "/foo/bar", emptyHeaders).ReplyFunction(up.handler()))
+			srvMock.AddMocks(up.makePatchRequest("/foo/bar", emptyHeaders).ReplyFunction(up.handler()))
 			s, w := newWriter(Upload{Location: "/foo/bar", RemoteSize: 1000}, 256)
 			data := tRandomData(1024)
 
@@ -493,7 +598,7 @@ var _ = Describe("ChunkedWriter", func() {
 		It("should send the data even if the upload is full, and return ErrTooLarge if the server rejects it", func() {
 			replies := []*reply.StdReply{tReply(reply.Status(http.StatusRequestEntityTooLarge))}
 			up := &mockTusUploader{replies: replies, buf: bytes.NewBuffer(make([]byte, 1024))}
-			srvMock.AddMocks(up.makeRequest(http.MethodPatch, "/foo/bar", emptyHeaders).ReplyFunction(up.handler()))
+			srvMock.AddMocks(up.makePatchRequest("/foo/bar", emptyHeaders).ReplyFunction(up.handler()))
 			s, w := newWriter(Upload{Location: "/foo/bar", RemoteSize: 1024, RemoteOffset: 1024}, 256)
 
 			n, err := w.Write(tRandomData(100))
@@ -528,7 +633,7 @@ var _ = Describe("ChunkedWriter", func() {
 		It("should return the confirmed bytes and error if the request fails", func() {
 			replies := []*reply.StdReply{tReply(reply.NoContent()), tReply(reply.Status(http.StatusConflict))}
 			up := &mockTusUploader{replies: replies, buf: bytes.NewBuffer(make([]byte, 0))}
-			srvMock.AddMocks(up.makeRequest(http.MethodPatch, "/foo/bar", emptyHeaders).ReplyFunction(up.handler()))
+			srvMock.AddMocks(up.makePatchRequest("/foo/bar", emptyHeaders).ReplyFunction(up.handler()))
 			s, w := newWriter(Upload{Location: "/foo/bar", RemoteSize: 1024}, 256)
 			data := tRandomData(1024)
 
@@ -587,7 +692,7 @@ var _ = Describe("ChunkedWriter", func() {
 			func(expectStatus int, expectErr error) {
 				replies := []*reply.StdReply{tReply(reply.Status(expectStatus))}
 				up := &mockTusUploader{replies: replies, buf: bytes.NewBuffer(make([]byte, 0))}
-				srvMock.AddMocks(up.makeRequest(http.MethodPatch, "/foo/bar", emptyHeaders).ReplyFunction(up.handler()))
+				srvMock.AddMocks(up.makePatchRequest("/foo/bar", emptyHeaders).ReplyFunction(up.handler()))
 				s, w := newWriter(Upload{Location: "/foo/bar", RemoteSize: 1024}, 256)
 				data := tRandomData(1024)
 
@@ -614,7 +719,7 @@ var _ = Describe("ChunkedWriter", func() {
 				replies := []*reply.StdReply{tReply(reply.Status(460))}
 				up := &mockTusUploader{replies: replies, buf: bytes.NewBuffer(make([]byte, 0))}
 				eh := []string{"Upload-Concat", "Upload-Defer-Length", "Upload-Length", "Upload-Metadata"}
-				srvMock.AddMocks(up.makeRequest(http.MethodPatch, "/foo/bar", eh).ReplyFunction(up.handler()))
+				srvMock.AddMocks(up.makePatchRequest("/foo/bar", eh).ReplyFunction(up.handler()))
 				s, err := NewStreamWithChecksum(testClient, Upload{Location: "/foo/bar", RemoteSize: 1024}, "sha1")
 				Ω(err).ShouldNot(HaveOccurred())
 				w := NewChunkedWriter(s, 256)

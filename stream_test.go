@@ -113,7 +113,7 @@ var _ = Describe("Stream", func() {
 			func(dataSize, uploadSize int) {
 				replies := []*reply.StdReply{tReply(reply.NoContent())}
 				up := mockTusUploader{replies: replies, buf: bytes.NewBuffer(make([]byte, 0))}
-				srvMock.AddMocks(up.makeRequest(http.MethodPatch, "/foo/bar", emptyHeaders).ReplyFunction(up.handler()))
+				srvMock.AddMocks(up.makePatchRequest("/foo/bar", emptyHeaders).ReplyFunction(up.handler()))
 
 				u := Upload{Location: "/foo/bar", RemoteSize: int64(uploadSize)}
 				s, err := NewStream(testClient, u)
@@ -134,7 +134,7 @@ var _ = Describe("Stream", func() {
 		It("should continue from the current offset on subsequent Write calls", func() {
 			replies := []*reply.StdReply{tReply(reply.NoContent()), tReply(reply.NoContent()), tReply(reply.NoContent())}
 			up := mockTusUploader{replies: replies, buf: bytes.NewBuffer(make([]byte, 0))}
-			srvMock.AddMocks(up.makeRequest(http.MethodPatch, "/foo/bar", emptyHeaders).ReplyFunction(up.handler()))
+			srvMock.AddMocks(up.makePatchRequest("/foo/bar", emptyHeaders).ReplyFunction(up.handler()))
 
 			u := Upload{Location: "/foo/bar", RemoteSize: 1024}
 			s, err := NewStream(testClient, u)
@@ -152,7 +152,7 @@ var _ = Describe("Stream", func() {
 			func(acceptSize int) {
 				replies := []*reply.StdReply{tReply(reply.NoContent()), tReply(reply.NoContent())}
 				up := mockTusUploader{replies: replies, buf: bytes.NewBuffer(make([]byte, 0)), acceptSizes: []int{acceptSize}}
-				srvMock.AddMocks(up.makeRequest(http.MethodPatch, "/foo/bar", emptyHeaders).ReplyFunction(up.handler()))
+				srvMock.AddMocks(up.makePatchRequest("/foo/bar", emptyHeaders).ReplyFunction(up.handler()))
 
 				u := Upload{Location: "/foo/bar", RemoteSize: 1024}
 				s, err := NewStream(testClient, u)
@@ -182,7 +182,7 @@ var _ = Describe("Stream", func() {
 			It("should upload data from the reader in a single request", func() {
 				replies := []*reply.StdReply{tReply(reply.NoContent())}
 				up := mockTusUploader{replies: replies, buf: bytes.NewBuffer(make([]byte, 0))}
-				srvMock.AddMocks(up.makeRequest(http.MethodPatch, "/foo/bar", emptyHeaders).ReplyFunction(up.handler()))
+				srvMock.AddMocks(up.makePatchRequest("/foo/bar", emptyHeaders).ReplyFunction(up.handler()))
 
 				u := Upload{Location: "/foo/bar", RemoteSize: 1024}
 				s, err := NewStream(testClient, u)
@@ -199,7 +199,7 @@ var _ = Describe("Stream", func() {
 				func(acceptSize int) {
 					replies := []*reply.StdReply{tReply(reply.NoContent()), tReply(reply.NoContent())}
 					up := mockTusUploader{replies: replies, buf: bytes.NewBuffer(make([]byte, 0)), acceptSizes: []int{acceptSize}}
-					srvMock.AddMocks(up.makeRequest(http.MethodPatch, "/foo/bar", emptyHeaders).ReplyFunction(up.handler()))
+					srvMock.AddMocks(up.makePatchRequest("/foo/bar", emptyHeaders).ReplyFunction(up.handler()))
 
 					u := Upload{Location: "/foo/bar", RemoteSize: 1024}
 					s, err := NewStream(testClient, u)
@@ -232,7 +232,7 @@ var _ = Describe("Stream", func() {
 				testClient.caps.Extensions = append(testClient.caps.Extensions, "checksum-trailer")
 				replies := []*reply.StdReply{tReply(reply.NoContent())}
 				up := mockTusUploader{replies: replies, buf: bytes.NewBuffer(make([]byte, 0))}
-				srvMock.AddMocks(up.makeRequest(http.MethodPatch, "/foo/bar", emptyHeaders).ReplyFunction(up.handler()))
+				srvMock.AddMocks(up.makePatchRequest("/foo/bar", emptyHeaders).ReplyFunction(up.handler()))
 
 				u := Upload{Location: "/foo/bar", RemoteSize: 1024}
 				s, err := NewStreamWithChecksum(testClient, u, "sha1")
@@ -252,7 +252,7 @@ var _ = Describe("Stream", func() {
 			replies := []*reply.StdReply{tReply(reply.NoContent())}
 			eh := []string{"Upload-Concat", "Upload-Defer-Length", "Upload-Length", "Upload-Metadata"}
 			up := mockTusUploader{replies: replies, buf: bytes.NewBuffer(make([]byte, 0))}
-			srvMock.AddMocks(up.makeRequest(http.MethodPatch, "/foo/bar", eh).ReplyFunction(up.handler()))
+			srvMock.AddMocks(up.makePatchRequest("/foo/bar", eh).ReplyFunction(up.handler()))
 
 			u := Upload{Location: "/foo/bar", RemoteSize: 1024}
 			s, err := NewStreamWithChecksum(testClient, u, "sha1")
@@ -272,7 +272,7 @@ var _ = Describe("Stream", func() {
 			testClient.caps.Extensions = append(testClient.caps.Extensions, "expiration")
 			rpl := tReply(reply.NoContent()).Header("Upload-Expires", "Wed, 25 Jun 2014 16:00:00 GMT")
 			up := mockTusUploader{replies: []*reply.StdReply{rpl}, buf: bytes.NewBuffer(make([]byte, 0))}
-			srvMock.AddMocks(up.makeRequest(http.MethodPatch, "/foo/bar", emptyHeaders).ReplyFunction(up.handler()))
+			srvMock.AddMocks(up.makePatchRequest("/foo/bar", emptyHeaders).ReplyFunction(up.handler()))
 
 			u := Upload{Location: "/foo/bar", RemoteSize: 1024}
 			s, err := NewStream(testClient, u)
@@ -286,7 +286,7 @@ var _ = Describe("Stream", func() {
 		It("should send the request via DoRequest along with ExtraHeaders", func() {
 			replies := []*reply.StdReply{tReply(reply.NoContent())}
 			up := mockTusUploader{replies: replies, buf: bytes.NewBuffer(make([]byte, 0))}
-			srvMock.AddMocks(up.makeRequest(http.MethodPatch, "/foo/bar", emptyHeaders).
+			srvMock.AddMocks(up.makePatchRequest("/foo/bar", emptyHeaders).
 				Header("X-Custom", expect.ToEqual("custom")).
 				Header("X-Extra", expect.ToEqual("extra")).
 				ReplyFunction(up.handler()))
@@ -310,7 +310,7 @@ var _ = Describe("Stream", func() {
 				replies := []*reply.StdReply{tReply(reply.NoContent())}
 				up := mockTusUploader{replies: replies, buf: bytes.NewBuffer(make([]byte, 256))}
 				eh := []string{"Upload-Concat", "Upload-Defer-Length", "Upload-Metadata", "Upload-Checksum"}
-				srvMock.AddMocks(up.makeRequest(http.MethodPatch, "/foo/bar", eh).
+				srvMock.AddMocks(up.makePatchRequest("/foo/bar", eh).
 					Header("Upload-Length", expect.ToEqual("1024")).
 					Header("Content-Length", expect.ToEqual("0")).
 					ReplyFunction(up.handler()))
@@ -331,7 +331,7 @@ var _ = Describe("Stream", func() {
 				replies := []*reply.StdReply{tReply(reply.NoContent())}
 				up := mockTusUploader{replies: replies, buf: bytes.NewBuffer(make([]byte, 0))}
 				eh := []string{"Upload-Concat", "Upload-Defer-Length", "Upload-Metadata", "Upload-Checksum"}
-				srvMock.AddMocks(up.makeRequest(http.MethodPatch, "/foo/bar", eh).
+				srvMock.AddMocks(up.makePatchRequest("/foo/bar", eh).
 					Header("Content-Length", expect.ToEqual("0")).
 					ReplyFunction(up.handler()))
 
@@ -347,7 +347,7 @@ var _ = Describe("Stream", func() {
 				rpl := tReply(reply.NoContent()).Header("Upload-Expires", "Wed, 25 Jun 2014 16:00:00 GMT")
 				up := mockTusUploader{replies: []*reply.StdReply{rpl}, buf: bytes.NewBuffer(make([]byte, 0))}
 				eh := []string{"Upload-Concat", "Upload-Defer-Length", "Upload-Metadata", "Upload-Checksum"}
-				srvMock.AddMocks(up.makeRequest(http.MethodPatch, "/foo/bar", eh).
+				srvMock.AddMocks(up.makePatchRequest("/foo/bar", eh).
 					Header("Content-Length", expect.ToEqual("0")).
 					ReplyFunction(up.handler()))
 
@@ -458,7 +458,7 @@ var _ = Describe("Stream", func() {
 			func(expectStatus int, expectErr error) {
 				replies := []*reply.StdReply{tReply(reply.Status(expectStatus))}
 				up := mockTusUploader{replies: replies, buf: bytes.NewBuffer(make([]byte, 0))}
-				srvMock.AddMocks(up.makeRequest(http.MethodPatch, "/foo/bar", emptyHeaders).ReplyFunction(up.handler()))
+				srvMock.AddMocks(up.makePatchRequest("/foo/bar", emptyHeaders).ReplyFunction(up.handler()))
 
 				u := Upload{Location: "/foo/bar", RemoteSize: 1024}
 				s, err := NewStream(testClient, u)
@@ -488,7 +488,7 @@ var _ = Describe("Stream", func() {
 				replies := []*reply.StdReply{tReply(reply.Status(460))}
 				up := mockTusUploader{replies: replies, buf: bytes.NewBuffer(make([]byte, 0))}
 				eh := []string{"Upload-Concat", "Upload-Defer-Length", "Upload-Length", "Upload-Metadata"}
-				srvMock.AddMocks(up.makeRequest(http.MethodPatch, "/foo/bar", eh).ReplyFunction(up.handler()))
+				srvMock.AddMocks(up.makePatchRequest("/foo/bar", eh).ReplyFunction(up.handler()))
 
 				u := Upload{Location: "/foo/bar", RemoteSize: 1024}
 				s, err := NewStreamWithChecksum(testClient, u, "sha1")
@@ -563,7 +563,7 @@ var _ = Describe("Stream", func() {
 				func(expectStatus int, expectErr error) {
 					replies := []*reply.StdReply{tReply(reply.Status(expectStatus))}
 					up := mockTusUploader{replies: replies, buf: bytes.NewBuffer(make([]byte, 0))}
-					srvMock.AddMocks(up.makeRequest(http.MethodPatch, "/foo/bar", emptyHeaders).ReplyFunction(up.handler()))
+					srvMock.AddMocks(up.makePatchRequest("/foo/bar", emptyHeaders).ReplyFunction(up.handler()))
 
 					u := Upload{Location: "/foo/bar", RemoteSize: 1024}
 					s, err := NewStream(testClient, u)

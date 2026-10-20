@@ -122,6 +122,35 @@ func (us *ChunkedWriter) Write(p []byte) (int, error) {
 	return n, nil
 }
 
+// Advance discards the first n bytes of the unconfirmed data in the internal buffer (see [ChunkedWriter.Buffer]).
+// It reports whether n is within the buffered data, that is, 0 <= n <= len(Buffer()). Otherwise, Advance empties
+// the buffer and returns false.
+//
+// Advance is intended for recovering from [ErrOffsetsNotSynced] while using ReadFrom. That error means either
+// the server rejected the request because the client offset was not equal to server offset, or the server stored
+// the data but the response confirming it was lost. In the latter case the buffer still holds data the server
+// already has, and the next write would send it again, appending a duplicate at the following offset.
+//
+// To prevent that, pass the delta returned by [Stream.Sync] to Advance before resuming the transfer. If Advance
+// returns false, the buffered write is broken: the server offset lies outside the buffered data. The source
+// reader must be repositioned to [Stream.Tell]:
+//
+//	d, err := stream.Sync()
+//	if err != nil {
+//		return fmt.Errorf("sync: %w", err)
+//	}
+//	if !cw.Advance(d) {
+//		// The buffer is now empty; seek the source to stream.Tell() before calling cw.ReadFrom again.
+//	}
+func (us *ChunkedWriter) Advance(n int64) bool {
+	if n < 0 || n > int64(len(us.bufPtr)) {
+		us.bufPtr = nil
+		return false
+	}
+	us.bufPtr = us.bufPtr[n:]
+	return true
+}
+
 // Flush sends the unconfirmed data in the buffer to the server. It returns the number of bytes acknowledged by the
 // server and an error if the upload failed.
 //
