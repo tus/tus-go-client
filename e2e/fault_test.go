@@ -43,18 +43,25 @@ var _ = Describe("Fault recovery", func() {
 			Expect(srv.StoredData(u.Location)).To(Equal(data))
 		})
 
-		It("should resend the rest of the chunk in the same ReadFrom call in ChunkedWriter", func() {
+		It("should return ErrIncompleteWrite in ChunkedWriter and resend the rest of the chunk on the next ReadFrom call", func() {
 			patches := &requestCounter{method: http.MethodPatch}
 			srv := startServer(nil, chain(patches.Middleware, injectFault(http.MethodPatch, 2, acceptOnly(100))))
 			cl := srv.NewClient()
 			u, err := cl.CreateUpload(dataSize, false, nil)
 			Expect(err).NotTo(HaveOccurred())
 			s, w := newChunkedWriter(cl, u, chunkSize)
+			rd := readerOnly{bytes.NewReader(data)}
 
-			n, err := w.ReadFrom(readerOnly{bytes.NewReader(data)})
+			n, err := w.ReadFrom(rd)
+			Expect(err).To(MatchError(tusgo.ErrIncompleteWrite))
+			Expect(n).To(BeEquivalentTo(2 * chunkSize))
+			Expect(s.Tell()).To(BeEquivalentTo(chunkSize + 100))
+			Expect(w.Buffer()).To(Equal(data[chunkSize+100 : 2*chunkSize]))
+
+			n, err = w.ReadFrom(rd)
 
 			Expect(err).NotTo(HaveOccurred())
-			Expect(n).To(BeEquivalentTo(dataSize))
+			Expect(n).To(BeEquivalentTo(dataSize - 2*chunkSize))
 			Expect(s.Tell()).To(BeEquivalentTo(dataSize))
 			Expect(patches.count.Load()).To(BeEquivalentTo(chunks + 1))
 			Expect(srv.StoredData(u.Location)).To(Equal(data))

@@ -59,6 +59,8 @@ import (
 	"log"
 	"net/url"
 	"os"
+	"time"
+	"errors"
 
 	"github.com/bdragon300/tusgo/v2"
 )
@@ -93,13 +95,31 @@ func main() {
 		log.Fatalf("Failed to seek file: %s", err)
 	}
 
-	// Transfer the file in chunks of 2 MiB, one request per chunk
+	// Transfer the file in chunks of 2 MiB, one request per chunk with automatic retry on failure
 	w := tusgo.NewChunkedWriter(s, 2*1024*1024)
-	written, err := io.Copy(w, f)
-	if err != nil {
-		log.Fatalf("Written %d bytes, error: %s", written, err)
-	}
-	log.Printf("Written %d bytes\n", written)
+    var r int64
+    for {
+        _, err := io.Copy(w, f)
+        switch {
+        case tusgo.IsErrorRetryable(err):
+            if errors.Is(err, tusgo.ErrOffsetsNotSynced) {
+                if d, err := s.Sync(); err != nil {
+                    log.Fatalf("Failed to sync upload stream: %s", err)
+                } else if !w.Advance(d) {
+                    if _, err := f.Seek(s.Tell(), io.SeekStart); err != nil {
+						log.Fatalf("Failed to seek file: %s", err)
+                    }
+                }
+            } else {
+				time.Sleep(time.Second)
+            }
+			continue
+        case err != nil:
+			log.Fatalf("Written %d bytes, permanent error: %s", r, err)
+        }
+        break
+    }
+    log.Printf("Written %d bytes\n", r)
 }
 ```
 

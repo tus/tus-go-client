@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -31,17 +30,29 @@ func UploadWithRetry(s *tusgo.Stream, src io.ReadSeeker) error {
 		return fmt.Errorf("seek: %w", err)
 	}
 
-	// On error, dst keeps the data the server has not accepted and sends it first on the next io.Copy call
 	dst := tusgo.NewChunkedWriter(s, chunkSize)
-	_, err := io.Copy(dst, src)
 	attempts := 10
-	for err != nil && attempts > 0 {
-		if _, ok := err.(net.Error); !ok && !errors.Is(err, tusgo.ErrChecksumMismatch) {
-			return fmt.Errorf("permanent error: %w", err) // Permanent error, no luck
+	for {
+		_, err := io.Copy(dst, src)
+		switch {
+		case tusgo.IsErrorRetryable(err):
+			if errors.Is(err, tusgo.ErrOffsetsNotSynced) {
+				if d, err := s.Sync(); err != nil {
+					return fmt.Errorf("sync: %w", err)
+				} else if !dst.Advance(d) {
+					if _, err := src.Seek(s.Tell(), io.SeekStart); err != nil {
+						return fmt.Errorf("seek: %w", err)
+					}
+				}
+			} else {
+				time.Sleep(time.Second)
+			}
+			attempts--
+			continue
+		case err != nil:
+			return fmt.Errorf("read from permanent error: %w", err)
 		}
-		time.Sleep(5 * time.Second)
-		attempts--
-		_, err = io.Copy(dst, src)
+		break
 	}
 	if attempts == 0 {
 		return errors.New("too many attempts to upload the data")
@@ -103,13 +114,31 @@ func Example_minimal() {
 		log.Fatalf("Failed to seek file: %s", err)
 	}
 
-	// Transfer the file in chunks of 2 MiB, one request per chunk
+	// Resumable transfer the file in chunks of 2 MiB, one request per chunk
 	w := tusgo.NewChunkedWriter(s, 2*1024*1024)
-	written, err := io.Copy(w, f)
-	if err != nil {
-		log.Fatalf("Written %d bytes, error: %s", written, err)
+	var r int64
+	for {
+		_, err := io.Copy(w, f)
+		switch {
+		case tusgo.IsErrorRetryable(err):
+			if errors.Is(err, tusgo.ErrOffsetsNotSynced) {
+				if d, err := s.Sync(); err != nil {
+					log.Fatalf("Failed to sync upload stream: %s", err)
+				} else if !w.Advance(d) {
+					if _, err := f.Seek(s.Tell(), io.SeekStart); err != nil {
+						log.Fatalf("Failed to seek file: %s", err)
+					}
+				}
+			} else {
+				time.Sleep(time.Second)
+			}
+			continue
+		case err != nil:
+			log.Fatalf("Written %d bytes, permanent error: %s", r, err)
+		}
+		break
 	}
-	log.Printf("Written %d bytes\n", written)
+	log.Printf("Written %d bytes\n", r)
 }
 
 // Example demonstrates the "creation" extension.

@@ -6,13 +6,8 @@ import (
 	"io"
 )
 
-const maxConsecutiveZeroWrites = 3
-
 // NewChunkedWriter returns a ChunkedWriter that writes to w in chunks of at most chunkSize bytes. The internal
 // buffer of chunkSize bytes is allocated once and reused for the lifetime of the writer.
-//
-// w is typically a [*Stream]. Any other [io.Writer] must follow the [Stream.Write] contract: return the number of bytes
-// the server has accepted, and [ErrIncompleteWrite] if it is less than len(p).
 //
 // NewChunkedWriter panics if w is nil or chunkSize is not positive.
 func NewChunkedWriter(w io.Writer, chunkSize int) *ChunkedWriter {
@@ -28,14 +23,14 @@ func NewChunkedWriter(w io.Writer, chunkSize int) *ChunkedWriter {
 	}
 }
 
-// ChunkedWriter writes data to an underlying stream, typically a [Stream], in fixed-size chunks.
-// It's optimized for reliable and resumable writing the data to the underlying stream.
+// ChunkedWriter is a buffered io.Writer, that writes data to an underlying writer in fixed-size chunks.
+// It's optimized for reliable and resumable writing the data to the underlying writer.
 //
 // [ChunkedWriter.ReadFrom] stages each chunk in an internal buffer and keeps the unaccepted data there on error,
 // so a later call with the same reader resumes the process without rewinding it. [ChunkedWriter.Write] sends
-// the caller's slice in chunks, without buffering, but returns count of bytes accepted by the stream.
-// In both cases, if the stream accepts only part of a chunk during the transmission, ChunkedWriter resends its
-// remaining data in loop before moving to the next chunk.
+// the caller's slice in chunks, without buffering, but returns count of bytes accepted by the writer.
+// In both cases, if the writer accepts only part of a chunk during the transmission, ChunkedWriter stops immediately
+// with possibility to resume transmission.
 //
 // A ChunkedWriter is not safe for concurrent use.
 type ChunkedWriter struct {
@@ -49,16 +44,12 @@ type ChunkedWriter struct {
 	bufPtr []byte
 }
 
-// ReadFrom reads data from r and uploads it in chunks until r returns [io.EOF] or the upload is full. It
-// implements [io.ReaderFrom] and returns the number of bytes read from r. ReadFrom sends the data until r returns
-// [io.EOF] or the server rejects a chunk.
+// ReadFrom implements [io.ReaderFrom]. It reads r in chunks through the internal buffer and writes each chunk
+// to the underlying writer until r returns [io.EOF]. It returns the number of bytes read from r and the first
+// error encountered (if any).
 //
-// If the server accepts only part of a chunk, ReadFrom resends the rest. If the server accepts no data in
-// several consecutive requests, ReadFrom returns [ErrIncompleteWrite].
-//
-// On error, ReadFrom returns immediately and keeps the data the server has not accepted in the internal buffer
-// (see [ChunkedWriter.Buffer]). A later call to ReadFrom with the same r sends the buffered data first, so r does
-// not need to be rewound.
+// On a write error, the unaccepted data stays in the buffer (see [ChunkedWriter.Buffer]) and is written first
+// on the next call, so r does not need to be rewound.
 func (us *ChunkedWriter) ReadFrom(r io.Reader) (int64, error) {
 	counterRd := &counterReader{Rd: r}
 
@@ -84,42 +75,32 @@ func (us *ChunkedWriter) ReadFrom(r io.Reader) (int64, error) {
 	}
 }
 
-// Write uploads p in chunks, issuing one Stream.Write call per chunk. It always returns the number of bytes
-// accepted by the server and possible error. Write sends p until the server confirms all chunks or rejects a chunk.
+// Write writes p to the underlying writer in chunks, one call per chunk, and returns
+// the total number of bytes accepted and the first error encountered (if any).
+// Write does not use the internal buffer.
 //
-// If the server accepts only part of a chunk, Write resends the rest. If the server accepts no data in
-// several consecutive requests, Write returns [ErrIncompleteWrite].
+// On error, Write returns immediately; to resume, call Write again with p[n:].
 //
-// On error, Write returns immediately and does not keep the unaccepted data. To continue the upload, call Write
-// again with p[n:].
+// If the underlying writer misbehaves and accepts only part of a chunk without error, Write returns immediately with
+// the total number of bytes accepted (including a faulty write) and [io.ErrShortWrite] error.
 func (us *ChunkedWriter) Write(p []byte) (int, error) {
 	var n int
-	n0 := len(p)
-	var zeroAttempts int
 
 	for len(p) > 0 {
 		nn := min(len(p), len(us.buf))
 		advance, err := us.w.Write(p[:nn])
-		if err == nil || errors.Is(err, ErrIncompleteWrite) || errors.Is(err, ErrTooLarge) {
+		if advance > 0 {
 			p = p[advance:]
 			n += advance
 		}
-		if err != nil && !errors.Is(err, ErrIncompleteWrite) {
-			return n, fmt.Errorf("stream write: %w", err)
+		if err != nil {
+			return n, fmt.Errorf("write: %w", err)
 		}
-		if advance == 0 {
-			zeroAttempts++
-			if zeroAttempts >= maxConsecutiveZeroWrites {
-				return n, newTusError(ErrIncompleteWrite, nil, fmt.Errorf("server did not receive data too many times: %d", zeroAttempts))
-			}
-		} else {
-			zeroAttempts = 0
+		if advance < nn {
+			return n, fmt.Errorf("write: %w: expected %d, got %d", io.ErrShortWrite, nn, advance)
 		}
 	}
 
-	if n < n0 {
-		return n, newTusError(ErrTooLarge, nil, fmt.Errorf("upload is full, %d bytes of %d were sent", n, n0))
-	}
 	return n, nil
 }
 
@@ -163,10 +144,7 @@ func (us *ChunkedWriter) Flush() (int, error) {
 	}
 
 	advance, err := us.w.Write(us.bufPtr)
-	if advance < 0 {
-		advance = 0
-	}
-	if err == nil || errors.Is(err, ErrIncompleteWrite) || errors.Is(err, ErrTooLarge) {
+	if advance > 0 {
 		us.bufPtr = us.bufPtr[advance:]
 	}
 	if err != nil {

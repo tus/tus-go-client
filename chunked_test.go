@@ -91,6 +91,16 @@ func (mtu *mockTusUploader) makePatchRequest(location string, emptyHeaders []str
 	return b
 }
 
+// shortWriter is a misbehaving io.Writer that accepts at most limit bytes per call without returning an error.
+type shortWriter struct {
+	limit int
+	buf   bytes.Buffer
+}
+
+func (sw *shortWriter) Write(p []byte) (int, error) {
+	return sw.buf.Write(p[:min(len(p), sw.limit)])
+}
+
 // tRandomData returns n random bytes
 func tRandomData(n int) []byte {
 	data, _ := io.ReadAll(io.LimitReader(rand.New(rand.NewSource(time.Now().UnixNano())), int64(n)))
@@ -202,9 +212,16 @@ var _ = Describe("ChunkedWriter", func() {
 			data := tRandomData(2048)
 			rd := bytes.NewReader(data)
 
-			// 256@0, 256@256, 256@512, 256@768 -> 232 confirmed, 24@1000 -> 413
+			// 256@0, 256@256, 256@512, 256@768 -> 232 confirmed
 			n, err := w.ReadFrom(rd)
 			Ω(n).Should(BeEquivalentTo(1024))
+			Ω(err).Should(MatchError(ErrIncompleteWrite))
+			Ω(s.Tell()).Should(BeEquivalentTo(1000))
+			Ω(w.Buffer()).Should(Equal(data[1000:1024]))
+
+			// 24@1000 -> 413
+			n, err = w.ReadFrom(rd)
+			Ω(n).Should(BeEquivalentTo(0))
 			Ω(err).Should(MatchError(ErrTooLarge))
 			Ω(tErrResponse(err)).Should(HaveHTTPStatus(http.StatusRequestEntityTooLarge))
 			Ω(s.Tell()).Should(BeEquivalentTo(1000))
@@ -244,57 +261,37 @@ var _ = Describe("ChunkedWriter", func() {
 		})
 	})
 	Context("server accepts only a part of a chunk", func() {
-		DescribeTable("should resend the rest of the chunk in the same call",
-			func(dataSize int, acceptSizes []int, expectRequests int) {
+		DescribeTable("should return ErrIncompleteWrite right away, keep the rest in the buffer and resend it on the next call",
+			func(dataSize int, acceptSizes []int, expectRead int, expectOffset int64, expectRequests int) {
 				up := mockUploader(expectRequests, acceptSizes...)
 				s, w := newWriter(Upload{Location: "/foo/bar", RemoteSize: 1024}, 256)
 				data := tRandomData(dataSize)
+				rd := bytes.NewReader(data)
 
-				Ω(w.ReadFrom(bytes.NewReader(data))).Should(BeEquivalentTo(dataSize))
+				n, err := w.ReadFrom(rd)
+				Ω(n).Should(BeEquivalentTo(expectRead))
+				Ω(err).Should(MatchError(ErrIncompleteWrite))
+				Ω(s.Tell()).Should(Equal(expectOffset))
+				Ω(w.Buffer()).Should(Equal(data[expectOffset:expectRead]))
+				Ω(up.requests).Should(HaveLen(len(acceptSizes)))
+
+				// The same reader is passed, the rest of the chunk is sent first
+				Ω(w.ReadFrom(rd)).Should(BeEquivalentTo(dataSize - expectRead))
 				Ω(s.Tell()).Should(BeEquivalentTo(dataSize))
 				Ω(w.Buffer()).Should(BeEmpty())
 				Ω(up.requests).Should(HaveLen(expectRequests))
 				Ω(data).Should(Equal(up.buf.Bytes()))
 			},
-			// 256@0 -> 100 confirmed, 156@100, then 3 full chunks
-			Entry("first chunk", 1024, []int{100}, 5),
-			// 256@0 -> nothing confirmed, 256@0, then 3 full chunks
-			Entry("first chunk, nothing accepted", 1024, []int{0}, 5),
-			// 256@0 -> 255 confirmed, 1@255, then 3 full chunks
-			Entry("first chunk except the last byte", 1024, []int{255}, 5),
-			// 256@0, 256@256 -> 100 confirmed, 156@356, then 2 full chunks
-			Entry("middle chunk", 1024, []int{-1, 100}, 5),
-			// 3 full chunks, 232@768 -> 100 confirmed, 132@868
-			Entry("last unaligned chunk", 1000, []int{-1, -1, -1, 100}, 5),
-			// 256@0 -> nothing confirmed twice, 50 confirmed, 206@50 -> nothing confirmed twice, then the rest of the
-			// chunk and 3 full chunks. The counter of requests with nothing confirmed is reset by the progress.
-			Entry("nothing accepted in non-consecutive requests", 1024, []int{0, 0, 50, 0, 0}, 9),
-		)
-		DescribeTable("should return ErrIncompleteWrite and keep the rest in the buffer if nothing is accepted "+
-			"in 3 consecutive requests, and resend it on the next call",
-			func(acceptSizes []int, expectOffset int64, expectRequests int) {
-				up := mockUploader(expectRequests, acceptSizes...)
-				s, w := newWriter(Upload{Location: "/foo/bar", RemoteSize: 1024}, 256)
-				data := tRandomData(1024)
-				rd := bytes.NewReader(data)
-
-				n, err := w.ReadFrom(rd)
-				Ω(n).Should(BeEquivalentTo(256))
-				Ω(err).Should(MatchError(ErrIncompleteWrite))
-				Ω(s.Tell()).Should(Equal(expectOffset))
-				Ω(w.Buffer()).Should(Equal(data[expectOffset:256]))
-
-				// The same reader is passed, the rest of the chunk is sent first
-				Ω(w.ReadFrom(rd)).Should(BeEquivalentTo(768))
-				Ω(s.Tell()).Should(BeEquivalentTo(1024))
-				Ω(w.Buffer()).Should(BeEmpty())
-				Ω(up.requests).Should(HaveLen(expectRequests))
-				Ω(data).Should(Equal(up.buf.Bytes()))
-			},
-			// 256@0 x3 -> nothing confirmed; next call: 256@0, then 3 full chunks
-			Entry("nothing accepted", []int{0, 0, 0}, int64(0), 7),
-			// 256@0 -> 100 confirmed, 156@100 x3 -> nothing confirmed; next call: 156@100, then 3 full chunks
-			Entry("a part accepted", []int{100, 0, 0, 0}, int64(100), 8),
+			// 256@0 -> 100 confirmed; next call: 156@100, then 3 full chunks
+			Entry("first chunk", 1024, []int{100}, 256, int64(100), 5),
+			// 256@0 -> nothing confirmed; next call: 256@0, then 3 full chunks
+			Entry("first chunk, nothing accepted", 1024, []int{0}, 256, int64(0), 5),
+			// 256@0 -> 255 confirmed; next call: 1@255, then 3 full chunks
+			Entry("first chunk except the last byte", 1024, []int{255}, 256, int64(255), 5),
+			// 256@0, 256@256 -> 100 confirmed; next call: 156@356, then 2 full chunks
+			Entry("middle chunk", 1024, []int{-1, 100}, 512, int64(356), 5),
+			// 3 full chunks, 232@768 -> 100 confirmed; next call: 132@868
+			Entry("last unaligned chunk", 1000, []int{-1, -1, -1, 100}, 1000, int64(868), 5),
 		)
 	})
 	Context("retry to upload data after error", func() {
@@ -367,9 +364,9 @@ var _ = Describe("ChunkedWriter", func() {
 			Ω(w.Flush()).Should(Equal(0))
 			Ω(s.Tell()).Should(BeEquivalentTo(0))
 		})
-		// The first 4 requests leave data[100:256] in the buffer: 256@0 -> 100 confirmed, 156@100 x3 -> nothing confirmed
+		// The first request leaves data[100:256] in the buffer: 256@0 -> 100 confirmed
 		It("should send the buffered data in a single request", func() {
-			up := mockUploader(5, 100, 0, 0, 0)
+			up := mockUploader(2, 100)
 			s, w := newWriter(Upload{Location: "/foo/bar", RemoteSize: 1024}, 256)
 			data := tRandomData(1024)
 			_, err := w.ReadFrom(bytes.NewReader(data))
@@ -378,11 +375,11 @@ var _ = Describe("ChunkedWriter", func() {
 			Ω(w.Flush()).Should(Equal(156))
 			Ω(s.Tell()).Should(BeEquivalentTo(256))
 			Ω(w.Buffer()).Should(BeEmpty())
-			Ω(up.requests).Should(HaveLen(5))
+			Ω(up.requests).Should(HaveLen(2))
 			Ω(data[:256]).Should(Equal(up.buf.Bytes()))
 		})
 		It("should return ErrIncompleteWrite and keep the rest if server accepts a part of the buffer", func() {
-			up := mockUploader(5, 100, 0, 0, 0, 50)
+			up := mockUploader(2, 100, 50)
 			s, w := newWriter(Upload{Location: "/foo/bar", RemoteSize: 1024}, 256)
 			data := tRandomData(1024)
 			_, err := w.ReadFrom(bytes.NewReader(data))
@@ -397,10 +394,9 @@ var _ = Describe("ChunkedWriter", func() {
 		})
 		It("should return error and keep the buffer if the request fails", func() {
 			replies := []*reply.StdReply{
-				tReply(reply.NoContent()), tReply(reply.NoContent()), tReply(reply.NoContent()), tReply(reply.NoContent()),
-				tReply(reply.Status(http.StatusConflict)),
+				tReply(reply.NoContent()), tReply(reply.Status(http.StatusConflict)),
 			}
-			up := &mockTusUploader{replies: replies, buf: bytes.NewBuffer(make([]byte, 0)), acceptSizes: []int{100, 0, 0, 0}}
+			up := &mockTusUploader{replies: replies, buf: bytes.NewBuffer(make([]byte, 0)), acceptSizes: []int{100}}
 			srvMock.AddMocks(up.makePatchRequest("/foo/bar", emptyHeaders).ReplyFunction(up.handler()))
 			s, w := newWriter(Upload{Location: "/foo/bar", RemoteSize: 1024}, 256)
 			data := tRandomData(1024)
@@ -417,11 +413,11 @@ var _ = Describe("ChunkedWriter", func() {
 	})
 	Context("Reset", func() {
 		It("should drop the buffered data, so that the next ReadFrom continues reading the reader", func() {
-			up := mockUploader(7, 100, 0, 0, 0)
+			up := mockUploader(4, 100)
 			s, w := newWriter(Upload{Location: "/foo/bar", RemoteSize: 1024}, 256)
 			data := tRandomData(1024)
 			rd := bytes.NewReader(data)
-			// 256@0 -> 100 confirmed, 156@100 x3 -> nothing confirmed
+			// 256@0 -> 100 confirmed
 			_, err := w.ReadFrom(rd)
 			Ω(err).Should(MatchError(ErrIncompleteWrite))
 
@@ -431,7 +427,7 @@ var _ = Describe("ChunkedWriter", func() {
 			// data[100:256] is dropped, 256@100, 256@356, 256@612
 			Ω(w.ReadFrom(rd)).Should(BeEquivalentTo(768))
 			Ω(s.Tell()).Should(BeEquivalentTo(868))
-			Ω(up.requests).Should(HaveLen(7))
+			Ω(up.requests).Should(HaveLen(4))
 			Ω(append(data[:100:100], data[256:]...)).Should(Equal(up.buf.Bytes()))
 		})
 	})
@@ -473,12 +469,11 @@ var _ = Describe("ChunkedWriter", func() {
 			Entry("negative", int64(-1), false),
 		)
 
-		// The first 4 requests leave data[100:256] in the buffer: 256@0 -> 100 confirmed, 156@100 x3 -> nothing
-		// confirmed. Then the server gets more data, whose confirmation is lost, which is emulated by writing to up.buf.
+		// The first request leaves data[100:256] in the buffer: 256@0 -> 100 confirmed. Then the server gets more data, whose confirmation is lost, which is emulated by writing to up.buf.
 		// The HEAD mock is matched before the PATCH mock, whose Upload-Offset matchers fail on requests without
 		// this header.
 		It("should skip the data the server has already received after Sync, without rewinding the reader", func() {
-			up := mockUploader(8, 100, 0, 0, 0)
+			up := mockUploader(5, 100)
 			eh := []string{"Upload-Concat", "Upload-Defer-Length", "Upload-Length", "Upload-Metadata", "Upload-Checksum", "Upload-Offset"}
 			srvMock.AddMocks(tRequest(http.MethodHead, "/foo/bar", eh).
 				Reply(tReply(reply.Status(http.StatusOK)).
@@ -502,11 +497,11 @@ var _ = Describe("ChunkedWriter", func() {
 			Ω(w.ReadFrom(rd)).Should(BeEquivalentTo(768))
 			Ω(s.Tell()).Should(BeEquivalentTo(1024))
 			Ω(w.Buffer()).Should(BeEmpty())
-			Ω(up.requests).Should(HaveLen(8))
+			Ω(up.requests).Should(HaveLen(5))
 			Ω(data).Should(Equal(up.buf.Bytes()))
 		})
 		It("should require rewinding the reader if the server offset is beyond the buffered data after Sync", func() {
-			up := mockUploader(7, 100, 0, 0, 0)
+			up := mockUploader(4, 100)
 			eh := []string{"Upload-Concat", "Upload-Defer-Length", "Upload-Length", "Upload-Metadata", "Upload-Checksum", "Upload-Offset"}
 			srvMock.AddMocks(tRequest(http.MethodHead, "/foo/bar", eh).Priority(-1).
 				Reply(tReply(reply.Status(http.StatusOK)).
@@ -530,7 +525,7 @@ var _ = Describe("ChunkedWriter", func() {
 			Ω(rd.Seek(s.Tell(), io.SeekStart)).Should(BeEquivalentTo(300))
 			Ω(w.ReadFrom(rd)).Should(BeEquivalentTo(724))
 			Ω(s.Tell()).Should(BeEquivalentTo(1024))
-			Ω(up.requests).Should(HaveLen(7))
+			Ω(up.requests).Should(HaveLen(4))
 			Ω(data).Should(Equal(up.buf.Bytes()))
 		})
 	})
@@ -566,17 +561,29 @@ var _ = Describe("ChunkedWriter", func() {
 			Ω(up.requests).Should(HaveLen(4))
 			Ω(data).Should(Equal(up.buf.Bytes()))
 		})
-		It("should resend the rest of the chunk if the server accepts a part of it", func() {
-			// 256@0, 256@256 -> 100 confirmed, 156@356, then 2 full chunks
-			up := mockUploader(5, -1, 100)
-			s, w := newWriter(Upload{Location: "/foo/bar", RemoteSize: 1024}, 256)
-			data := tRandomData(1024)
+		DescribeTable("should return ErrIncompleteWrite right away if the server accepts a part of a chunk, and continue on the next call",
+			func(acceptSizes []int, expectN int) {
+				up := mockUploader(5, acceptSizes...)
+				s, w := newWriter(Upload{Location: "/foo/bar", RemoteSize: 1024}, 256)
+				data := tRandomData(1024)
 
-			Ω(w.Write(data)).Should(Equal(1024))
-			Ω(s.Tell()).Should(BeEquivalentTo(1024))
-			Ω(up.requests).Should(HaveLen(5))
-			Ω(data).Should(Equal(up.buf.Bytes()))
-		})
+				n, err := w.Write(data)
+				Ω(n).Should(Equal(expectN))
+				Ω(err).Should(MatchError(ErrIncompleteWrite))
+				Ω(s.Tell()).Should(BeEquivalentTo(expectN))
+				Ω(w.Buffer()).Should(BeEmpty())
+				Ω(up.requests).Should(HaveLen(2))
+
+				Ω(w.Write(data[n:])).Should(Equal(1024 - expectN))
+				Ω(s.Tell()).Should(BeEquivalentTo(1024))
+				Ω(up.requests).Should(HaveLen(5))
+				Ω(data).Should(Equal(up.buf.Bytes()))
+			},
+			// 256@0, 256@256 -> 100 confirmed; next call: 256@356, 256@612, 156@868
+			Entry("a part accepted", []int{-1, 100}, 356),
+			// 256@0, 256@256 -> nothing confirmed; next call: 256@256, 256@512, 256@768
+			Entry("nothing accepted", []int{-1, 0}, 256),
+		)
 		It("should upload the data the server accepts and return ErrTooLarge when the server rejects the excess", func() {
 			replies := []*reply.StdReply{
 				tReply(reply.NoContent()), tReply(reply.NoContent()), tReply(reply.NoContent()), tReply(reply.NoContent()),
@@ -587,9 +594,15 @@ var _ = Describe("ChunkedWriter", func() {
 			s, w := newWriter(Upload{Location: "/foo/bar", RemoteSize: 1000}, 256)
 			data := tRandomData(1024)
 
-			// 256@0, 256@256, 256@512, 256@768 -> 232 confirmed, 24@1000 -> 413
+			// 256@0, 256@256, 256@512, 256@768 -> 232 confirmed
 			n, err := w.Write(data)
 			Ω(n).Should(Equal(1000))
+			Ω(err).Should(MatchError(ErrIncompleteWrite))
+			Ω(s.Tell()).Should(BeEquivalentTo(1000))
+
+			// 24@1000 -> 413
+			n, err = w.Write(data[n:])
+			Ω(n).Should(Equal(0))
 			Ω(err).Should(MatchError(ErrTooLarge))
 			Ω(s.Tell()).Should(BeEquivalentTo(1000))
 			Ω(up.requests).Should(HaveLen(5))
@@ -613,23 +626,6 @@ var _ = Describe("ChunkedWriter", func() {
 			Ω(w.Write(nil)).Should(Equal(0))
 			Ω(s.Tell()).Should(BeEquivalentTo(0))
 		})
-		It("should return ErrIncompleteWrite if nothing is accepted in 3 consecutive requests, and continue on the next call", func() {
-			// 256@0, then 256@256 x3 -> nothing confirmed; next call: 256@256, 256@512, 256@768
-			up := mockUploader(7, -1, 0, 0, 0)
-			s, w := newWriter(Upload{Location: "/foo/bar", RemoteSize: 1024}, 256)
-			data := tRandomData(1024)
-
-			n, err := w.Write(data)
-			Ω(n).Should(Equal(256))
-			Ω(err).Should(MatchError(ErrIncompleteWrite))
-			Ω(s.Tell()).Should(BeEquivalentTo(256))
-			Ω(w.Buffer()).Should(BeEmpty())
-
-			Ω(w.Write(data[n:])).Should(Equal(768))
-			Ω(s.Tell()).Should(BeEquivalentTo(1024))
-			Ω(up.requests).Should(HaveLen(7))
-			Ω(data).Should(Equal(up.buf.Bytes()))
-		})
 		It("should return the confirmed bytes and error if the request fails", func() {
 			replies := []*reply.StdReply{tReply(reply.NoContent()), tReply(reply.Status(http.StatusConflict))}
 			up := &mockTusUploader{replies: replies, buf: bytes.NewBuffer(make([]byte, 0))}
@@ -646,8 +642,8 @@ var _ = Describe("ChunkedWriter", func() {
 			Ω(data[:256]).Should(Equal(up.buf.Bytes()))
 		})
 		It("should not modify the data buffered by ReadFrom", func() {
-			// 256@0 -> 100 confirmed, 156@100 x3 -> nothing confirmed; Write: 256@100
-			up := mockUploader(5, 100, 0, 0, 0)
+			// 256@0 -> 100 confirmed; Write: 256@100
+			up := mockUploader(2, 100)
 			_, w := newWriter(Upload{Location: "/foo/bar", RemoteSize: 1024}, 256)
 			data := tRandomData(1024)
 			_, err := w.ReadFrom(bytes.NewReader(data))
@@ -656,8 +652,22 @@ var _ = Describe("ChunkedWriter", func() {
 			other := tRandomData(256)
 			Ω(w.Write(other)).Should(Equal(256))
 			Ω(w.Buffer()).Should(Equal(data[100:256]))
-			Ω(up.requests).Should(HaveLen(5))
+			Ω(up.requests).Should(HaveLen(2))
 		})
+		DescribeTable("should return io.ErrShortWrite if the writer accepts a part of a chunk without error",
+			func(limit int) {
+				sw := &shortWriter{limit: limit}
+				w := NewChunkedWriter(sw, 256)
+				data := tRandomData(1024)
+
+				n, err := w.Write(data)
+				Ω(n).Should(Equal(limit))
+				Ω(err).Should(MatchError(io.ErrShortWrite))
+				Ω(data[:limit]).Should(Equal(sw.buf.Bytes()))
+			},
+			Entry("a part accepted", 100),
+			Entry("nothing accepted", 0),
+		)
 	})
 	Context("error path", func() {
 		DescribeTable("should keep the response body in the error and close the original body",
@@ -673,7 +683,7 @@ var _ = Describe("ChunkedWriter", func() {
 			Entry("offset advanced too far", http.StatusNoContent, http.Header{"Upload-Offset": {"2048"}}, ErrProtocol),
 			Entry("malformed Upload-Expires", http.StatusNoContent, http.Header{"Upload-Offset": {"256"}, "Upload-Expires": {"tomorrow"}}, ErrProtocol),
 		)
-		It("should close the response bodies if the server accepts nothing in consecutive requests", func() {
+		It("should close the response body if the server accepts nothing", func() {
 			_, w := newWriter(Upload{Location: "/foo/bar", RemoteSize: 1024}, 256)
 			responder := &fakeResponder{status: http.StatusNoContent, header: http.Header{"Upload-Offset": {"0"}}, body: "server says"}
 			testClient.DoRequest = responder.Do
@@ -683,7 +693,7 @@ var _ = Describe("ChunkedWriter", func() {
 			Ω(n).Should(BeEquivalentTo(256))
 			Ω(err).Should(MatchError(ErrIncompleteWrite))
 			Ω(w.Buffer()).Should(Equal(data[:256]))
-			Ω(responder.bodies).Should(HaveLen(maxConsecutiveZeroWrites))
+			Ω(responder.bodies).Should(HaveLen(1))
 			for _, b := range responder.bodies {
 				Ω(b.closed).Should(BeTrue())
 			}
