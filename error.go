@@ -68,7 +68,11 @@ func (te TusError) Error() string {
 
 	b.WriteString(te.msg)
 	if te.resp != nil {
-		fmt.Fprintf(&b, " (HTTP %d; Content-Length=%d)", te.resp.StatusCode, te.resp.ContentLength)
+		fmt.Fprintf(&b, " (HTTP %d; Content-Length=%d", te.resp.StatusCode, te.resp.ContentLength)
+		if te.resp.Header.Get("Upload-Offset") != "" {
+			fmt.Fprintf(&b, "; Upload-Offset=%s", te.resp.Header.Get("Upload-Offset"))
+		}
+		b.WriteString(")")
 	}
 	if te.inner != nil {
 		fmt.Fprintf(&b, ": %s", te.inner.Error())
