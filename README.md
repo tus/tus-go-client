@@ -19,11 +19,12 @@ The API reference is available on [pkg.go.dev](https://pkg.go.dev/github.com/bdr
 
 ## Features
 
-- **Resumable upload streams**: `ChunkedStream` implements `io.ReaderFrom` and transfers the data in chunks, one
-  request per chunk, so it works with standard library helpers such as `io.Copy`. `RawStream` implements `io.Writer`
-  and sends each write in a single request.
-- **Upload management client** for creating, deleting, concatenating, and otherwise manipulating uploads.
-- **Protocol extensions** support (see below).
+- **Resumable chunked uploads that work with stdlib.** `ChunkedWriter` implements `io.Writer` and `io.ReaderFrom`
+  and sends the data in chunks, one request per chunk. After a failure, the transfer may be resumed where it stopped.
+- **Upload management.** `Client` creates, inspects, deletes and concatenates uploads on the server.
+- **Low-level control when you need it.** `Stream` is a bare tus transfer sequence without buffering,
+  so you can build your own chunking, buffering or retry strategy on top of it.
+- **Complete protocol coverage.** All tus 1.0.0 extensions are supported, see below.
 
 ### Supported extensions
 
@@ -103,3 +104,37 @@ func main() {
 ```
 
 More examples are available in the [package documentation](https://pkg.go.dev/github.com/bdragon300/tusgo/v2#pkg-examples).
+
+## Migrating from 0.x to 2.x
+
+2.x is a new major version with a new module path, so 0.x users keep getting 0.x until they switch explicitly.
+Change the import paths from `github.com/bdragon300/tusgo` to `github.com/bdragon300/tusgo/v2` (and
+`.../tusgo/checksum` to `.../tusgo/v2/checksum`), then update the code according to the key changes below.
+
+### Key changes
+
+1. **Values instead of out-parameters.** `Client` methods no longer fill a caller-provided `*Upload` and no longer
+   return `*http.Response`. They return the result and an error in traditional Go style.
+2. **The HTTP response is attached to the error.** To inspect a failed response, use `Response()` or `StatusCode()`
+   methods. This replaces the responses returned from `Client` and `UploadStream.LastResponse`. To access all
+   responses, use `Client.DoRequest`.
+3. **Uploads are addressed by location.** `DeleteUpload` and `ConcatenatePartialUploads` take location strings instead of
+   `Upload` values or streams.
+4. **`UploadStream` is split into `Stream` and `ChunkedWriter`.** `Stream` is an `io.Writer`-only, that implements 
+   the byte sending sequence transferring data in unbuffered requests. `ChunkedWriter` adds in-memory buffered 
+   chunking and can resume the failed transmission. Any other buffering algorithm (e.g. using a database) can be 
+   implemented atop of `Stream`.
+5. **A stream no longer owns the `Upload`.** `NewStream` takes `Upload` by value and copies its state. The stream
+   offset is available only via `Tell()`, and `Upload.RemoteOffset` is no longer updated.
+6. **No context methods.** `WithContext` is removed from both `Client` and stream. You can attach a context to 
+   requests in `Client.DoRequest`.
+7. **Request customization.** `NewClient` takes only the endpoint URL. Set the HTTP client in the `Client.Client` field,
+   or set `Client.DoRequest` to intercept every request (auth, tracing, rate limiting, etc). `GetRequest` is removed.
+   `ExtraHeaders` are now always sent.
+8. **Protocol version and capabilities are handled automatically.** The client queries the server on first use and
+   picks a supported protocol version. Call `FetchCapabilities()` if you need the server capabilities yourself.
+   `Client.Capabilities` is no longer available.
+9. **Deferred size is declared explicitly.** Instead of setting `RemoteSize` and `SetUploadSize` before the
+   first write, call `stream.DeclareSize(size)` at any time, for example after the source is exhausted.
+
+See [package documentation](https://pkg.go.dev/github.com/bdragon300/tusgo/v2) for more details on API v2.
