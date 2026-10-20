@@ -1,11 +1,11 @@
-module github.com/bdragon300/tusgo/e2e
+module github.com/bdragon300/tusgo/v2/e2e
 
 go 1.26.0
 
-replace github.com/bdragon300/tusgo => ../
+replace github.com/bdragon300/tusgo/v2 => ../
 
 require (
-	github.com/bdragon300/tusgo v0.2.0
+	github.com/bdragon300/tusgo/v2 v2.0.0
 	github.com/onsi/ginkgo/v2 v2.21.0
 	github.com/onsi/gomega v1.35.1
 	github.com/tus/tusd/v2 v2.10.1

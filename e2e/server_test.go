@@ -12,9 +12,9 @@ import (
 	"path/filepath"
 	"sync/atomic"
 
+	"github.com/bdragon300/tusgo/v2"
 	"golang.org/x/exp/slog"
 
-	"github.com/bdragon300/tusgo"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/tus/tusd/v2/pkg/filelocker"

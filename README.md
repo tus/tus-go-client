@@ -2,8 +2,8 @@
 
 [![Codecov](https://img.shields.io/codecov/c/gh/tus/tus-go-client/master)](https://app.codecov.io/gh/tus/tus-go-client/tree/master)
 ![GitHub Workflow Status (with branch)](https://img.shields.io/github/actions/workflow/status/bdragon300/tusgo/ci.yml?branch=master)
-[![Go reference](https://pkg.go.dev/badge/github.com/bdragon300/tusgo)](https://pkg.go.dev/github.com/bdragon300/tusgo)
-![GitHub go.mod Go version (subdirectory of monorepo)](https://img.shields.io/github/go-mod/go-version/bdragon300/tusgo)
+[![Go reference](https://pkg.go.dev/badge/github.com/bdragon300/tusgo/v2)](https://pkg.go.dev/github.com/bdragon300/tusgo/v2)
+![GitHub go.mod Go version (subdirectory of monorepo)](https://img.shields.io/github/go-mod/go-version/bdragon300/tusgo/v2)
 
 > **tus** is a protocol based on HTTP for *resumable file uploads*. Resumable
 > means that an upload can be interrupted at any moment and can be resumed without
@@ -15,7 +15,7 @@
 coverage of the [tus 1.0.0 specification](https://tus.io/protocols/resumable-upload), including the core protocol and
 all officially defined extensions.
 
-The API reference is available on [pkg.go.dev](https://pkg.go.dev/github.com/bdragon300/tusgo).
+The API reference is available on [pkg.go.dev](https://pkg.go.dev/github.com/bdragon300/tusgo/v2).
 
 ## Features
 
@@ -42,7 +42,7 @@ The API reference is available on [pkg.go.dev](https://pkg.go.dev/github.com/bdr
 ## Installation
 
 ```shell
-go get github.com/bdragon300/tusgo
+go get github.com/bdragon300/tusgo/v2
 ```
 
 ## Usage
@@ -59,7 +59,7 @@ import (
 	"net/url"
 	"os"
 
-	"github.com/bdragon300/tusgo"
+	"github.com/bdragon300/tusgo/v2"
 )
 
 func main() {
@@ -68,7 +68,7 @@ func main() {
 
 	// Assume that the upload has already been created on the server with a size of 1 MiB
 	u := tusgo.Upload{
-		Location:   "http://example.com/files/foo/bar",
+		Location:   "foo/bar",
 		RemoteSize: 1024 * 1024,
 	}
 
@@ -102,4 +102,4 @@ func main() {
 }
 ```
 
-More examples are available in the [package documentation](https://pkg.go.dev/github.com/bdragon300/tusgo#pkg-examples).
+More examples are available in the [package documentation](https://pkg.go.dev/github.com/bdragon300/tusgo/v2#pkg-examples).

@@ -11,7 +11,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/bdragon300/tusgo"
+	"github.com/bdragon300/tusgo/v2"
 )
 
 // RedisClient is an abstract Redis client, the subset of Redis commands used to store the pending chunk.

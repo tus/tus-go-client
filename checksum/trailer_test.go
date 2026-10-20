@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 
-	"github.com/bdragon300/tusgo/checksum"
+	"github.com/bdragon300/tusgo/v2/checksum"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )

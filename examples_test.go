@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bdragon300/tusgo"
+	"github.com/bdragon300/tusgo/v2"
 )
 
 // chunkSize is the size of a chunk sent in a single request.

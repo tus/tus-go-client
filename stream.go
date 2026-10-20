@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/bdragon300/tusgo/checksum"
+	"github.com/bdragon300/tusgo/v2/checksum"
 )
 
 // NewStream returns a new Stream initialized with the given Upload object.

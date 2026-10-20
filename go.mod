@@ -1,4 +1,4 @@
-module github.com/bdragon300/tusgo
+module github.com/bdragon300/tusgo/v2
 
 go 1.26.0
 

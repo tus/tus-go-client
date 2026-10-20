@@ -3,7 +3,7 @@ package e2e
 import (
 	"bytes"
 
-	"github.com/bdragon300/tusgo"
+	"github.com/bdragon300/tusgo/v2"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
