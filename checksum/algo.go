@@ -55,8 +55,10 @@ const (
 
 //revive:enable
 
+type AlgorithmList map[Algorithm]func() hash.Hash
+
 // Algorithms maps every supported algorithm to a constructor of its hash.
-var Algorithms = map[Algorithm]func() hash.Hash{
+var Algorithms = AlgorithmList{
 	MD4:         crypto.MD4.New,
 	MD5:         crypto.MD5.New,
 	SHA1:        crypto.SHA1.New,
@@ -83,10 +85,11 @@ var Algorithms = map[Algorithm]func() hash.Hash{
 	FNV1A:       func() hash.Hash { return fnv.New32a() },
 }
 
-// GetAlgorithm normalizes an algorithm name, i.e. lowercases it and removes all non-alphanumeric characters, and
-// looks the result up in Algorithms. Thus, "SHA-256", "sha 256" and "sha256" all denote the same algorithm.
-// It returns the normalized name and whether such an algorithm is supported.
-func GetAlgorithm(name string) (algo Algorithm, ok bool) {
+// Get returns the algorithm constructor function by algorithm name and whether algorithm is found in al.
+//
+// Before looking up, it normalizes the name: converts it to lowercase, removes all non-alphanumeric characters.
+// Thus, "SHA-256", "sha 256" and "sha256" all denote the same result.
+func (al AlgorithmList) Get(name string) (func() hash.Hash, bool) {
 	res := strings.Builder{}
 	for _, r := range name {
 		// Keep only letters and digits in the result, converting uppercase to lowercase
@@ -96,7 +99,6 @@ func GetAlgorithm(name string) (algo Algorithm, ok bool) {
 			res.WriteRune(r)
 		}
 	}
-	algo = Algorithm(res.String())
-	_, ok = Algorithms[algo]
-	return
+	a, ok := al[Algorithm(res.String())]
+	return a, ok
 }

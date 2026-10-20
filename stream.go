@@ -36,7 +36,8 @@ func NewStream(client *Client, upload Upload) (*Stream, error) {
 }
 
 // NewStreamWithChecksum returns a new Stream initialized with the given Upload object and with enabled
-// checksum verification using the specified algorithm.
+// checksum verification using the specified algorithm name (which is normalized, removing all non-alphanumeric
+// characters and converting to lowercase, see [checksum.AlgorithmList.Get]).
 // The returned stream calculates and attaches a checksum of the transferred data to every request, so the server
 // can verify its integrity.
 //
@@ -49,12 +50,11 @@ func NewStreamWithChecksum(client *Client, upload Upload, algorithm string) (*St
 		return nil, err
 	}
 
-	alg, ok := checksum.GetAlgorithm(algorithm)
+	f, ok := checksum.Algorithms.Get(algorithm)
 	if !ok {
 		return nil, fmt.Errorf("algorithm %q is not supported by library", algorithm)
 	}
 
-	f := checksum.Algorithms[alg]
 	rs.checksumHash = f()
 	rs.rawChecksumHashName = algorithm
 
