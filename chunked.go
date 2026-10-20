@@ -34,7 +34,8 @@ func NewChunkedWriter(w io.Writer, chunkSize int) *ChunkedWriter {
 // [ChunkedWriter.ReadFrom] stages each chunk in an internal buffer and keeps the unaccepted data there on error,
 // so a later call with the same reader resumes the process without rewinding it. [ChunkedWriter.Write] sends
 // the caller's slice in chunks, without buffering, but returns count of bytes accepted by the stream.
-// In both cases, if the stream accepts only part of a chunk, ChunkedWriter sends the rest before it moves on.
+// In both cases, if the stream accepts only part of a chunk during the transmission, ChunkedWriter resends its
+// remaining data in loop before moving to the next chunk.
 //
 // A ChunkedWriter is not safe for concurrent use.
 type ChunkedWriter struct {
