@@ -1,28 +1,21 @@
 package tusgo_test
 
 import (
-	"context"
+	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"net/url"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/bdragon300/tusgo/v2"
 )
-
-// RedisClient is an abstract Redis client, the subset of Redis commands used to store the pending chunk.
-type RedisClient interface {
-	// Get returns the value of key, or found=false if key does not exist.
-	Get(ctx context.Context, key string) (value []byte, found bool, err error)
-	// Set sets key to value, which expires after ttl.
-	Set(ctx context.Context, key string, value []byte, ttl time.Duration) error
-	// Del deletes key. Deleting a missing key is not an error.
-	Del(ctx context.Context, key string) error
-}
 
 // withRetry calls op until it succeeds, returns a permanent error or runs out of attempts, waiting with
 // an exponential backoff between attempts. If the offsets are out of sync, the stream adopts the server offset before
@@ -69,31 +62,56 @@ func sendChunk(s *tusgo.Stream, chunkOffset int64, data []byte) error {
 	}
 }
 
-// UploadViaRedis transfers the data from the unseekable src to the upload at location in chunks of chunkSize bytes.
+// writeFileAtomic writes data to a temporary file in the same directory as name and renames it to name, so name
+// contains either the previous or the new data in full, even if the process crashes in the middle of writing.
+func writeFileAtomic(name string, data []byte) error {
+	f, err := os.CreateTemp(filepath.Dir(name), filepath.Base(name)+".*.tmp")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(f.Name()) // No-op after a successful rename
+
+	if _, err = f.Write(data); err != nil {
+		f.Close()
+		return err
+	}
+	if err = f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
+	if err = f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(f.Name(), name)
+}
+
+// UploadViaTempFile transfers the data from the unseekable src to the upload at location in chunks of chunkSize bytes.
 //
-// Each chunk is saved to Redis before it is sent and deleted after the server accepts it, so the data consumed from
-// src survives failed requests and process restarts. If a pending chunk is found in Redis, e.g. left by an interrupted
-// previous run, it is sent first. Once src is exhausted, the upload size is declared on the server, if it was not
-// known when the upload was created.
+// Each chunk is saved to a file in dir before it is sent and deleted after the server accepts it, so the data consumed
+// from src survives failed requests and process restarts. If a pending chunk file is found, e.g. left by an
+// interrupted previous run, it is sent first.
 //
-// The chunk is stored under one key per upload. The value is the chunk offset in the upload as 8-byte big-endian
-// integer followed by the chunk data, so both are written atomically by a single SET.
-func UploadViaRedis(ctx context.Context, s *tusgo.Stream, location string, rdb RedisClient, src io.Reader, chunkSize int) error {
-	const ttl = 24 * time.Hour // Should not be shorter than the upload lifetime on the server
-	key := "tus:pending-chunk:" + location
+// The chunk is stored in one file per upload, named after the hash of location. The file contains the chunk offset in
+// the upload as 8-byte big-endian integer followed by the chunk data, and is replaced atomically, so both are always
+// consistent.
+func UploadViaTempFile(s *tusgo.Stream, location, dir string, src io.Reader, chunkSize int) error {
+	sum := sha256.Sum256([]byte(location))
+	name := filepath.Join(dir, "tus-pending-chunk-"+hex.EncodeToString(sum[:]))
 
 	buf := make([]byte, chunkSize)
 	for eof := false; !eof; {
 		var offset int64
 		var data []byte
 
-		v, ok, err := rdb.Get(ctx, key)
+		v, err := os.ReadFile(name)
+		ok := err == nil
 		switch {
+		case errors.Is(err, fs.ErrNotExist):
 		case err != nil:
 			return fmt.Errorf("load pending chunk: %w", err)
-		case ok && len(v) < 8:
+		case len(v) < 8:
 			return fmt.Errorf("malformed pending chunk of %d bytes", len(v))
-		case ok:
+		default:
 			offset, data = int64(binary.BigEndian.Uint64(v[:8])), v[8:]
 		}
 
@@ -111,7 +129,7 @@ func UploadViaRedis(ctx context.Context, s *tusgo.Stream, location string, rdb R
 			}
 			offset, data = s.Tell(), buf[:n]
 			v = binary.BigEndian.AppendUint64(make([]byte, 0, 8+n), uint64(offset))
-			if err = rdb.Set(ctx, key, append(v, data...), ttl); err != nil {
+			if err = writeFileAtomic(name, append(v, data...)); err != nil {
 				return fmt.Errorf("save chunk: %w", err)
 			}
 		}
@@ -120,7 +138,7 @@ func UploadViaRedis(ctx context.Context, s *tusgo.Stream, location string, rdb R
 			return fmt.Errorf("send chunk at offset %d: %w", offset, err)
 		}
 		// If the deletion fails, the chunk is loaded again on the next run and skipped, because the server has it
-		if err = rdb.Del(ctx, key); err != nil {
+		if err = os.Remove(name); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return fmt.Errorf("delete chunk: %w", err)
 		}
 	}
@@ -129,9 +147,9 @@ func UploadViaRedis(ctx context.Context, s *tusgo.Stream, location string, rdb R
 }
 
 // Example demonstrates the chunked transfer from an unseekable reader (data stream) of unknown size.
-// Every chunk is saved to Redis before it is sent, so it can be sent again after a failure, even though the source
-// cannot be rewound.
-func Example_unseekableReaderWithRedisStorage() {
+// Every chunk is saved to a temporary file before it is sent, so it can be sent again after a failure, even though
+// the source cannot be rewound.
+func Example_unseekableReaderWithTempFileStorage() {
 	endpoint, err := url.Parse("https://example.com/files")
 	if err != nil {
 		log.Fatalf("Failed to parse URL: %s", err)
@@ -139,7 +157,11 @@ func Example_unseekableReaderWithRedisStorage() {
 
 	// Chunk size is a trade-off: smaller chunks lose less progress on a broken connection, but need more requests
 	const chunkSize = 512 * 1024
-	var rdb RedisClient // Abstract Redis client
+	// To resume after a reboot, use a directory that is not cleared on boot, unlike the system temp directory may be
+	dir := filepath.Join(os.TempDir(), "tusgo")
+	if err = os.MkdirAll(dir, 0o700); err != nil {
+		log.Fatalf("Failed to create directory: %s", err)
+	}
 
 	cl := tusgo.NewClient(endpoint)
 	var src io.Reader = os.Stdin
@@ -159,7 +181,7 @@ func Example_unseekableReaderWithRedisStorage() {
 	if _, err = stream.Sync(); err != nil {
 		log.Fatalf("Failed to sync offsets: %s", err)
 	}
-	if err = UploadViaRedis(context.Background(), stream, u.Location, rdb, src, chunkSize); err != nil {
+	if err = UploadViaTempFile(stream, u.Location, dir, src, chunkSize); err != nil {
 		log.Fatalf("Failed to upload: %s", err)
 	}
 	if err = stream.DeclareSize(stream.Tell()); err != nil {
