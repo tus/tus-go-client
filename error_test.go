@@ -64,24 +64,38 @@ var _ = Describe("TusError", func() {
 				Ω(newTusError(te, resp, inner).Error()).Should(Equal(expect))
 			},
 			Entry("no headers", ErrUploadDoesNotExist, http.StatusNotFound, int64(14), nil, nil,
-				"upload does not exist (HTTP 404; Content-Length=14)"),
+				"upload does not exist: (HTTP 404: Content-Length=14)"),
 			Entry("unknown content length", ErrTooLarge, http.StatusRequestEntityTooLarge, int64(-1), nil, nil,
-				"data is too large (HTTP 413; Content-Length=-1)"),
+				"data is too large: (HTTP 413: Content-Length=-1)"),
 			Entry("Upload-Offset", ErrOffsetsNotSynced, http.StatusConflict, int64(14), http.Header{"Upload-Offset": {"512"}}, nil,
-				"client stream and server offsets are not synced (HTTP 409; Content-Length=14; Upload-Offset=512)"),
+				"client stream and server offsets are not synced: (HTTP 409: Content-Length=14; Upload-Offset=512)"),
 			Entry("zero Upload-Offset", ErrIncompleteWrite, http.StatusNoContent, int64(0), http.Header{"Upload-Offset": {"0"}}, nil,
-				"incomplete write (HTTP 204; Content-Length=0; Upload-Offset=0)"),
+				"incomplete write: (HTTP 204: Content-Length=0; Upload-Offset=0)"),
 			Entry("Upload-Offset is passed as is", ErrProtocol, http.StatusNoContent, int64(0), http.Header{"Upload-Offset": {"abc"}}, nil,
-				"protocol error (HTTP 204; Content-Length=0; Upload-Offset=abc)"),
+				"protocol error: (HTTP 204: Content-Length=0; Upload-Offset=abc)"),
 			Entry("empty Upload-Offset", ErrProtocol, http.StatusNoContent, int64(0), http.Header{"Upload-Offset": {""}}, nil,
-				"protocol error (HTTP 204; Content-Length=0)"),
+				"protocol error: (HTTP 204: Content-Length=0)"),
 			Entry("other headers only", ErrProtocol, http.StatusOK, int64(0), http.Header{"Upload-Length": {"1024"}, "X-Foo": {"bar"}}, nil,
-				"protocol error (HTTP 200; Content-Length=0)"),
+				"protocol error: (HTTP 200: Content-Length=0)"),
 			Entry("inner error", ErrProtocol, http.StatusOK, int64(0), nil, errors.New("boom"),
-				"protocol error (HTTP 200; Content-Length=0): boom"),
+				"protocol error: (HTTP 200: Content-Length=0): boom"),
 			Entry("Upload-Offset and inner error", ErrIncompleteWrite, http.StatusNoContent, int64(0), http.Header{"Upload-Offset": {"100"}}, errors.New("boom"),
-				"incomplete write (HTTP 204; Content-Length=0; Upload-Offset=100): boom"),
+				"incomplete write: (HTTP 204: Content-Length=0; Upload-Offset=100): boom"),
 		)
+		It("should include the method and the URL of the request", func() {
+			resp := testResponse(http.StatusNotFound, &closeTrackingBody{Reader: strings.NewReader("")}, 0)
+			resp.Request = httptest.NewRequest(http.MethodPatch, "http://example.com/files/abc?x=1", nil)
+
+			Ω(newTusError(ErrUploadDoesNotExist, resp, errors.New("boom")).Error()).
+				Should(Equal("upload does not exist: PATCH http://example.com/files/abc?x=1 (HTTP 404: Content-Length=0): boom"))
+		})
+		It("should omit the method and the URL if the request has no URL", func() {
+			resp := testResponse(http.StatusNotFound, &closeTrackingBody{Reader: strings.NewReader("")}, 0)
+			resp.Request = &http.Request{Method: http.MethodPatch}
+
+			Ω(newTusError(ErrUploadDoesNotExist, resp, nil).Error()).
+				Should(Equal("upload does not exist: (HTTP 404: Content-Length=0)"))
+		})
 		It("should not include the response body", func() {
 			err := newTusError(ErrUploadDoesNotExist, testResponse(http.StatusNotFound, &closeTrackingBody{Reader: strings.NewReader("no such upload")}, 14), nil)
 			Ω(err.Error()).ShouldNot(ContainSubstring("no such upload"))
@@ -97,7 +111,7 @@ var _ = Describe("TusError", func() {
 			defer resp.Body.Close()
 
 			Ω(newTusError(ErrOffsetsNotSynced, resp, nil).Error()).
-				Should(Equal("client stream and server offsets are not synced (HTTP 409; Content-Length=0; Upload-Offset=256)"))
+				Should(Equal("client stream and server offsets are not synced: GET " + srv.URL + " (HTTP 409: Content-Length=0; Upload-Offset=256)"))
 		})
 		It("should be usable as a wrapped error message", func() {
 			err := fmt.Errorf("upload failed: %w", newTusError(ErrCannotUpload, nil, errors.New("boom")))
@@ -296,7 +310,7 @@ var _ = Describe("TusError", func() {
 			err := newTusError(ErrUnexpectedResponse, resp, nil)
 			Ω(err).Should(And(
 				MatchError(ErrUnexpectedResponse),
-				MatchError("unexpected HTTP response code (HTTP 500; Content-Length=4): read response body: read on closed body"),
+				MatchError("unexpected HTTP response code: (HTTP 500: Content-Length=4): read response body: read on closed body"),
 			))
 			Ω(err.Response()).ShouldNot(BeIdenticalTo(resp))
 			Ω(err.Response()).Should(HaveHTTPStatus(http.StatusInternalServerError))
@@ -313,7 +327,7 @@ var _ = Describe("TusError", func() {
 			Ω(err).Should(And(
 				MatchError(ErrProtocol),
 				MatchError(inner),
-				MatchError("protocol error (HTTP 200; Content-Length=4): read response body: read on closed body\nbad header"),
+				MatchError("protocol error: (HTTP 200: Content-Length=4): read response body: read on closed body\nbad header"),
 			))
 		})
 	})

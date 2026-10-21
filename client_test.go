@@ -2,6 +2,7 @@ package tusgo
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"math/rand"
 	"net/http"
@@ -259,7 +260,7 @@ var _ = Describe("Client", func() {
 				_, err = testClient.tusRequest(req)
 				Ω(err).Should(And(
 					MatchError(ErrProtocol),
-					MatchError(ContainSubstring("protocol error (HTTP 412;")),
+					MatchError(ContainSubstring("protocol error: GET "+srvMock.URL()+"/foo (HTTP 412:")),
 					MatchError(ContainSubstring("server does not support protocol version \"1.0.0\", supported versions: 1.0.1,0.9.0")),
 				))
 				Ω(tErrResponse(err)).Should(And(HaveHTTPStatus(http.StatusPreconditionFailed), HaveHTTPBody([]byte("test"))))
@@ -584,16 +585,16 @@ var _ = Describe("Client", func() {
 						_, err := testClient.GetUpload("/foo/bar")
 						Ω(err).Should(And(
 							MatchError(expectErr),
-							MatchError(ContainSubstring(expectMsg)),
+							MatchError(ContainSubstring(fmt.Sprintf(expectMsg, srvMock.URL()))),
 						))
 						Ω(tErrResponse(err)).Should(HaveHTTPStatus(status))
 					},
-					Entry("404", http.StatusNotFound, ErrUploadDoesNotExist, "upload does not exist (HTTP 404;"),
-					Entry("410", http.StatusGone, ErrUploadDoesNotExist, "upload does not exist (HTTP 410;"),
-					Entry("403", http.StatusForbidden, ErrUploadDoesNotExist, "upload does not exist (HTTP 403;"),
-					Entry("400", http.StatusBadRequest, ErrUnexpectedResponse, "unexpected HTTP response code (HTTP 400;"),
-					Entry("201", http.StatusCreated, ErrUnexpectedResponse, "unexpected HTTP response code (HTTP 201;"),
-					Entry("412", http.StatusPreconditionFailed, ErrProtocol, "protocol error (HTTP 412;"),
+					Entry("404", http.StatusNotFound, ErrUploadDoesNotExist, "upload does not exist: HEAD %s/foo/bar (HTTP 404:"),
+					Entry("410", http.StatusGone, ErrUploadDoesNotExist, "upload does not exist: HEAD %s/foo/bar (HTTP 410:"),
+					Entry("403", http.StatusForbidden, ErrUploadDoesNotExist, "upload does not exist: HEAD %s/foo/bar (HTTP 403:"),
+					Entry("400", http.StatusBadRequest, ErrUnexpectedResponse, "unexpected HTTP response code: HEAD %s/foo/bar (HTTP 400:"),
+					Entry("201", http.StatusCreated, ErrUnexpectedResponse, "unexpected HTTP response code: HEAD %s/foo/bar (HTTP 201:"),
+					Entry("412", http.StatusPreconditionFailed, ErrProtocol, "protocol error: HEAD %s/foo/bar (HTTP 412:"),
 				)
 			})
 			When("corrupted numeric header value", func() {
@@ -887,15 +888,15 @@ var _ = Describe("Client", func() {
 						Ω(tErrResponse(err)).Should(HaveHTTPStatus(status))
 						Ω(err).Should(And(
 							MatchError(expectErr),
-							MatchError(ContainSubstring(expectErrMsg)),
+							MatchError(ContainSubstring(fmt.Sprintf(expectErrMsg, srvMock.URL()))),
 						))
 					},
-					Entry("413", http.StatusRequestEntityTooLarge, ErrTooLarge, "data is too large (HTTP 413;"),
-					Entry("404", http.StatusNotFound, ErrUnexpectedResponse, "unexpected HTTP response code (HTTP 404;"),
-					Entry("410", http.StatusGone, ErrUnexpectedResponse, "unexpected HTTP response code (HTTP 410;"),
-					Entry("403", http.StatusForbidden, ErrUnexpectedResponse, "unexpected HTTP response code (HTTP 403;"),
-					Entry("400", http.StatusBadRequest, ErrUnexpectedResponse, "unexpected HTTP response code (HTTP 400;"),
-					Entry("200", http.StatusOK, ErrUnexpectedResponse, "unexpected HTTP response code (HTTP 200;"),
+					Entry("413", http.StatusRequestEntityTooLarge, ErrTooLarge, "data is too large: POST %s (HTTP 413:"),
+					Entry("404", http.StatusNotFound, ErrUnexpectedResponse, "unexpected HTTP response code: POST %s (HTTP 404:"),
+					Entry("410", http.StatusGone, ErrUnexpectedResponse, "unexpected HTTP response code: POST %s (HTTP 410:"),
+					Entry("403", http.StatusForbidden, ErrUnexpectedResponse, "unexpected HTTP response code: POST %s (HTTP 403:"),
+					Entry("400", http.StatusBadRequest, ErrUnexpectedResponse, "unexpected HTTP response code: POST %s (HTTP 400:"),
+					Entry("200", http.StatusOK, ErrUnexpectedResponse, "unexpected HTTP response code: POST %s (HTTP 200:"),
 				)
 			})
 		})
@@ -1081,18 +1082,18 @@ var _ = Describe("Client", func() {
 					Ω(tErrResponse(err).StatusCode).Should(Equal(expectStatus))
 					Ω(err).Should(And(
 						MatchError(expectErr),
-						MatchError(ContainSubstring(expectErrMsg)),
+						MatchError(ContainSubstring(fmt.Sprintf(expectErrMsg, srvMock.URL()))),
 					))
 				},
-				Entry("409", http.StatusConflict, ErrOffsetsNotSynced, "client stream and server offsets are not synced (HTTP 409;"),
-				Entry("403", http.StatusForbidden, ErrCannotUpload, "can not upload (HTTP 403;"),
-				Entry("410", http.StatusGone, ErrUploadDoesNotExist, "upload does not exist (HTTP 410;"),
-				Entry("404", http.StatusNotFound, ErrUploadDoesNotExist, "upload does not exist (HTTP 404;"),
-				Entry("413", http.StatusRequestEntityTooLarge, ErrTooLarge, "data is too large (HTTP 413;"),
-				Entry("460", 460, ErrUnexpectedResponse, "unexpected HTTP response code (HTTP 460;"),
-				Entry("401", http.StatusUnauthorized, ErrUnexpectedResponse, "unexpected HTTP response code (HTTP 401;"),
-				Entry("400", http.StatusBadRequest, ErrUnexpectedResponse, "unexpected HTTP response code (HTTP 400;"),
-				Entry("200", http.StatusOK, ErrUnexpectedResponse, "unexpected HTTP response code (HTTP 200;"),
+				Entry("409", http.StatusConflict, ErrOffsetsNotSynced, "client stream and server offsets are not synced: POST %s (HTTP 409:"),
+				Entry("403", http.StatusForbidden, ErrCannotUpload, "can not upload: POST %s (HTTP 403:"),
+				Entry("410", http.StatusGone, ErrUploadDoesNotExist, "upload does not exist: POST %s (HTTP 410:"),
+				Entry("404", http.StatusNotFound, ErrUploadDoesNotExist, "upload does not exist: POST %s (HTTP 404:"),
+				Entry("413", http.StatusRequestEntityTooLarge, ErrTooLarge, "data is too large: POST %s (HTTP 413:"),
+				Entry("460", 460, ErrUnexpectedResponse, "unexpected HTTP response code: POST %s (HTTP 460:"),
+				Entry("401", http.StatusUnauthorized, ErrUnexpectedResponse, "unexpected HTTP response code: POST %s (HTTP 401:"),
+				Entry("400", http.StatusBadRequest, ErrUnexpectedResponse, "unexpected HTTP response code: POST %s (HTTP 400:"),
+				Entry("200", http.StatusOK, ErrUnexpectedResponse, "unexpected HTTP response code: POST %s (HTTP 200:"),
 			)
 			When("server creates upload but accepts only a part of the data", func() {
 				DescribeTable("should return ErrIncompleteWrite and the created upload",
@@ -1220,15 +1221,15 @@ var _ = Describe("Client", func() {
 						err := testClient.DeleteUpload("/foo/bar")
 						Ω(tErrResponse(err)).Should(HaveHTTPStatus(status))
 						Ω(err).Should(And(
-							MatchError(expectErr), MatchError(ContainSubstring(expectErrMsg)),
+							MatchError(expectErr), MatchError(ContainSubstring(fmt.Sprintf(expectErrMsg, srvMock.URL()))),
 						))
 					},
-					Entry("413", http.StatusRequestEntityTooLarge, ErrUnexpectedResponse, "unexpected HTTP response code (HTTP 413;"),
-					Entry("404", http.StatusNotFound, ErrUploadDoesNotExist, "upload does not exist (HTTP 404;"),
-					Entry("410", http.StatusGone, ErrUploadDoesNotExist, "upload does not exist (HTTP 410;"),
-					Entry("403", http.StatusForbidden, ErrUploadDoesNotExist, "upload does not exist (HTTP 403;"),
-					Entry("400", http.StatusBadRequest, ErrUnexpectedResponse, "unexpected HTTP response code (HTTP 400;"),
-					Entry("200", http.StatusOK, ErrUnexpectedResponse, "unexpected HTTP response code (HTTP 200;"),
+					Entry("413", http.StatusRequestEntityTooLarge, ErrUnexpectedResponse, "unexpected HTTP response code: DELETE %s/foo/bar (HTTP 413:"),
+					Entry("404", http.StatusNotFound, ErrUploadDoesNotExist, "upload does not exist: DELETE %s/foo/bar (HTTP 404:"),
+					Entry("410", http.StatusGone, ErrUploadDoesNotExist, "upload does not exist: DELETE %s/foo/bar (HTTP 410:"),
+					Entry("403", http.StatusForbidden, ErrUploadDoesNotExist, "upload does not exist: DELETE %s/foo/bar (HTTP 403:"),
+					Entry("400", http.StatusBadRequest, ErrUnexpectedResponse, "unexpected HTTP response code: DELETE %s/foo/bar (HTTP 400:"),
+					Entry("200", http.StatusOK, ErrUnexpectedResponse, "unexpected HTTP response code: DELETE %s/foo/bar (HTTP 200:"),
 				)
 			})
 		})
@@ -1373,15 +1374,15 @@ var _ = Describe("Client", func() {
 						Ω(tErrResponse(err)).Should(HaveHTTPStatus(status))
 						Ω(err).Should(And(
 							MatchError(expectErr),
-							MatchError(ContainSubstring(expectErrMsg)),
+							MatchError(ContainSubstring(fmt.Sprintf(expectErrMsg, srvMock.URL()))),
 						))
 						Ω(loc).Should(BeEmpty())
 					},
-					Entry("404", http.StatusNotFound, ErrUploadDoesNotExist, "upload does not exist (HTTP 404;"),
-					Entry("410", http.StatusGone, ErrUploadDoesNotExist, "upload does not exist (HTTP 410;"),
-					Entry("403", http.StatusForbidden, ErrUnexpectedResponse, "unexpected HTTP response code (HTTP 403;"),
-					Entry("400", http.StatusBadRequest, ErrUnexpectedResponse, "unexpected HTTP response code (HTTP 400;"),
-					Entry("200", http.StatusOK, ErrUnexpectedResponse, "unexpected HTTP response code (HTTP 200;"),
+					Entry("404", http.StatusNotFound, ErrUploadDoesNotExist, "upload does not exist: POST %s (HTTP 404:"),
+					Entry("410", http.StatusGone, ErrUploadDoesNotExist, "upload does not exist: POST %s (HTTP 410:"),
+					Entry("403", http.StatusForbidden, ErrUnexpectedResponse, "unexpected HTTP response code: POST %s (HTTP 403:"),
+					Entry("400", http.StatusBadRequest, ErrUnexpectedResponse, "unexpected HTTP response code: POST %s (HTTP 400:"),
+					Entry("200", http.StatusOK, ErrUnexpectedResponse, "unexpected HTTP response code: POST %s (HTTP 200:"),
 				)
 			})
 		})
@@ -1505,15 +1506,15 @@ var _ = Describe("Client", func() {
 						_, err := testClient.FetchCapabilities()
 						Ω(err).Should(And(
 							MatchError(expectErr),
-							MatchError(ContainSubstring(expectErrMsg)),
+							MatchError(ContainSubstring(fmt.Sprintf(expectErrMsg, srvMock.URL()))),
 						))
 					},
-					Entry("404", http.StatusNotFound, ErrUnexpectedResponse, "unexpected HTTP response code (HTTP 404;"),
-					Entry("410", http.StatusGone, ErrUnexpectedResponse, "unexpected HTTP response code (HTTP 410;"),
-					Entry("403", http.StatusForbidden, ErrUnexpectedResponse, "unexpected HTTP response code (HTTP 403;"),
-					Entry("400", http.StatusBadRequest, ErrUnexpectedResponse, "unexpected HTTP response code (HTTP 400;"),
-					Entry("201", http.StatusCreated, ErrUnexpectedResponse, "unexpected HTTP response code (HTTP 201;"),
-					Entry("412", http.StatusPreconditionFailed, ErrUnexpectedResponse, "unexpected HTTP response code (HTTP 412;"),
+					Entry("404", http.StatusNotFound, ErrUnexpectedResponse, "unexpected HTTP response code: OPTIONS %s (HTTP 404:"),
+					Entry("410", http.StatusGone, ErrUnexpectedResponse, "unexpected HTTP response code: OPTIONS %s (HTTP 410:"),
+					Entry("403", http.StatusForbidden, ErrUnexpectedResponse, "unexpected HTTP response code: OPTIONS %s (HTTP 403:"),
+					Entry("400", http.StatusBadRequest, ErrUnexpectedResponse, "unexpected HTTP response code: OPTIONS %s (HTTP 400:"),
+					Entry("201", http.StatusCreated, ErrUnexpectedResponse, "unexpected HTTP response code: OPTIONS %s (HTTP 201:"),
+					Entry("412", http.StatusPreconditionFailed, ErrUnexpectedResponse, "unexpected HTTP response code: OPTIONS %s (HTTP 412:"),
 				)
 			})
 		})
