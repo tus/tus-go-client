@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"crypto/rand"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -11,9 +12,9 @@ import (
 	"path/filepath"
 	"sync/atomic"
 
+	"github.com/bdragon300/tusgo/v2"
 	"golang.org/x/exp/slog"
 
-	"github.com/bdragon300/tusgo"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/tus/tusd/v2/pkg/filelocker"
@@ -72,15 +73,47 @@ func startServer(configure func(cfg *handler.Config), mw middleware) *tusServer 
 
 // NewClient returns a new client working with the server.
 func (s *tusServer) NewClient() *tusgo.Client {
-	return tusgo.NewClient(s.Client(), s.BaseURL)
+	cl := tusgo.NewClient(s.BaseURL)
+	cl.Client = s.Client()
+	return cl
 }
 
-// StoredData returns the data the server has stored for the upload.
-func (s *tusServer) StoredData(u tusgo.Upload) []byte {
+// StoredData returns the data the server has stored for the upload at the given location.
+func (s *tusServer) StoredData(location string) []byte {
 	GinkgoHelper()
-	data, err := os.ReadFile(filepath.Join(s.Dir, path.Base(u.Location)))
+	data, err := os.ReadFile(filepath.Join(s.Dir, path.Base(location)))
 	Expect(err).NotTo(HaveOccurred())
 	return data
+}
+
+// newStream returns a new stream transferring the data to the upload in a single request per Write call.
+func newStream(cl *tusgo.Client, u tusgo.Upload) *tusgo.Stream {
+	GinkgoHelper()
+	s, err := tusgo.NewStream(cl, u)
+	Expect(err).NotTo(HaveOccurred())
+	return s
+}
+
+// newChunkedWriter returns a new stream and a writer on top of it transferring the data in chunks of chunkSize bytes.
+func newChunkedWriter(cl *tusgo.Client, u tusgo.Upload, chunkSize int) (*tusgo.Stream, *tusgo.ChunkedWriter) {
+	GinkgoHelper()
+	s := newStream(cl, u)
+	return s, tusgo.NewChunkedWriter(s, chunkSize)
+}
+
+// readerOnly hides all methods of the underlying reader except Read, such as io.WriterTo, so that
+// io.Copy(dst, readerOnly{r}) calls dst.ReadFrom.
+type readerOnly struct {
+	io.Reader
+}
+
+// errResponse returns the response kept by the tusgo.TusError found in err chain, or nil.
+func errResponse(err error) *http.Response {
+	var te tusgo.TusError
+	if errors.As(err, &te) {
+		return te.Response()
+	}
+	return nil
 }
 
 // randomData returns n random bytes.
@@ -90,12 +123,6 @@ func randomData(n int) []byte {
 	_, err := rand.Read(data)
 	Expect(err).NotTo(HaveOccurred())
 	return data
-}
-
-// readerOnly hides all methods of r except Read. Use it to make io.Copy call UploadStream.ReadFrom: otherwise, for
-// a source implementing io.WriterTo, like bytes.Reader, io.Copy calls its WriteTo, that ends up in UploadStream.Write.
-func readerOnly(r io.Reader) io.Reader {
-	return struct{ io.Reader }{r}
 }
 
 // requestCounter is a middleware that counts the requests with the given method.
@@ -111,6 +138,16 @@ func (rc *requestCounter) Middleware(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// chain combines the middlewares, the first one is the outermost.
+func chain(mws ...middleware) middleware {
+	return func(next http.Handler) http.Handler {
+		for i := len(mws) - 1; i >= 0; i-- {
+			next = mws[i](next)
+		}
+		return next
+	}
 }
 
 // fault replaces the handling of a request, it may call next to pass the request to tusd.
@@ -140,22 +177,26 @@ func acceptOnly(n int64) fault {
 	}
 }
 
-// dropResponse lets tusd process the request completely, but then closes the connection instead of sending the
-// response, as if the connection was broken after the server has committed the data.
-func dropResponse() fault {
-	return func(next http.Handler, w http.ResponseWriter, r *http.Request) {
-		defer GinkgoRecover()
-		next.ServeHTTP(&discardResponseWriter{header: make(http.Header)}, r)
-		conn, _, err := http.NewResponseController(w).Hijack()
-		Expect(err).NotTo(HaveOccurred())
-		Expect(conn.Close()).To(Succeed())
+// replyStatus replies with the given status code without passing the request to tusd.
+func replyStatus(code int) fault {
+	return func(_ http.Handler, w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.Header().Set("Tus-Resumable", "1.0.0")
+		w.WriteHeader(code)
 	}
 }
 
-type discardResponseWriter struct {
-	header http.Header
+// dropResponse passes the request to tusd, so that the data is stored, but closes the connection instead of sending the
+// response. The client gets a network error and does not learn the new offset.
+func dropResponse() fault {
+	return func(next http.Handler, w http.ResponseWriter, r *http.Request) {
+		next.ServeHTTP(httptest.NewRecorder(), r)
+		// The handler runs in a server goroutine, where a failed assertion cannot stop the spec, so just panic,
+		// which makes the server close the connection as well
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			panic(err)
+		}
+		_ = conn.Close()
+	}
 }
-
-func (d *discardResponseWriter) Header() http.Header         { return d.header }
-func (d *discardResponseWriter) Write(p []byte) (int, error) { return len(p), nil }
-func (d *discardResponseWriter) WriteHeader(int)             {}

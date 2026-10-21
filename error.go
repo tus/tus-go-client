@@ -1,27 +1,87 @@
 package tusgo
 
 import (
+	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
-	"unicode/utf8"
+	"net/url"
+	"strings"
+)
+
+var (
+	// ErrUnsupportedFeature is returned when an action requires a TUS extension the server does not support.
+	ErrUnsupportedFeature = TusError{msg: "unsupported feature"}
+
+	// ErrTooLarge is returned when creating an upload that is larger than the server accepts, or when sending more
+	// data than the upload can contain.
+	ErrTooLarge = TusError{msg: "data is too large"}
+
+	// ErrUploadDoesNotExist is returned when the upload is not found on the server or the access to it is denied.
+	ErrUploadDoesNotExist = TusError{msg: "upload does not exist"}
+
+	// ErrOffsetsNotSynced indicates that stream's offset does not match the remote offset on the server.
+	// This error may occur when sending the data from the start to the upload that already contains some data.
+	// Or when the server has accepted data, but its response was lost.
+	//
+	// To fix this error, call stream's Sync method and try again.
+	ErrOffsetsNotSynced = TusError{msg: "client stream and server offsets are not synced"}
+
+	// ErrChecksumMismatch is returned when the server has detected a corruption of the transferred data.
+	ErrChecksumMismatch = TusError{msg: "checksum mismatch"}
+
+	// ErrIncompleteWrite is returned when the server responds successfully but rejects some or all sent data.
+	// This may indicate the server-side backpressure, which means the server is overloaded. Retry after a short delay.
+	ErrIncompleteWrite = TusError{msg: "incomplete write"}
+
+	// ErrCannotUpload is returned when the server explicitly refuses to accept any data for an existing upload.
+	// For example, this may happen while trying to transfer data to a "final" upload that has been concatenated from
+	// partial uploads, which is forbidden by the TUS protocol.
+	ErrCannotUpload = TusError{msg: "can not upload"}
+
+	// ErrProtocol is a general error that is returned when an otherwise successful server response contains malformed data.
+	// This error may indicate that the server does not support the requested TUS version, or server misbehaves.
+	ErrProtocol = TusError{msg: "protocol error"}
+
+	// ErrUnexpectedResponse is a general error that returned when the server has responded with an unexpected status code.
+	// This error may indicate that the server does not support the TUS protocol, or the response is originated
+	// by a proxy server or CDN.
+	ErrUnexpectedResponse = TusError{msg: "unexpected HTTP response code"}
 )
 
 // bodyReadLimit is the maximum number of the response body bytes included in an error message
-const bodyReadLimit = 256
+const bodyReadLimit = 2 * 1024 // 2 KiB
 
-// TusError represents an error occurred during a TUS operation.
+// TusError represents an error occurred during a TUS operation. It also may contain the HTTP response that caused the
+// error, if any.
 type TusError struct {
 	inner error
+	resp  *http.Response
 	msg   string
 }
 
 func (te TusError) Error() string {
-	if te.inner == nil {
-		return te.msg
+	var b strings.Builder
+
+	b.WriteString(te.msg)
+	if te.resp != nil {
+		b.WriteRune(':')
+		if te.resp.Request != nil && te.resp.Request.URL != nil {
+			fmt.Fprintf(&b, " %s %s", te.resp.Request.Method, te.resp.Request.URL)
+		}
+		fmt.Fprintf(&b, " (HTTP %d: Content-Length=%d", te.resp.StatusCode, te.resp.ContentLength)
+		if te.resp.Header.Get("Upload-Offset") != "" {
+			fmt.Fprintf(&b, "; Upload-Offset=%s", te.resp.Header.Get("Upload-Offset"))
+		}
+		b.WriteString(")")
 	}
-	return fmt.Sprintf("%s: %s", te.msg, te.inner)
+	if te.inner != nil {
+		fmt.Fprintf(&b, ": %s", te.inner.Error())
+	}
+	return b.String()
 }
 
 func (te TusError) Unwrap() error {
@@ -34,75 +94,97 @@ func (te TusError) Is(e error) bool {
 	return ok && v.msg == te.msg || errors.Is(te.inner, e)
 }
 
-func newTusErrorWithErr(te TusError, inner error) TusError {
-	te.inner = inner
-	return te
+// Response returns the copy of the HTTP response that caused the error, or nil if no response has been made.
+// The response body is already closed and contains up to first 2KiB of the original response body if it was available.
+func (te TusError) Response() *http.Response {
+	return te.resp
 }
 
-func newTusErrorWithResponse(te TusError, r *http.Response) TusError {
-	if r == nil {
-		te.inner = fmt.Errorf("response is nil")
-		return te
+// StatusCode is a convenience method that returns the HTTP status code of the response that caused the error,
+// or 0 if no response has been made.
+//
+// Typical usage:
+//
+//	var te tusgo.TusError
+//	if errors.As(err, &te) && te.StatusCode() == http.StatusInternalServerError {
+//	    log.Printf("internal server error: %v", te)
+//	}
+func (te TusError) StatusCode() int {
+	if te.resp != nil {
+		return te.resp.StatusCode
+	}
+	return 0
+}
+
+// IsErrorRetryable reports whether the operation that returned err may succeed if repeated.
+//
+// The following errors are retryable:
+//
+//   - [ErrIncompleteWrite], [ErrChecksumMismatch] and [ErrOffsetsNotSynced]. The latter requires calling
+//     [Stream.Sync] before repeating
+//   - [ErrUnexpectedResponse] with status 408, 423, 429, 500, 502, 503 or 504
+//   - network errors, such as connection failures, timeouts and connections closed by the server
+//
+// Other errors, including [context.Canceled] and an expired [context.Context] deadline, are not retryable.
+func IsErrorRetryable(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) {
+		return false
 	}
 
-	b := make([]byte, bodyReadLimit)
-	if l, err := io.ReadFull(r.Body, b); err == nil || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-		size := r.Header.Get("Content-Length")
-		if size == "" {
-			size = "?"
+	var te TusError
+	if errors.As(err, &te) {
+		switch te.msg {
+		case ErrIncompleteWrite.msg, ErrChecksumMismatch.msg, ErrOffsetsNotSynced.msg:
+			return true
+		case ErrUnexpectedResponse.msg:
+			switch te.StatusCode() {
+			case http.StatusRequestTimeout, http.StatusLocked, http.StatusTooManyRequests, http.StatusInternalServerError,
+				http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+				return true
+			}
 		}
-		var body string
-		if !utf8.Valid(b[:l]) {
-			body = fmt.Sprintf("%v", b[:l]) // if the body is not valid UTF-8, print it as a byte slice
+		return false
+	}
+
+	// url.Error, returned by http.Client, implements net.Error itself, so check the error it wraps
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		if errors.Is(ue.Err, io.EOF) || errors.Is(ue.Err, io.ErrUnexpectedEOF) { // Connection closed by the server
+			return true
+		}
+		err = ue.Err
+	}
+	var de *net.DNSError
+	if errors.As(err, &de) {
+		return !de.IsNotFound
+	}
+	var ne net.Error
+	if errors.As(err, &ne) {
+		// context.DeadlineExceeded is a net.Error too, but it means the caller's deadline has passed.
+		// http.Client.Timeout is reported with a different error.
+		return ne != context.DeadlineExceeded
+	}
+	return false
+}
+
+func newTusError(te TusError, r *http.Response, e error) TusError {
+	// Read the response body up to bodyReadLimit byte
+	if r != nil {
+		r2 := *r
+		te.resp = &r2
+
+		b := make([]byte, bodyReadLimit)
+		if l, err := io.ReadFull(r2.Body, b); err == nil || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			r2.Body = io.NopCloser(bytes.NewReader(b[:l]))
 		} else {
-			body = string(b[:l])
+			te.inner = fmt.Errorf("read response body: %w", err)
+			r2.Body = io.NopCloser(bytes.NewReader(nil))
 		}
-		switch {
-		case err == nil:
-			te.inner = fmt.Errorf("HTTP %d: body (%s bytes): %s... (truncated)", r.StatusCode, size, body)
-		case l > 0:
-			te.inner = fmt.Errorf("HTTP %d: body (%s bytes): %s", r.StatusCode, size, body)
-		default:
-			te.inner = fmt.Errorf("HTTP %d: empty body", r.StatusCode)
-		}
-	} else {
-		te.inner = fmt.Errorf("HTTP %d: read body: %w", r.StatusCode, err)
 	}
+
+	if e != nil {
+		te.inner = errors.Join(te.inner, e)
+	}
+
 	return te
 }
-
-var (
-	// ErrUnsupportedFeature is returned when an action requires a TUS extension the server does not support.
-	ErrUnsupportedFeature = TusError{msg: "unsupported feature"}
-
-	// ErrUploadTooLarge is returned when creating an upload that is larger than the server accepts.
-	ErrUploadTooLarge = TusError{msg: "upload is too large"}
-
-	// ErrUploadDoesNotExist is returned when the upload is not found on the server or the access to it is denied.
-	ErrUploadDoesNotExist = TusError{msg: "upload does not exist"}
-
-	// ErrOffsetsNotSynced is returned when the server expects the data at an offset other than the local one.
-	// Call UploadStream.Sync to adopt the server offset.
-	ErrOffsetsNotSynced = TusError{msg: "client stream and server offsets are not synced"}
-
-	// ErrChecksumMismatch is returned when the server has detected a corruption of the transferred data.
-	ErrChecksumMismatch = TusError{msg: "checksum mismatch"}
-
-	// ErrProtocol is returned when an otherwise successful server response contains malformed data.
-	// This error may indicate that the server does not support the requested TUS version, or server misbehaves.
-	ErrProtocol = TusError{msg: "protocol error"}
-
-	// ErrZeroProgress is returned by UploadStream in chunked mode, indicating that the server did not
-	// accept any of the data and did not return an error. This may happen when client is sending data too fast and the
-	// server is overloaded, or if the server has a bug or misconfiguration.
-	ErrZeroProgress = TusError{msg: "zero progress"}
-
-	// ErrCannotUpload is returned when the server explicitly refuses to accept the data for an existing upload.
-	// This error may occur if the server returned 403 Forbidden when trying to upload data.
-	ErrCannotUpload = TusError{msg: "can not upload"}
-
-	// ErrUnexpectedResponse is returned when the server has responded with an unexpected status code.
-	// This error may indicate that the server does not support the TUS protocol, or the response is originated
-	// by a proxy server or CDN.
-	ErrUnexpectedResponse = TusError{msg: "unexpected HTTP response code"}
-)
